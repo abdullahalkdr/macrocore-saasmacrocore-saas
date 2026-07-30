@@ -1,0 +1,61 @@
+import express from 'express';
+import cors from 'cors';
+import { env } from './config/env';
+import authRoutes from './routes/auth.routes';
+import companyRoutes from './routes/company.routes';
+import usersRoutes from './routes/users.routes';
+import productsRoutes from './routes/products.routes';
+import shiftsRoutes from './routes/shifts.routes';
+import salesRoutes from './routes/sales.routes';
+import rawMaterialsRoutes from './routes/rawMaterials.routes';
+import rawMaterialBatchesRoutes from './routes/rawMaterialBatches.routes';
+import stockTransfersRoutes from './routes/stockTransfers.routes';
+import employeesRoutes from './routes/employees.routes';
+import locationsRoutes from './routes/locations.routes';
+import reportsRoutes from './routes/reports.routes';
+import expensesRoutes from './routes/expenses.routes';
+import wasteRecordsRoutes from './routes/wasteRecords.routes';
+import payrollRoutes from './routes/payroll.routes';
+import supportTicketsRoutes from './routes/supportTickets.routes';
+import syncRoutes from './routes/sync.routes';
+import adminRoutes from './routes/admin.routes';
+import attendanceRoutes from './routes/attendance.routes';
+import leaveRequestsRoutes from './routes/leaveRequests.routes';
+import officialDocumentsRoutes from './routes/officialDocuments.routes';
+import companyFilesRoutes from './routes/companyFiles.routes';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+
+export const app = express();
+
+app.use(cors({ origin: env.CORS_ORIGIN }));
+// Raised from Express's 100kb default — employee photos/certificates and leave-request
+// attachments are stored as base64 JSON fields (no object storage wired up yet).
+app.use(express.json({ limit: '10mb' }));
+
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+app.use('/api/auth', authRoutes);
+app.use('/api/company', companyRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/products', productsRoutes);
+app.use('/api/shifts', shiftsRoutes);
+app.use('/api/sales', salesRoutes);
+app.use('/api/raw-materials', rawMaterialsRoutes);
+app.use('/api/raw-material-batches', rawMaterialBatchesRoutes);
+app.use('/api/stock-transfers', stockTransfersRoutes);
+app.use('/api/employees', employeesRoutes);
+app.use('/api/locations', locationsRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/expenses', expensesRoutes);
+app.use('/api/waste-records', wasteRecordsRoutes);
+app.use('/api/payroll', payrollRoutes);
+app.use('/api/support/tickets', supportTicketsRoutes);
+app.use('/api/sync', syncRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/leave-requests', leaveRequestsRoutes);
+app.use('/api/official-documents', officialDocumentsRoutes);
+app.use('/api/company-files', companyFilesRoutes);
+
+app.use(notFoundHandler);
+app.use(errorHandler);

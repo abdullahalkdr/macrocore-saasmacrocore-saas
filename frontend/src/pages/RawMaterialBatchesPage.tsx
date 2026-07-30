@@ -1,0 +1,354 @@
+import { FormEvent, useEffect, useState } from 'react';
+import { get, patch, post, ApiError } from '../api/client';
+import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
+import PageHeader from '../components/PageHeader';
+import Modal from '../components/Modal';
+import { IconPlus } from '../components/Icon';
+
+interface RawMaterial {
+  id: string;
+  name: string;
+  name_en: string | null;
+}
+
+interface Location {
+  id: string;
+  name: string;
+  type: 'kiosk' | 'warehouse';
+}
+
+interface Batch {
+  id: string;
+  raw_material_id: string;
+  location_id: string;
+  purchase_date: string; // YYYY-MM-DD
+  expiry_date: string | null;
+  qty_purchased: number;
+  qty_remaining: number;
+  purchase_price: number;
+  days_until_expiry: number | null;
+  created_at: string;
+}
+
+interface BatchWithMaterial extends Batch {
+  material_name?: string;
+  location_name?: string;
+}
+
+export default function RawMaterialBatchesPage() {
+  const t = useT();
+  const lang = useLangStore((s) => s.lang);
+  const [batches, setBatches] = useState<BatchWithMaterial[]>([]);
+  const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Form fields
+  const [rawMaterialId, setRawMaterialId] = useState('');
+  const [locationId, setLocationId] = useState('');
+  const [purchaseDate, setPurchaseDate] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
+  const [qtyPurchased, setQtyPurchased] = useState('');
+  const [purchasePrice, setPurchasePrice] = useState('');
+
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  function load() {
+    Promise.all([
+      get<{ batches: Batch[] }>('/raw-material-batches'),
+      get<{ raw_materials: RawMaterial[] }>('/raw-materials'),
+      get<{ locations: Location[] }>('/locations'),
+    ])
+      .then(([batchesRes, materialsRes, locationsRes]) => {
+        setMaterials(materialsRes.raw_materials);
+        setLocations(locationsRes.locations);
+        const enriched = batchesRes.batches.map((b) => ({
+          ...b,
+          material_name: materialsRes.raw_materials.find((m) => m.id === b.raw_material_id)?.name || '—',
+          location_name: locationsRes.locations.find((l) => l.id === b.location_id)?.name || '—',
+        }));
+        setBatches(enriched);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'خطأ في تحميل البيانات'));
+  }
+
+  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      if (editingId) {
+        // Update expiry_date only
+        await patch(`/raw-material-batches/${editingId}`, {
+          expiry_date: expiryDate || undefined,
+        });
+      } else {
+        // Create new batch
+        await post('/raw-material-batches', {
+          raw_material_id: rawMaterialId,
+          location_id: locationId,
+          purchase_date: purchaseDate,
+          expiry_date: expiryDate || undefined,
+          qty_purchased: qtyPurchased ? Number(qtyPurchased) : undefined,
+          purchase_price: purchasePrice ? Number(purchasePrice) : undefined,
+        });
+      }
+      resetForm();
+      setOpen(false);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'خطأ في الحفظ');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function resetForm() {
+    setRawMaterialId('');
+    setLocationId('');
+    setPurchaseDate('');
+    setExpiryDate('');
+    setQtyPurchased('');
+    setPurchasePrice('');
+    setEditingId(null);
+  }
+
+  function openEditModal(batch: BatchWithMaterial) {
+    setEditingId(batch.id);
+    setRawMaterialId(batch.raw_material_id);
+    setLocationId(batch.location_id);
+    setPurchaseDate(batch.purchase_date);
+    setExpiryDate(batch.expiry_date || '');
+    setQtyPurchased(String(batch.qty_purchased));
+    setPurchasePrice(String(batch.purchase_price));
+    setOpen(true);
+  }
+
+  function getExpiryStatus(batch: BatchWithMaterial): 'expired' | 'expiring' | 'safe' {
+    if (!batch.days_until_expiry) return 'safe';
+    if (batch.days_until_expiry < 0) return 'expired';
+    if (batch.days_until_expiry <= 30) return 'expiring';
+    return 'safe';
+  }
+
+  function getStatusColor(status: 'expired' | 'expiring' | 'safe'): string {
+    if (status === 'expired') return '#e74c3c'; // red
+    if (status === 'expiring') return '#f39c12'; // orange
+    return '#27ae60'; // green
+  }
+
+  const expiringBatches = batches.filter((b) => getExpiryStatus(b) !== 'safe');
+  const safeBatches = batches.filter((b) => getExpiryStatus(b) === 'safe');
+
+  return (
+    <div>
+      <PageHeader
+        title="دفعات المواد الخام"
+        subtitle="إدارة دفعات المواد الخام والمخزون FIFO وتواريخ الصلاحية"
+      />
+      {error && <div className="error-banner">{error}</div>}
+
+      {expiringBatches.length > 0 && (
+        <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
+          <strong>⚠️ تنبيه:</strong> {expiringBatches.length} دفعة قريبة من انتهاء الصلاحية أو منتهية
+        </div>
+      )}
+
+      <div className="section-title-row">
+        <span className="muted">المجموع: {batches.length} دفعة</span>
+        <button className="btn btn-primary btn-sm" onClick={() => { resetForm(); setOpen(true); }}>
+          <IconPlus /> دفعة جديدة
+        </button>
+      </div>
+
+      {/* Expiring/Expired batches first */}
+      {expiringBatches.length > 0 && (
+        <>
+          <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>🔴 قريبة من الانتهاء / منتهية</h3>
+          <div className="card">
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>المادة الخام</th>
+                    <th>الموقع</th>
+                    <th>تاريخ الشراء</th>
+                    <th>تاريخ الانتهاء</th>
+                    <th>أيام متبقية</th>
+                    <th className="num">الكمية المتبقية</th>
+                    <th className="num">سعر الشراء (KD)</th>
+                    <th>الحالة</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expiringBatches.map((b) => (
+                    <tr key={b.id}>
+                      <td>{b.material_name}</td>
+                      <td>{b.location_name}</td>
+                      <td>{new Date(b.purchase_date).toLocaleDateString('ar-KW')}</td>
+                      <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString('ar-KW') : '—'}</td>
+                      <td className="num" style={{ color: getStatusColor(getExpiryStatus(b)) }}>
+                        <strong>{b.days_until_expiry !== null ? b.days_until_expiry : '—'}</strong>
+                      </td>
+                      <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
+                      <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
+                      <td>
+                        <span style={{ color: getStatusColor(getExpiryStatus(b)), fontWeight: 'bold' }}>
+                          {getExpiryStatus(b) === 'expired' && '❌ منتهية'}
+                          {getExpiryStatus(b) === 'expiring' && '⚠️ قريبة'}
+                        </span>
+                      </td>
+                      <td>
+                        <button className="btn btn-sm" onClick={() => openEditModal(b)}>تعديل</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Safe batches */}
+      <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>✅ دفعات آمنة</h3>
+      <div className="card">
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>المادة الخام</th>
+                <th>الموقع</th>
+                <th>تاريخ الشراء</th>
+                <th>تاريخ الانتهاء</th>
+                <th>أيام متبقية</th>
+                <th className="num">الكمية المشتراة</th>
+                <th className="num">الكمية المتبقية</th>
+                <th className="num">سعر الشراء (KD)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {safeBatches.map((b) => (
+                <tr key={b.id}>
+                  <td style={{ fontWeight: 700 }}>{b.material_name}</td>
+                  <td>{b.location_name}</td>
+                  <td>{new Date(b.purchase_date).toLocaleDateString('ar-KW')}</td>
+                  <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString('ar-KW') : 'بدون تاريخ'}</td>
+                  <td className="num">{b.days_until_expiry !== null ? b.days_until_expiry : '∞'}</td>
+                  <td className="num">{Number(b.qty_purchased).toFixed(3)}</td>
+                  <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
+                  <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
+                  <td>
+                    <button className="btn btn-sm" onClick={() => openEditModal(b)}>تعديل</button>
+                  </td>
+                </tr>
+              ))}
+              {safeBatches.length === 0 && (
+                <tr>
+                  <td colSpan={9}>
+                    <div className="empty-state">لا توجد دفعات آمنة حالياً</div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {open && (
+        <Modal
+          title={editingId ? 'تعديل الدفعة' : 'دفعة جديدة'}
+          onClose={() => setOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="submit" form="batch-form" disabled={loading}>
+                {loading ? 'جاري...' : 'حفظ'}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+                إلغاء
+              </button>
+            </>
+          }
+        >
+          <form id="batch-form" onSubmit={handleSubmit} className="field-grid">
+            {!editingId && (
+              <>
+                <div className="field">
+                  <label>المادة الخام *</label>
+                  <select value={rawMaterialId} onChange={(e) => setRawMaterialId(e.target.value)} required>
+                    <option value="">اختر مادة خام</option>
+                    {materials.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label>الموقع *</label>
+                  <select value={locationId} onChange={(e) => setLocationId(e.target.value)} required>
+                    <option value="">اختر الموقع</option>
+                    {locations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name} ({l.type === 'warehouse' ? 'مستودع' : 'كشك'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label>تاريخ الشراء *</label>
+                  <input
+                    type="date"
+                    value={purchaseDate}
+                    onChange={(e) => setPurchaseDate(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="field">
+                  <label>الكمية المشتراة *</label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={qtyPurchased}
+                    onChange={(e) => setQtyPurchased(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="field">
+                  <label>سعر الشراء (KD) *</label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={purchasePrice}
+                    onChange={(e) => setPurchasePrice(e.target.value)}
+                    required
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>تاريخ انتهاء الصلاحية (اختياري)</label>
+              <input
+                type="date"
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+              />
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
