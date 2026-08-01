@@ -3,7 +3,9 @@ export type Lang = 'ar' | 'en';
 // Where "Login" / "Start free" buttons send visitors. Update this once the app
 // moves to app.macrocore.io (see NEXT_CHAT_HANDOFF notes) — for now it points at
 // the same domain the product currently lives on.
-export const APP_URL = 'https://macrocore.io';
+// The dashboard (frontend/) lives on its own subdomain now that macrocore.io is this
+// marketing site — see NEXT_CHAT_HANDOFF.md section on Vercel domain reassignment.
+export const APP_URL = 'https://app.macrocore.io';
 
 interface Feature {
   title: string;

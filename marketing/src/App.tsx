@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { LangProvider, useLang } from './LangContext';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -29,10 +29,25 @@ function AppShell() {
   );
 }
 
-export default function App() {
+// Every real page lives under /:lang (ar|en) — macrocore.io/ar is the Arabic homepage,
+// macrocore.io/en is the English one. Bare "/" and any unrecognized /:lang value fall
+// back to /ar (Arabic is the default/primary market — Kuwait).
+function LangGate() {
+  const { lang } = useParams<{ lang: string }>();
+  if (lang !== 'ar' && lang !== 'en') return <Navigate to="/ar" replace />;
   return (
     <LangProvider>
       <AppShell />
     </LangProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/:lang/*" element={<LangGate />} />
+      <Route path="/" element={<Navigate to="/ar" replace />} />
+      <Route path="*" element={<Navigate to="/ar" replace />} />
+    </Routes>
   );
 }

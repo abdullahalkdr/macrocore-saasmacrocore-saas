@@ -3,12 +3,12 @@ import { content, APP_URL } from '../content';
 import { useLang } from '../LangContext';
 
 export default function Header() {
-  const { lang, isRTL, toggle } = useLang();
+  const { lang, isRTL, toggle, path } = useLang();
   const t = content[lang];
   const navigate = useNavigate();
 
   function goToSection(id: string) {
-    navigate('/');
+    navigate(path());
     // Wait a tick for Home to mount before scrolling.
     setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }), 50);
   }
@@ -16,7 +16,7 @@ export default function Header() {
   return (
     <header className="mk-header">
       <div className="mk-container mk-header-inner">
-        <Link to="/" className="mk-logo mk-logo-link">
+        <Link to={path()} className="mk-logo mk-logo-link">
           macrocore
         </Link>
         <nav className="mk-nav">
