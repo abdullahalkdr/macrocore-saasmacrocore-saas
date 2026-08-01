@@ -1,5 +1,6 @@
 import { FormEvent, KeyboardEvent, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
 import { post, ApiError } from '../api/client';
 import { useAuthStore, AuthUser, AuthCompany } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
@@ -13,6 +14,31 @@ interface RegisterResponse {
   token: string;
   invited_users: { email: string; temp_password: string }[];
   message: string;
+}
+
+// Response shape of POST /auth/google — see backend/src/controllers/auth.controller.ts.
+interface GoogleStartResponse {
+  success: boolean;
+  exists: boolean;
+  // Present when exists = true (account already had a company — log straight in)
+  user?: AuthUser;
+  token?: string;
+  // Present when exists = false (new Google account — finish the wizard, then
+  // POST /auth/register with this token instead of email/password)
+  signup_token?: string;
+  email?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+}
+
+// LoginPage forwards here (via navigate state) when someone tries "Continue with
+// Google" on /login but has no account yet — same signup_token, so the wizard just
+// picks up where LoginPage's Google button left off.
+interface GoogleHandoffState {
+  googleSignupToken: string;
+  email: string;
+  firstName: string;
+  lastName: string;
 }
 
 const INDUSTRIES_AR = [
@@ -50,19 +76,24 @@ const COUNTRIES: { code: string; ar: string; en: string }[] = [
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const setAuth = useAuthStore((s) => s.setAuth);
   const t = useT();
   const lang = useLangStore((s) => s.lang);
 
-  const [step, setStep] = useState(1);
-  const [showGoogleNotice, setShowGoogleNotice] = useState(false);
+  // Arriving here via LoginPage's Google button (new-account case) — skip straight to
+  // step 2 with the identity Google already gave us, no password needed.
+  const googleHandoff = location.state as GoogleHandoffState | null;
+
+  const [step, setStep] = useState(googleHandoff ? 2 : 1);
+  const [googleSignupToken, setGoogleSignupToken] = useState<string | null>(googleHandoff?.googleSignupToken ?? null);
 
   // Step 1
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(googleHandoff?.email ?? '');
   const [password, setPassword] = useState('');
   // Step 2
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+  const [firstName, setFirstName] = useState(googleHandoff?.firstName ?? '');
+  const [lastName, setLastName] = useState(googleHandoff?.lastName ?? '');
   const [jobTitle, setJobTitle] = useState('');
   const [phone, setPhone] = useState('');
   // Step 3
@@ -98,6 +129,29 @@ export default function RegisterPage() {
     }
   }
 
+  async function handleGoogleSuccess(credentialResponse: CredentialResponse) {
+    if (!credentialResponse.credential) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await post<GoogleStartResponse>('/auth/google', { id_token: credentialResponse.credential });
+      if (res.exists) {
+        setAuth(res.token!, res.user!);
+        navigate('/dashboard');
+        return;
+      }
+      setGoogleSignupToken(res.signup_token!);
+      setEmail(res.email ?? '');
+      setFirstName(res.first_name ?? '');
+      setLastName(res.last_name ?? '');
+      setStep(2);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.auth.somethingWrong);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function handleStep1Submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -124,8 +178,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const res = await post<RegisterResponse>('/auth/register', {
-        email,
-        password,
+        ...(googleSignupToken ? { google_signup_token: googleSignupToken } : { email, password }),
         company_name: companyName,
         first_name: firstName || undefined,
         last_name: lastName || undefined,
@@ -215,16 +268,16 @@ export default function RegisterPage() {
               </button>
             </form>
             <div className="auth-divider">{t.auth.orDivider}</div>
-            <button
-              type="button"
-              className="btn btn-google"
-              onClick={() => setShowGoogleNotice(true)}
-            >
-              G {t.auth.continueGoogle}
-            </button>
-            {showGoogleNotice && (
-              <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 10 }}>{t.auth.googleComingSoon}</div>
-            )}
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={() => setError(t.auth.somethingWrong)}
+                text="continue_with"
+                shape="pill"
+                theme="outline"
+                width="320"
+              />
+            </div>
             <div className="switch">
               {t.auth.hasAccount} <Link to="/login">{t.auth.loginLink}</Link>
             </div>
@@ -235,6 +288,11 @@ export default function RegisterPage() {
           <>
             <h1 style={{ textAlign: 'center' }}>{t.auth.step2Title}</h1>
             <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step2Subtitle}</div>
+            {googleSignupToken && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 12 }}>
+                {t.auth.googleConnectedAs(email)}
+              </div>
+            )}
             <form onSubmit={handleStep2Submit}>
               <div className="field-grid">
                 <div className="field">
@@ -264,7 +322,17 @@ export default function RegisterPage() {
                 <input type="tel" placeholder="+965 5xxxxxxx" value={phone} onChange={(e) => setPhone(e.target.value)} />
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-secondary" type="button" onClick={() => setStep(1)}>
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  onClick={() => {
+                    // Going back out of the Google flow means starting over with
+                    // email/password instead — the signup token is single-use context
+                    // for this attempt, not something to carry back to step 1.
+                    if (googleSignupToken) setGoogleSignupToken(null);
+                    setStep(1);
+                  }}
+                >
                   {t.auth.backBtn}
                 </button>
                 <button className="btn btn-primary" type="submit" style={{ flex: 1, justifyContent: 'center' }}>

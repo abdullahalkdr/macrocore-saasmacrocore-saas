@@ -15,4 +15,7 @@ export const env = {
   JWT_SECRET: required('JWT_SECRET'),
   JWT_EXPIRY: process.env.JWT_EXPIRY || '24h',
   CORS_ORIGIN: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),
+  // Optional on purpose (not required()) — a missing key disables /auth/google with a
+  // clear 500 instead of crashing the whole server on boot before it's configured.
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
 };

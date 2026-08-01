@@ -1,14 +1,17 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
 import { pool } from '../db/pool';
 import { hashPassword, comparePassword } from '../utils/password';
-import { signToken, verifyToken } from '../utils/jwt';
+import { signToken, verifyToken, signGoogleSignupToken, verifyGoogleSignupToken } from '../utils/jwt';
 import { isValidEmail, isValidPassword } from '../utils/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { env } from '../config/env';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
+const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID || undefined);
 
 // Signup wizard submits everything collected across its 3 steps in one call —
 // keeps registration atomic (no orphaned user-without-a-company if someone
@@ -18,6 +21,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const {
     email,
     password,
+    google_signup_token,
     company_name,
     full_name,
     first_name,
@@ -30,10 +34,46 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     invite_emails,
   } = req.body ?? {};
 
-  if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
-  if (!isValidPassword(password)) {
-    throw new AppError(400, 'Password must be at least 8 characters and include a letter and a number');
+  // Two ways to reach here: normal email+password signup, or the tail end of the Google
+  // flow (see googleStart below) — POST /auth/google already verified the Google account
+  // and handed back a short-lived google_signup_token once the wizard's remaining steps
+  // (profile + company info) are filled in. Either way we end up with a normalized email
+  // and, only for the password path, a hash to store.
+  let normalizedEmail: string;
+  let googleSub: string | null = null;
+  let resolvedFirstName: string | null;
+  let resolvedLastName: string | null;
+  let resolvedFullName: string | null;
+
+  if (typeof google_signup_token === 'string' && google_signup_token) {
+    let googlePayload;
+    try {
+      googlePayload = verifyGoogleSignupToken(google_signup_token);
+    } catch {
+      throw new AppError(401, 'Google sign-up session expired — please continue with Google again');
+    }
+    normalizedEmail = googlePayload.email;
+    googleSub = googlePayload.googleSub;
+    resolvedFirstName = typeof first_name === 'string' && first_name.trim() ? first_name.trim() : googlePayload.firstName;
+    resolvedLastName = typeof last_name === 'string' && last_name.trim() ? last_name.trim() : googlePayload.lastName;
+    resolvedFullName =
+      typeof full_name === 'string' && full_name.trim()
+        ? full_name.trim()
+        : [resolvedFirstName, resolvedLastName].filter((v) => typeof v === 'string' && v.trim()).join(' ') || googlePayload.fullName;
+  } else {
+    if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
+    if (!isValidPassword(password)) {
+      throw new AppError(400, 'Password must be at least 8 characters and include a letter and a number');
+    }
+    normalizedEmail = email.toLowerCase();
+    resolvedFirstName = typeof first_name === 'string' ? first_name.trim() : null;
+    resolvedLastName = typeof last_name === 'string' ? last_name.trim() : null;
+    resolvedFullName =
+      typeof full_name === 'string' && full_name.trim()
+        ? full_name.trim()
+        : [first_name, last_name].filter((v) => typeof v === 'string' && v.trim()).join(' ') || null;
   }
+
   if (typeof company_name !== 'string' || company_name.trim().length < 2) {
     throw new AppError(400, 'company_name is required');
   }
@@ -42,12 +82,6 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   }
   const inviteList: string[] =
     Array.isArray(invite_emails) ? invite_emails.filter((e) => isValidEmail(e)).slice(0, 5) : [];
-
-  const normalizedEmail = email.toLowerCase();
-  const resolvedFullName =
-    typeof full_name === 'string' && full_name.trim()
-      ? full_name.trim()
-      : [first_name, last_name].filter((v) => typeof v === 'string' && v.trim()).join(' ') || null;
 
   const existing = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
   if (existing.rows.length > 0) throw new AppError(409, 'Email already registered');
@@ -76,20 +110,22 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     );
     company = companyResult.rows[0];
 
-    const passwordHash = await hashPassword(password);
+    const passwordHash = googleSub ? null : await hashPassword(password);
     const userResult = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin')
+      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role, google_id, auth_provider)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin', $9, $10)
        RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id`,
       [
         company.id,
         normalizedEmail,
         passwordHash,
         resolvedFullName,
-        typeof first_name === 'string' ? first_name.trim() : null,
-        typeof last_name === 'string' ? last_name.trim() : null,
+        resolvedFirstName,
+        resolvedLastName,
         typeof job_title === 'string' ? job_title.trim() : null,
         typeof phone === 'string' ? phone.trim() : null,
+        googleSub,
+        googleSub ? 'google' : 'password',
       ]
     );
     user = userResult.rows[0];
@@ -126,6 +162,86 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     token,
     invited_users: invitedUsers,
     message: 'Account created. Trial expires in 14 days.',
+  });
+});
+
+// Entry point for both "Continue with Google" on Login and on Register step 1. Verifies
+// the Google id_token server-side, then branches:
+//   - Email (or google_id) already has an account -> log them in directly, same shape as
+//     login() below. First time a password-account's owner uses Google, we silently link
+//     google_id onto it (Google already proved they own the mailbox).
+//   - Brand new email -> no account created yet (there's no company to attach it to). We
+//     hand back a short-lived signup token; the frontend skips straight to the wizard's
+//     profile/company steps and POST /auth/register finishes the job.
+export const googleStart = asyncHandler(async (req: Request, res: Response) => {
+  const { id_token } = req.body ?? {};
+  if (typeof id_token !== 'string' || !id_token) throw new AppError(400, 'id_token is required');
+  if (!env.GOOGLE_CLIENT_ID) throw new AppError(500, 'Google sign-in is not configured');
+
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: env.GOOGLE_CLIENT_ID });
+    payload = ticket.getPayload();
+  } catch {
+    throw new AppError(401, 'Invalid Google token');
+  }
+  if (!payload?.email || !payload.email_verified) throw new AppError(401, 'Google account email is not verified');
+
+  const normalizedEmail = payload.email.toLowerCase();
+  const googleSub = payload.sub;
+
+  const result = await pool.query(
+    `SELECT u.id, u.email, u.full_name, u.role, u.status, u.company_id, u.google_id,
+            c.plan, c.trial_end_date
+     FROM users u
+     JOIN companies c ON c.id = u.company_id
+     WHERE u.email = $1 OR u.google_id = $2`,
+    [normalizedEmail, googleSub]
+  );
+  const row = result.rows[0];
+
+  if (row) {
+    if (row.status !== 'active') throw new AppError(403, 'Account is not active');
+    if (!row.google_id) {
+      await pool.query(
+        `UPDATE users SET google_id = $1, auth_provider = 'google', updated_at = NOW() WHERE id = $2`,
+        [googleSub, row.id]
+      );
+    }
+    await logAudit({ companyId: row.company_id, userId: row.id, action: 'login_success', entityType: 'users', entityId: row.id, req });
+
+    const token = signToken({ userId: row.id, companyId: row.company_id, role: row.role });
+    let trialDaysRemaining: number | null = null;
+    if (row.plan === 'trial' && row.trial_end_date) {
+      const diffMs = new Date(row.trial_end_date).getTime() - Date.now();
+      trialDaysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+    }
+
+    res.status(200).json({
+      success: true,
+      exists: true,
+      user: { id: row.id, email: row.email, full_name: row.full_name, role: row.role, company_id: row.company_id },
+      token,
+      trial_days_remaining: trialDaysRemaining,
+    });
+    return;
+  }
+
+  const signupToken = signGoogleSignupToken({
+    email: normalizedEmail,
+    googleSub,
+    firstName: payload.given_name || null,
+    lastName: payload.family_name || null,
+    fullName: payload.name || null,
+  });
+
+  res.status(200).json({
+    success: true,
+    exists: false,
+    signup_token: signupToken,
+    email: normalizedEmail,
+    first_name: payload.given_name || null,
+    last_name: payload.family_name || null,
   });
 });
 

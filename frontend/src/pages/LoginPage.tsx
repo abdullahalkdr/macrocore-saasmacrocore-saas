@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
 import { post, ApiError } from '../api/client';
 import { useAuthStore, AuthUser } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
@@ -11,6 +12,18 @@ interface LoginResponse {
   user: AuthUser;
   token: string;
   trial_days_remaining: number | null;
+}
+
+// Same endpoint RegisterPage's Google button uses — see backend/src/controllers/auth.controller.ts.
+interface GoogleStartResponse {
+  success: boolean;
+  exists: boolean;
+  user?: AuthUser;
+  token?: string;
+  signup_token?: string;
+  email?: string;
+  first_name?: string | null;
+  last_name?: string | null;
 }
 
 export default function LoginPage() {
@@ -35,6 +48,34 @@ export default function LoginPage() {
       const res = await post<LoginResponse>('/auth/login', { email, password });
       setAuth(res.token, res.user);
       navigate('/dashboard');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.auth.somethingWrong);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogleSuccess(credentialResponse: CredentialResponse) {
+    if (!credentialResponse.credential) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await post<GoogleStartResponse>('/auth/google', { id_token: credentialResponse.credential });
+      if (res.exists) {
+        setAuth(res.token!, res.user!);
+        navigate('/dashboard');
+        return;
+      }
+      // No account yet — hand the verified identity off to the signup wizard so it can
+      // skip straight to collecting profile/company info instead of asking for a password.
+      navigate('/register', {
+        state: {
+          googleSignupToken: res.signup_token!,
+          email: res.email ?? '',
+          firstName: res.first_name ?? '',
+          lastName: res.last_name ?? '',
+        },
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.auth.somethingWrong);
     } finally {
@@ -105,6 +146,17 @@ export default function LoginPage() {
             {loading ? t.common.loading : t.auth.loginBtn}
           </button>
         </form>
+        <div className="auth-divider">{t.auth.orDivider}</div>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <GoogleLogin
+            onSuccess={handleGoogleSuccess}
+            onError={() => setError(t.auth.somethingWrong)}
+            text="continue_with"
+            shape="pill"
+            theme="outline"
+            width="320"
+          />
+        </div>
         <div className="switch">
           {t.auth.noAccount} <Link to="/register">{t.auth.registerLink}</Link>
         </div>

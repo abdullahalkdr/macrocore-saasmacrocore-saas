@@ -27,10 +27,14 @@ CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   email VARCHAR(255) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
+  -- Nullable: Google-only accounts (auth_provider = 'google') have no local password.
+  password_hash VARCHAR(255),
   full_name VARCHAR(255),
   role VARCHAR(20) NOT NULL DEFAULT 'employee',
   status VARCHAR(20) NOT NULL DEFAULT 'active',
+  -- Google OAuth (see MIGRATION_016_google_oauth.sql)
+  google_id VARCHAR(255) UNIQUE,
+  auth_provider VARCHAR(20) NOT NULL DEFAULT 'password',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
