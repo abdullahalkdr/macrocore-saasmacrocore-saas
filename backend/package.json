@@ -4,7 +4,7 @@
   "description": "macrocore.io SaaS Backend API",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --exec ts-node src/index.ts",
+    "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:migrate": "node scripts/migrate.js"

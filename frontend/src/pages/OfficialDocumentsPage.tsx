@@ -1,18 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
+import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { IconPlus } from '../components/Icon';
 
 type DocType = 'letter' | 'salary_certificate' | 'experience_certificate' | 'receipt' | 'other';
-
-const DOC_TYPE_LABELS: Record<DocType, string> = {
-  letter: 'خطاب رسمي',
-  salary_certificate: 'شهادة راتب',
-  experience_certificate: 'شهادة خبرة',
-  receipt: 'إيصال استلام',
-  other: 'أخرى',
-};
 
 interface Employee {
   id: string;
@@ -35,13 +29,21 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function fmtDate(d: string) {
-  return new Date(d).toLocaleDateString('ar-KW');
-}
-
 const EXTERNAL_OPTION = '__external__';
 
 export default function OfficialDocumentsPage() {
+  const t = useT();
+  const lang = useLangStore((s) => s.lang);
+  const DOC_TYPE_LABELS: Record<DocType, string> = {
+    letter: t.officialDocuments.docTypeLetter,
+    salary_certificate: t.officialDocuments.docTypeSalaryCert,
+    experience_certificate: t.officialDocuments.docTypeExperienceCert,
+    receipt: t.officialDocuments.docTypeReceipt,
+    other: t.officialDocuments.docTypeOther,
+  };
+  function fmtDate(d: string) {
+    return new Date(d).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB');
+  }
   const [docs, setDocs] = useState<Doc[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [open, setOpen] = useState(false);
@@ -61,7 +63,7 @@ export default function OfficialDocumentsPage() {
   function load() {
     get<{ documents: Doc[] }>('/official-documents')
       .then((r) => setDocs(r.documents))
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'خطأ في تحميل المستندات'));
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.officialDocuments.loadFailed));
   }
 
   useEffect(() => {
@@ -125,19 +127,19 @@ export default function OfficialDocumentsPage() {
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في الحفظ');
+      setError(err instanceof ApiError ? err.message : t.officialDocuments.saveFailed);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('حذف هذا المستند؟')) return;
+    if (!confirm(t.officialDocuments.deleteConfirm)) return;
     try {
       await del(`/official-documents/${id}`);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في الحذف');
+      setError(err instanceof ApiError ? err.message : t.officialDocuments.deleteFailed);
     }
   }
 
@@ -155,7 +157,7 @@ export default function OfficialDocumentsPage() {
       <html dir="rtl" lang="ar">
       <head>
         <meta charset="utf-8" />
-        <title>${referenceNumber || 'مستند'}</title>
+        <title>${referenceNumber || t.officialDocuments.printedTitle}</title>
         <style>
           body { font-family: 'Tajawal', Arial, sans-serif; padding: 40px; color: #1c1917; }
           .header { display: flex; justify-content: space-between; border-bottom: 2px solid #F5A623; padding-bottom: 12px; margin-bottom: 24px; }
@@ -170,7 +172,7 @@ export default function OfficialDocumentsPage() {
         <div class="header">
           <div>
             <h1>${title || ''}</h1>
-            <div class="meta">${DOC_TYPE_LABELS[docType]}${addressee ? ` — إلى: ${addressee}` : ''}</div>
+            <div class="meta">${DOC_TYPE_LABELS[docType]}${addressee ? ` — ${t.officialDocuments.toLabel}: ${addressee}` : ''}</div>
           </div>
           <div class="ref">
             <div>${referenceNumber}</div>
@@ -188,14 +190,14 @@ export default function OfficialDocumentsPage() {
 
   return (
     <div>
-      <PageHeader title="المستندات الرسمية" subtitle="خطابات وإيصالات وشهادات صادرة باسم الشركة — كل مستند ياخذ رقم مرجعي تلقائي." />
+      <PageHeader title={t.officialDocuments.title} subtitle={t.officialDocuments.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
       <div className="section-title-row">
         <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          <IconPlus /> مستند جديد
+          <IconPlus /> {t.officialDocuments.newItem}
         </button>
-        <span className="muted">{docs.length} مستند مُصدر</span>
+        <span className="muted">{t.officialDocuments.count(docs.length)}</span>
       </div>
 
       <div className="card">
@@ -203,11 +205,11 @@ export default function OfficialDocumentsPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>الرقم المرجعي</th>
-                <th>النوع</th>
-                <th>العنوان</th>
-                <th>الجهة/الشخص</th>
-                <th>التاريخ</th>
+                <th>{t.officialDocuments.refNumber}</th>
+                <th>{t.officialDocuments.type}</th>
+                <th>{t.officialDocuments.docTitle}</th>
+                <th>{t.officialDocuments.addressee}</th>
+                <th>{t.officialDocuments.date}</th>
                 <th></th>
               </tr>
             </thead>
@@ -233,15 +235,15 @@ export default function OfficialDocumentsPage() {
                   <td>{addresseeLabel(d)}</td>
                   <td>{fmtDate(d.document_date)}</td>
                   <td>
-                    <button className="icon-btn" onClick={() => handleDelete(d.id)} title="حذف">🗑</button>
-                    <button className="icon-btn" onClick={() => openEdit(d)} title="تعديل">✎</button>
+                    <button className="icon-btn" onClick={() => handleDelete(d.id)} title={t.officialDocuments.delete}>🗑</button>
+                    <button className="icon-btn" onClick={() => openEdit(d)} title={t.officialDocuments.edit}>✎</button>
                   </td>
                 </tr>
               ))}
               {docs.length === 0 && (
                 <tr>
                   <td colSpan={6}>
-                    <div className="empty-state">لا توجد مستندات مُصدرة بعد</div>
+                    <div className="empty-state">{t.officialDocuments.empty}</div>
                   </td>
                 </tr>
               )}
@@ -252,25 +254,25 @@ export default function OfficialDocumentsPage() {
 
       {open && (
         <Modal
-          title="مستند جديد"
+          title={t.officialDocuments.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="doc-form" disabled={loading}>
-                {loading ? 'جاري...' : 'حفظ'}
+                {loading ? t.common.loading : t.officialDocuments.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={handlePrint}>
-                PDF/طباعة
+                {t.officialDocuments.print}
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
-                إلغاء
+                {t.officialDocuments.cancel}
               </button>
             </>
           }
         >
           <form id="doc-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
-              <label>نوع المستند</label>
+              <label>{t.officialDocuments.typeLabel}</label>
               <select value={docType} onChange={(e) => setDocType(e.target.value as DocType)}>
                 {Object.entries(DOC_TYPE_LABELS).map(([value, label]) => (
                   <option key={value} value={value}>
@@ -280,46 +282,46 @@ export default function OfficialDocumentsPage() {
               </select>
             </div>
             <div className="field">
-              <label>الرقم المرجعي</label>
-              <input value={referenceNumber} disabled placeholder="يُحسب تلقائياً" />
+              <label>{t.officialDocuments.refAutoLabel}</label>
+              <input value={referenceNumber} disabled placeholder={t.officialDocuments.refAutoPlaceholder} />
             </div>
 
             <div className="field">
-              <label>الجهة/الشخص الموجّه له</label>
+              <label>{t.officialDocuments.addresseeLabel}</label>
               <select value={addressedToChoice} onChange={(e) => setAddressedToChoice(e.target.value)}>
-                <option value="">— اختر —</option>
+                <option value="">{t.officialDocuments.selectPlaceholder}</option>
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>
                     {emp.name}
                   </option>
                 ))}
-                <option value={EXTERNAL_OPTION}>جهة خارجية (إدخال يدوي)</option>
+                <option value={EXTERNAL_OPTION}>{t.officialDocuments.externalOption}</option>
               </select>
             </div>
             <div className="field">
-              <label>العنوان</label>
+              <label>{t.officialDocuments.titleLabel}</label>
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="مثال: خطاب تعريف بالراتب"
+                placeholder={t.officialDocuments.titlePlaceholder}
                 required
               />
             </div>
 
             {addressedToChoice === EXTERNAL_OPTION && (
               <div className="field" style={{ gridColumn: '1 / -1' }}>
-                <label>اسم الجهة/الشخص</label>
+                <label>{t.officialDocuments.externalNameLabel}</label>
                 <input value={addressedToName} onChange={(e) => setAddressedToName(e.target.value)} required />
               </div>
             )}
 
             <div className="field">
-              <label>التاريخ</label>
+              <label>{t.officialDocuments.dateLabel}</label>
               <input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} required />
             </div>
 
             <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>نص المستند</label>
+              <label>{t.officialDocuments.bodyLabel}</label>
               <textarea rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
             </div>
           </form>

@@ -1,17 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
+import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { IconPlus } from '../components/Icon';
 
 type Category = 'license' | 'contract' | 'certificate' | 'other';
-
-const CATEGORY_LABELS: Record<Category, string> = {
-  license: 'ترخيص',
-  contract: 'عقد',
-  certificate: 'شهادة',
-  other: 'أخرى',
-};
 
 interface CompanyFile {
   id: string;
@@ -47,6 +42,14 @@ function emptyForm() {
 }
 
 export default function CompanyFilesPage() {
+  const t = useT();
+  const lang = useLangStore((s) => s.lang);
+  const CATEGORY_LABELS: Record<Category, string> = {
+    license: t.companyFiles.categoryLicense,
+    contract: t.companyFiles.categoryContract,
+    certificate: t.companyFiles.categoryCertificate,
+    other: t.companyFiles.categoryOther,
+  };
   const [files, setFiles] = useState<CompanyFile[]>([]);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,7 +60,7 @@ export default function CompanyFilesPage() {
   function load() {
     get<{ files: CompanyFile[] }>('/company-files')
       .then((r) => setFiles(r.files))
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'خطأ في تحميل المستندات'));
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.companyFiles.loadFailed));
   }
 
   useEffect(load, []);
@@ -110,19 +113,19 @@ export default function CompanyFilesPage() {
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في الحفظ');
+      setError(err instanceof ApiError ? err.message : t.companyFiles.saveFailed);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('حذف هذا المستند؟')) return;
+    if (!confirm(t.companyFiles.deleteConfirm)) return;
     try {
       await del(`/company-files/${id}`);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في الحذف');
+      setError(err instanceof ApiError ? err.message : t.companyFiles.deleteFailed);
     }
   }
 
@@ -130,7 +133,7 @@ export default function CompanyFilesPage() {
     try {
       const r = await get<{ file: CompanyFile & { file_base64: string | null } }>(`/company-files/${f.id}`);
       if (!r.file.file_base64) {
-        setError('ما فيه ملف مرفوع لهذا المستند');
+        setError(t.companyFiles.noFileUploaded);
         return;
       }
       const a = document.createElement('a');
@@ -138,7 +141,7 @@ export default function CompanyFilesPage() {
       a.download = r.file.file_name || f.title;
       a.click();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في تحميل الملف');
+      setError(err instanceof ApiError ? err.message : t.companyFiles.downloadFailed);
     }
   }
 
@@ -159,35 +162,35 @@ export default function CompanyFilesPage() {
 
   return (
     <div>
-      <PageHeader title="مستندات الشركة" subtitle="تراخيص وعقود وشهادات الشركة — رفع وتخزين مع تنبيه انتهاء الصلاحية." />
+      <PageHeader title={t.companyFiles.title} subtitle={t.companyFiles.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
       {expiringFiles.length > 0 && (
         <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
-          <strong>⚠️ تنبيه:</strong> {expiringFiles.length} مستند قريب من انتهاء الصلاحية أو منتهي
+          <strong>{t.companyFiles.expiryAlert(expiringFiles.length)}</strong>
         </div>
       )}
 
       <div className="section-title-row">
-        <span className="muted">{files.length} مستند</span>
+        <span className="muted">{t.companyFiles.count(files.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          <IconPlus /> مستند جديد
+          <IconPlus /> {t.companyFiles.newItem}
         </button>
       </div>
 
       {expiringFiles.length > 0 && (
         <>
-          <h3 style={{ marginTop: 20, marginBottom: 12 }}>🔴 قريبة من الانتهاء / منتهية</h3>
+          <h3 style={{ marginTop: 20, marginBottom: 12 }}>{t.companyFiles.expiringSectionTitle}</h3>
           <div className="card">
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>العنوان</th>
-                    <th>التصنيف</th>
-                    <th>تاريخ الإصدار</th>
-                    <th>تاريخ الانتهاء</th>
-                    <th>أيام متبقية</th>
+                    <th>{t.companyFiles.docTitle}</th>
+                    <th>{t.companyFiles.category}</th>
+                    <th>{t.companyFiles.issueDate}</th>
+                    <th>{t.companyFiles.expiryDate}</th>
+                    <th>{t.companyFiles.daysLeft}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -196,14 +199,14 @@ export default function CompanyFilesPage() {
                     <tr key={f.id}>
                       <td style={{ fontWeight: 700 }}>{f.title}</td>
                       <td>{CATEGORY_LABELS[f.category]}</td>
-                      <td>{f.issue_date ? new Date(f.issue_date).toLocaleDateString('ar-KW') : '—'}</td>
-                      <td>{f.expiry_date ? new Date(f.expiry_date).toLocaleDateString('ar-KW') : '—'}</td>
+                      <td>{f.issue_date ? new Date(f.issue_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : '—'}</td>
+                      <td>{f.expiry_date ? new Date(f.expiry_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : '—'}</td>
                       <td style={{ color: getStatusColor(getExpiryStatus(f)), fontWeight: 700 }}>
                         {f.days_until_expiry !== null ? f.days_until_expiry : '—'}
                       </td>
                       <td>
-                        <button className="btn btn-sm" onClick={() => handleDownload(f)}>تنزيل</button>{' '}
-                        <button className="btn btn-sm" onClick={() => openEdit(f)}>تعديل</button>{' '}
+                        <button className="btn btn-sm" onClick={() => handleDownload(f)}>{t.companyFiles.download}</button>{' '}
+                        <button className="btn btn-sm" onClick={() => openEdit(f)}>{t.companyFiles.edit}</button>{' '}
                         <button className="icon-btn" onClick={() => handleDelete(f.id)}>🗑</button>
                       </td>
                     </tr>
@@ -215,16 +218,16 @@ export default function CompanyFilesPage() {
         </>
       )}
 
-      <h3 style={{ marginTop: 20, marginBottom: 12 }}>مستندات أخرى</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 12 }}>{t.companyFiles.otherSectionTitle}</h3>
       <div className="card">
         <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
-                <th>العنوان</th>
-                <th>التصنيف</th>
-                <th>تاريخ الإصدار</th>
-                <th>تاريخ الانتهاء</th>
+                <th>{t.companyFiles.docTitle}</th>
+                <th>{t.companyFiles.category}</th>
+                <th>{t.companyFiles.issueDate}</th>
+                <th>{t.companyFiles.expiryDate}</th>
                 <th></th>
               </tr>
             </thead>
@@ -233,11 +236,11 @@ export default function CompanyFilesPage() {
                 <tr key={f.id}>
                   <td style={{ fontWeight: 700 }}>{f.title}</td>
                   <td>{CATEGORY_LABELS[f.category]}</td>
-                  <td>{f.issue_date ? new Date(f.issue_date).toLocaleDateString('ar-KW') : '—'}</td>
-                  <td>{f.expiry_date ? new Date(f.expiry_date).toLocaleDateString('ar-KW') : 'بدون تاريخ'}</td>
+                  <td>{f.issue_date ? new Date(f.issue_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : '—'}</td>
+                  <td>{f.expiry_date ? new Date(f.expiry_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : t.companyFiles.noDate}</td>
                   <td>
-                    <button className="btn btn-sm" onClick={() => handleDownload(f)}>تنزيل</button>{' '}
-                    <button className="btn btn-sm" onClick={() => openEdit(f)}>تعديل</button>{' '}
+                    <button className="btn btn-sm" onClick={() => handleDownload(f)}>{t.companyFiles.download}</button>{' '}
+                    <button className="btn btn-sm" onClick={() => openEdit(f)}>{t.companyFiles.edit}</button>{' '}
                     <button className="icon-btn" onClick={() => handleDelete(f.id)}>🗑</button>
                   </td>
                 </tr>
@@ -245,7 +248,7 @@ export default function CompanyFilesPage() {
               {otherFiles.length === 0 && (
                 <tr>
                   <td colSpan={5}>
-                    <div className="empty-state">لا توجد مستندات هنا</div>
+                    <div className="empty-state">{t.companyFiles.empty}</div>
                   </td>
                 </tr>
               )}
@@ -256,26 +259,26 @@ export default function CompanyFilesPage() {
 
       {open && (
         <Modal
-          title={editingId ? 'تعديل مستند' : 'مستند جديد'}
+          title={editingId ? t.companyFiles.editItem : t.companyFiles.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="company-file-form" disabled={loading}>
-                {loading ? 'جاري...' : 'حفظ'}
+                {loading ? t.common.loading : t.companyFiles.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
-                إلغاء
+                {t.companyFiles.cancel}
               </button>
             </>
           }
         >
           <form id="company-file-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
-              <label>العنوان</label>
+              <label>{t.companyFiles.docTitle}</label>
               <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required autoFocus />
             </div>
             <div className="field">
-              <label>التصنيف</label>
+              <label>{t.companyFiles.category}</label>
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Category })}>
                 {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
                   <option key={value} value={value}>
@@ -286,21 +289,21 @@ export default function CompanyFilesPage() {
             </div>
 
             <div className="field">
-              <label>تاريخ الإصدار</label>
+              <label>{t.companyFiles.issueDate}</label>
               <input type="date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })} />
             </div>
             <div className="field">
-              <label>تاريخ انتهاء الصلاحية (اختياري)</label>
+              <label>{t.companyFiles.expiryDateOptional}</label>
               <input type="date" value={form.expiryDate} onChange={(e) => setForm({ ...form, expiryDate: e.target.value })} />
             </div>
 
             <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>الملف {editingId && form.fileName ? `(الحالي: ${form.fileName})` : ''}</label>
+              <label>{t.companyFiles.file} {editingId && form.fileName ? t.companyFiles.currentFile(form.fileName) : ''}</label>
               <input type="file" onChange={(e) => handleFileChange(e.target.files?.[0])} />
             </div>
 
             <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>ملاحظات</label>
+              <label>{t.companyFiles.notes}</label>
               <textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </div>
           </form>

@@ -52,13 +52,15 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       [product_id]
     );
 
+    let costOfGoods = 0;
     for (const ingredient of ingredientsResult.rows) {
       const factor = ingredient.usage_unit ? UNIT_TO_BASE[ingredient.usage_unit] || 1 : 1;
       const qtyToConsume = (ingredient.usage_qty || 0) * (factor ?? 1) * qty;
 
       if (qtyToConsume > 0) {
         try {
-          await consumeRawMaterial(client, companyId, locationId, ingredient.raw_material_id, qtyToConsume);
+          const { avgCostPerUnit } = await consumeRawMaterial(client, companyId, locationId, ingredient.raw_material_id, qtyToConsume);
+          costOfGoods += avgCostPerUnit * qtyToConsume;
         } catch (err) {
           throw new AppError(
             400,
@@ -70,10 +72,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
     // Record waste
     const result = await client.query(
-      `INSERT INTO waste_records (company_id, shift_id, product_id, qty, image_base64)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, shift_id, product_id, qty, created_at`,
-      [companyId, shift_id, product_id, qty, image_base64 ?? null]
+      `INSERT INTO waste_records (company_id, shift_id, product_id, qty, image_base64, cost_of_goods)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, shift_id, product_id, qty, created_at, cost_of_goods`,
+      [companyId, shift_id, product_id, qty, image_base64 ?? null, costOfGoods]
     );
     wasteRecord = result.rows[0];
 

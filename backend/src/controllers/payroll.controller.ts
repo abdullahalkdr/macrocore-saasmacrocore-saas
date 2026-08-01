@@ -97,10 +97,16 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 // backward compatibility with any existing integration using them).
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { employee_id, month_year, attendance_bonus, other_deductions, adjustments } = req.body ?? {};
+  const { employee_id, month_year, attendance_bonus, other_deductions, adjustments, paid_date, total_paid_override } = req.body ?? {};
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
   if (typeof month_year !== 'string' || !/^\d{4}-\d{2}$/.test(month_year)) throw new AppError(400, 'month_year must be YYYY-MM');
+  if (paid_date !== undefined && paid_date !== null && (typeof paid_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(paid_date))) {
+    throw new AppError(400, 'paid_date must be YYYY-MM-DD');
+  }
+  if (total_paid_override !== undefined && total_paid_override !== null && typeof total_paid_override !== 'number') {
+    throw new AppError(400, 'total_paid_override must be a number');
+  }
   const adjustmentList = validateAdjustments(adjustments);
 
   const employee = await pool.query(
@@ -156,7 +162,17 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const adjustmentBonusTotal = adjustmentList.filter((a) => a.type === 'bonus').reduce((sum, a) => sum + a.amount, 0);
   const adjustmentDeductionTotal = adjustmentList.filter((a) => a.type === 'deduction').reduce((sum, a) => sum + a.amount, 0);
 
-  const totalPaid = baseSalary + bonus - deductions - attendanceDeduction + adjustmentBonusTotal - adjustmentDeductionTotal;
+  const computedTotalPaid = baseSalary + bonus - deductions - attendanceDeduction + adjustmentBonusTotal - adjustmentDeductionTotal;
+  // Manual override lets the person creating the record adjust the final disbursed
+  // amount after seeing the auto-computed figure — the computed value stays visible
+  // on screen as a reference, this just replaces what actually gets persisted/paid.
+  const totalPaid = typeof total_paid_override === 'number' ? total_paid_override : computedTotalPaid;
+
+  // Supplying paid_date at creation time records the disbursement in one step
+  // (matches the "create = pay" flow the payroll modal now offers) instead of the
+  // older two-step generate-then-mark-paid flow, which remains available by simply
+  // omitting paid_date here and calling POST /payroll/:id/pay afterward.
+  const status = paid_date ? 'paid' : 'pending';
 
   const client = await pool.connect();
   let payroll;
@@ -165,11 +181,11 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
     const result = await client.query(
       `INSERT INTO payroll (company_id, employee_id, month_year, base_salary, attendance_bonus, other_deductions,
-         wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')
+         wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id, employee_id, month_year, base_salary, attendance_bonus, other_deductions,
-                 wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status`,
-      [companyId, employee_id, month_year, baseSalary, bonus, deductions, wageType, hourlyRate, hoursWorked, attendanceDeduction, totalPaid]
+                 wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date`,
+      [companyId, employee_id, month_year, baseSalary, bonus, deductions, wageType, hourlyRate, hoursWorked, attendanceDeduction, totalPaid, status, paid_date ?? null]
     );
     payroll = result.rows[0];
 

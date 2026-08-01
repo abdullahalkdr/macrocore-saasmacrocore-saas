@@ -40,6 +40,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const message = (data as { error?: string } | null)?.error || `Request failed (${res.status})`;
+    // A 401 here always means the JWT is missing/expired/invalid (see backend
+    // middleware/auth.ts) — the token in localStorage is now dead weight. Clear it
+    // and bounce to /login instead of leaving every page showing a raw "Invalid or
+    // expired token" banner forever (that string was never meant to be user-facing).
+    if (res.status === 401 && typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('macrocore-auth');
+      } catch {
+        // ignore
+      }
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login?expired=1';
+      }
+    }
     throw new ApiError(res.status, message);
   }
   return data as T;
@@ -50,4 +64,7 @@ export const post = <T = unknown>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined });
 export const patch = <T = unknown>(path: string, body?: unknown) =>
   request<T>(path, { method: 'PATCH', body: body !== undefined ? JSON.stringify(body) : undefined });
-export const del = <T = unknown>(path: string) => request<T>(path, { method: 'DELETE' });
+export const put = <T = unknown>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined });
+export const del = <T = unknown>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'DELETE', body: body !== undefined ? JSON.stringify(body) : undefined });

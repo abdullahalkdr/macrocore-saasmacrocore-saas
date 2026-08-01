@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useLangStore, isRTL } from './store/langStore';
+import { useThemeStore } from './store/themeStore';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
@@ -11,6 +12,7 @@ import UsersPage from './pages/UsersPage';
 import ReportsPage from './pages/ReportsPage';
 import RawMaterialsPage from './pages/RawMaterialsPage';
 import RawMaterialBatchesPage from './pages/RawMaterialBatchesPage';
+import InventoryOverviewPage from './pages/InventoryOverviewPage';
 import StockTransfersPage from './pages/StockTransfersPage';
 import LocationsPage from './pages/LocationsPage';
 import ExpensesPage from './pages/ExpensesPage';
@@ -18,6 +20,7 @@ import WasteRecordsPage from './pages/WasteRecordsPage';
 import PayrollPage from './pages/PayrollPage';
 import SupportTicketsPage from './pages/SupportTicketsPage';
 import SettingsPage from './pages/SettingsPage';
+import AccountSettingsPage from './pages/account/AccountSettingsPage';
 import AttendancePage from './pages/AttendancePage';
 import LeaveRequestsPage from './pages/LeaveRequestsPage';
 import OfficialDocumentsPage from './pages/OfficialDocumentsPage';
@@ -30,11 +33,16 @@ const MANAGER_ROLES = ['admin', 'manager'];
 
 export default function App() {
   const lang = useLangStore((s) => s.lang);
+  const theme = useThemeStore((s) => s.theme);
 
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = isRTL(lang) ? 'rtl' : 'ltr';
   }, [lang]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   return (
     <BrowserRouter>
@@ -83,6 +91,14 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <RawMaterialBatchesPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/inventory"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <InventoryOverviewPage />
                 </RequireRole>
               }
             />
@@ -139,6 +155,10 @@ export default function App() {
                 </RequireRole>
               }
             />
+            {/* Account/company/billing/users&roles/branches/customizations/API keys — separate
+                from the operational SettingsPage above (fixed costs, commissions, attendance
+                timing). Open to every role; the page itself hides admin-only sections. */}
+            <Route path="/account" element={<AccountSettingsPage />} />
           </Route>
         </Route>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />

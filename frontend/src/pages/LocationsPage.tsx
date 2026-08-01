@@ -13,10 +13,9 @@ interface Location {
   type: 'kiosk' | 'warehouse';
 }
 
-const TYPE_LABELS: Record<string, string> = { kiosk: 'كشك', warehouse: 'مستودع' };
-
 export default function LocationsPage() {
   const t = useT();
+  const TYPE_LABELS: Record<string, string> = { kiosk: t.locations.typeKiosk, warehouse: t.locations.typeWarehouse };
   const [items, setItems] = useState<Location[]>([]);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -90,7 +89,7 @@ export default function LocationsPage() {
             <thead>
               <tr>
                 <th>{t.locations.name}</th>
-                <th>النوع</th>
+                <th>{t.locations.type}</th>
                 <th>{t.locations.area}</th>
                 <th>{t.locations.address}</th>
                 <th></th>
@@ -117,7 +116,9 @@ export default function LocationsPage() {
                   <td>{l.area || '—'}</td>
                   <td>{l.address || '—'}</td>
                   <td>
-                    <button className="btn btn-sm" onClick={() => openEditModal(l)}>تعديل</button>
+                    <button className="btn btn-sm" onClick={() => openEditModal(l)}>
+                      {t.locations.edit}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -135,7 +136,7 @@ export default function LocationsPage() {
 
       {open && (
         <Modal
-          title={editingId ? 'تعديل الموقع' : t.locations.newItem}
+          title={editingId ? t.locations.editItem : t.locations.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
@@ -148,25 +149,41 @@ export default function LocationsPage() {
             </>
           }
         >
-          <form id="location-form" onSubmit={handleSubmit} className="field-grid">
-            <div className="field">
+          <form id="location-form" onSubmit={handleSubmit}>
+            <div className="field" style={{ marginBottom: 14 }}>
               <label>{t.locations.name}</label>
               <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
             </div>
-            <div className="field">
-              <label>النوع</label>
-              <select value={type} onChange={(e) => setType(e.target.value as 'kiosk' | 'warehouse')}>
-                <option value="kiosk">كشك</option>
-                <option value="warehouse">مستودع</option>
-              </select>
+
+            <div className="field" style={{ marginBottom: 4 }}>
+              <label>{t.locations.type}</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['kiosk', 'warehouse'] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setType(opt)}
+                    className={`btn btn-sm ${type === opt ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ flex: 1, justifyContent: 'center' }}
+                  >
+                    {opt === 'kiosk' ? t.locations.typeKiosk : t.locations.typeWarehouse}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                {type === 'kiosk' ? t.locations.typeHelperKiosk : t.locations.typeHelperWarehouse}
+              </div>
             </div>
-            <div className="field">
-              <label>{t.locations.area}</label>
-              <input value={area} onChange={(e) => setArea(e.target.value)} />
-            </div>
-            <div className="field">
-              <label>{t.locations.address}</label>
-              <input value={address} onChange={(e) => setAddress(e.target.value)} />
+
+            <div className="field-grid" style={{ marginTop: 14 }}>
+              <div className="field">
+                <label>{t.locations.area}</label>
+                <input value={area} onChange={(e) => setArea(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>{t.locations.address}</label>
+                <input value={address} onChange={(e) => setAddress(e.target.value)} />
+              </div>
             </div>
           </form>
         </Modal>

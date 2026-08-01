@@ -65,14 +65,18 @@ export default function RawMaterialBatchesPage() {
       .then(([batchesRes, materialsRes, locationsRes]) => {
         setMaterials(materialsRes.raw_materials);
         setLocations(locationsRes.locations);
-        const enriched = batchesRes.batches.map((b) => ({
-          ...b,
-          material_name: materialsRes.raw_materials.find((m) => m.id === b.raw_material_id)?.name || '—',
-          location_name: locationsRes.locations.find((l) => l.id === b.location_id)?.name || '—',
-        }));
+        const enriched = batchesRes.batches.map((b) => {
+          const material = materialsRes.raw_materials.find((m) => m.id === b.raw_material_id);
+          const materialName = (lang === 'en' && material?.name_en) || material?.name || '—';
+          return {
+            ...b,
+            material_name: materialName,
+            location_name: locationsRes.locations.find((l) => l.id === b.location_id)?.name || '—',
+          };
+        });
         setBatches(enriched);
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'خطأ في تحميل البيانات'));
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.rawMaterialBatches.loadFailed));
   }
 
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -102,7 +106,7 @@ export default function RawMaterialBatchesPage() {
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في الحفظ');
+      setError(err instanceof ApiError ? err.message : t.rawMaterialBatches.saveFailed);
     } finally {
       setLoading(false);
     }
@@ -148,41 +152,41 @@ export default function RawMaterialBatchesPage() {
   return (
     <div>
       <PageHeader
-        title="دفعات المواد الخام"
-        subtitle="إدارة دفعات المواد الخام والمخزون FIFO وتواريخ الصلاحية"
+        title={t.rawMaterialBatches.title}
+        subtitle={t.rawMaterialBatches.subtitle}
       />
       {error && <div className="error-banner">{error}</div>}
 
       {expiringBatches.length > 0 && (
         <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
-          <strong>⚠️ تنبيه:</strong> {expiringBatches.length} دفعة قريبة من انتهاء الصلاحية أو منتهية
+          <strong>{t.rawMaterialBatches.expiryAlert(expiringBatches.length)}</strong>
         </div>
       )}
 
       <div className="section-title-row">
-        <span className="muted">المجموع: {batches.length} دفعة</span>
+        <span className="muted">{t.rawMaterialBatches.total(batches.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={() => { resetForm(); setOpen(true); }}>
-          <IconPlus /> دفعة جديدة
+          <IconPlus /> {t.rawMaterialBatches.newItem}
         </button>
       </div>
 
       {/* Expiring/Expired batches first */}
       {expiringBatches.length > 0 && (
         <>
-          <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>🔴 قريبة من الانتهاء / منتهية</h3>
+          <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>{t.rawMaterialBatches.expiringSectionTitle}</h3>
           <div className="card">
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>المادة الخام</th>
-                    <th>الموقع</th>
-                    <th>تاريخ الشراء</th>
-                    <th>تاريخ الانتهاء</th>
-                    <th>أيام متبقية</th>
-                    <th className="num">الكمية المتبقية</th>
-                    <th className="num">سعر الشراء (KD)</th>
-                    <th>الحالة</th>
+                    <th>{t.rawMaterialBatches.material}</th>
+                    <th>{t.rawMaterialBatches.location}</th>
+                    <th>{t.rawMaterialBatches.purchaseDate}</th>
+                    <th>{t.rawMaterialBatches.expiryDate}</th>
+                    <th>{t.rawMaterialBatches.daysLeft}</th>
+                    <th className="num">{t.rawMaterialBatches.qtyRemaining}</th>
+                    <th className="num">{t.rawMaterialBatches.purchasePrice}</th>
+                    <th>{t.rawMaterialBatches.status}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -191,8 +195,8 @@ export default function RawMaterialBatchesPage() {
                     <tr key={b.id}>
                       <td>{b.material_name}</td>
                       <td>{b.location_name}</td>
-                      <td>{new Date(b.purchase_date).toLocaleDateString('ar-KW')}</td>
-                      <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString('ar-KW') : '—'}</td>
+                      <td>{new Date(b.purchase_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB')}</td>
+                      <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : '—'}</td>
                       <td className="num" style={{ color: getStatusColor(getExpiryStatus(b)) }}>
                         <strong>{b.days_until_expiry !== null ? b.days_until_expiry : '—'}</strong>
                       </td>
@@ -200,12 +204,12 @@ export default function RawMaterialBatchesPage() {
                       <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
                       <td>
                         <span style={{ color: getStatusColor(getExpiryStatus(b)), fontWeight: 'bold' }}>
-                          {getExpiryStatus(b) === 'expired' && '❌ منتهية'}
-                          {getExpiryStatus(b) === 'expiring' && '⚠️ قريبة'}
+                          {getExpiryStatus(b) === 'expired' && t.rawMaterialBatches.statusExpired}
+                          {getExpiryStatus(b) === 'expiring' && t.rawMaterialBatches.statusExpiring}
                         </span>
                       </td>
                       <td>
-                        <button className="btn btn-sm" onClick={() => openEditModal(b)}>تعديل</button>
+                        <button className="btn btn-sm" onClick={() => openEditModal(b)}>{t.rawMaterialBatches.edit}</button>
                       </td>
                     </tr>
                   ))}
@@ -217,20 +221,20 @@ export default function RawMaterialBatchesPage() {
       )}
 
       {/* Safe batches */}
-      <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>✅ دفعات آمنة</h3>
+      <h3 style={{ marginTop: '20px', marginBottom: '12px' }}>{t.rawMaterialBatches.safeSectionTitle}</h3>
       <div className="card">
         <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
-                <th>المادة الخام</th>
-                <th>الموقع</th>
-                <th>تاريخ الشراء</th>
-                <th>تاريخ الانتهاء</th>
-                <th>أيام متبقية</th>
-                <th className="num">الكمية المشتراة</th>
-                <th className="num">الكمية المتبقية</th>
-                <th className="num">سعر الشراء (KD)</th>
+                <th>{t.rawMaterialBatches.material}</th>
+                <th>{t.rawMaterialBatches.location}</th>
+                <th>{t.rawMaterialBatches.purchaseDate}</th>
+                <th>{t.rawMaterialBatches.expiryDate}</th>
+                <th>{t.rawMaterialBatches.daysLeft}</th>
+                <th className="num">{t.rawMaterialBatches.qtyPurchased}</th>
+                <th className="num">{t.rawMaterialBatches.qtyRemaining}</th>
+                <th className="num">{t.rawMaterialBatches.purchasePrice}</th>
                 <th></th>
               </tr>
             </thead>
@@ -239,21 +243,21 @@ export default function RawMaterialBatchesPage() {
                 <tr key={b.id}>
                   <td style={{ fontWeight: 700 }}>{b.material_name}</td>
                   <td>{b.location_name}</td>
-                  <td>{new Date(b.purchase_date).toLocaleDateString('ar-KW')}</td>
-                  <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString('ar-KW') : 'بدون تاريخ'}</td>
+                  <td>{new Date(b.purchase_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB')}</td>
+                  <td>{b.expiry_date ? new Date(b.expiry_date).toLocaleDateString(lang === 'ar' ? 'ar-KW' : 'en-GB') : t.rawMaterialBatches.noDate}</td>
                   <td className="num">{b.days_until_expiry !== null ? b.days_until_expiry : '∞'}</td>
                   <td className="num">{Number(b.qty_purchased).toFixed(3)}</td>
                   <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
                   <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
                   <td>
-                    <button className="btn btn-sm" onClick={() => openEditModal(b)}>تعديل</button>
+                    <button className="btn btn-sm" onClick={() => openEditModal(b)}>{t.rawMaterialBatches.edit}</button>
                   </td>
                 </tr>
               ))}
               {safeBatches.length === 0 && (
                 <tr>
                   <td colSpan={9}>
-                    <div className="empty-state">لا توجد دفعات آمنة حالياً</div>
+                    <div className="empty-state">{t.rawMaterialBatches.empty}</div>
                   </td>
                 </tr>
               )}
@@ -264,15 +268,15 @@ export default function RawMaterialBatchesPage() {
 
       {open && (
         <Modal
-          title={editingId ? 'تعديل الدفعة' : 'دفعة جديدة'}
+          title={editingId ? t.rawMaterialBatches.editItem : t.rawMaterialBatches.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="batch-form" disabled={loading}>
-                {loading ? 'جاري...' : 'حفظ'}
+                {loading ? t.common.loading : t.rawMaterialBatches.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
-                إلغاء
+                {t.rawMaterialBatches.cancel}
               </button>
             </>
           }
@@ -281,31 +285,31 @@ export default function RawMaterialBatchesPage() {
             {!editingId && (
               <>
                 <div className="field">
-                  <label>المادة الخام *</label>
+                  <label>{t.rawMaterialBatches.material} *</label>
                   <select value={rawMaterialId} onChange={(e) => setRawMaterialId(e.target.value)} required>
-                    <option value="">اختر مادة خام</option>
+                    <option value="">{t.rawMaterialBatches.selectMaterial}</option>
                     {materials.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.name}
+                        {(lang === 'en' && m.name_en) || m.name}
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div className="field">
-                  <label>الموقع *</label>
+                  <label>{t.rawMaterialBatches.location} *</label>
                   <select value={locationId} onChange={(e) => setLocationId(e.target.value)} required>
-                    <option value="">اختر الموقع</option>
+                    <option value="">{t.rawMaterialBatches.selectLocation}</option>
                     {locations.map((l) => (
                       <option key={l.id} value={l.id}>
-                        {l.name} ({l.type === 'warehouse' ? 'مستودع' : 'كشك'})
+                        {l.name} ({l.type === 'warehouse' ? t.locations.typeWarehouse : t.locations.typeKiosk})
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div className="field">
-                  <label>تاريخ الشراء *</label>
+                  <label>{t.rawMaterialBatches.purchaseDate} *</label>
                   <input
                     type="date"
                     value={purchaseDate}
@@ -315,7 +319,7 @@ export default function RawMaterialBatchesPage() {
                 </div>
 
                 <div className="field">
-                  <label>الكمية المشتراة *</label>
+                  <label>{t.rawMaterialBatches.qtyPurchased} *</label>
                   <input
                     type="number"
                     step="0.001"
@@ -326,7 +330,7 @@ export default function RawMaterialBatchesPage() {
                 </div>
 
                 <div className="field">
-                  <label>سعر الشراء (KD) *</label>
+                  <label>{t.rawMaterialBatches.purchasePrice} *</label>
                   <input
                     type="number"
                     step="0.001"
@@ -339,7 +343,7 @@ export default function RawMaterialBatchesPage() {
             )}
 
             <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>تاريخ انتهاء الصلاحية (اختياري)</label>
+              <label>{t.rawMaterialBatches.expiryDateOptional}</label>
               <input
                 type="date"
                 value={expiryDate}

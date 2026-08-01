@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { post, ApiError } from '../api/client';
 import { useAuthStore, AuthUser } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
@@ -15,6 +15,7 @@ interface LoginResponse {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
   const lang = useLangStore((s) => s.lang);
   const toggleLang = useLangStore((s) => s.toggle);
@@ -24,6 +25,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const expired = searchParams.get('expired') === '1';
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -62,6 +64,7 @@ export default function LoginPage() {
           <h1 style={{ marginBottom: 2 }}>{t.brand}</h1>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.auth.loginSubtitle}</div>
         </div>
+        {!error && expired && <div className="error-banner">{t.auth.sessionExpired}</div>}
         {error && <div className="error-banner">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="field">

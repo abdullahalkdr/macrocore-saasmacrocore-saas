@@ -12,6 +12,7 @@ const DELIVERY_CHANNELS = ['jahez', 'vthru'];
 interface Product {
   id: string;
   name: string;
+  name_en: string | null;
   sell_price: number | null;
   has_sizes: boolean;
 }
@@ -174,7 +175,11 @@ export default function ShiftPage() {
     }
   }
 
-  const productNames = Object.fromEntries(products.map((p) => [p.id, p.name]));
+  function productLabel(p: Product): string {
+    return lang === 'en' && p.name_en ? p.name_en : p.name;
+  }
+
+  const productNames = Object.fromEntries(products.map((p) => [p.id, productLabel(p)]));
 
   function sizeLabel(size: ProductSize): string {
     return lang === 'en' && size.name_en ? size.name_en : size.name;
@@ -201,9 +206,9 @@ export default function ShiftPage() {
           {locations.length > 1 && (
             <div className="field-grid" style={{ marginBottom: 14 }}>
               <div className="field">
-                <label>الموقع (كشك)</label>
+                <label>{t.shift.location}</label>
                 <select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                  <option value="">اختر الكشك</option>
+                  <option value="">{t.shift.selectLocation}</option>
                   {locations.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name}
@@ -219,7 +224,7 @@ export default function ShiftPage() {
                 (sizesByProduct[p.id] || []).map((s) => (
                   <div className="field" key={s.id}>
                     <label>
-                      {p.name} — {sizeLabel(s)}
+                      {productLabel(p)} — {sizeLabel(s)}
                     </label>
                     <input
                       type="number"
@@ -231,7 +236,7 @@ export default function ShiftPage() {
                 ))
               ) : (
                 <div className="field" key={p.id}>
-                  <label>{p.name}</label>
+                  <label>{productLabel(p)}</label>
                   <input
                     type="number"
                     min={0}

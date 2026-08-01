@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, post, ApiError } from '../api/client';
+import { get, post, del, ApiError } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { IconPlus } from '../components/Icon';
+import { useAuthStore } from '../store/authStore';
+import { useLangStore } from '../store/langStore';
+import { useT } from '../i18n';
 
 interface RawMaterial {
   id: string;
@@ -27,6 +30,10 @@ interface Transfer {
 }
 
 export default function StockTransfersPage() {
+  const t = useT();
+  const lang = useLangStore((s) => s.lang);
+  const user = useAuthStore((s) => s.user);
+  const isPrivileged = user?.role === 'admin' || user?.role === 'manager';
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -45,16 +52,28 @@ export default function StockTransfersPage() {
       get<{ transfers: Transfer[] }>('/stock-transfers').then((r) => setTransfers(r.transfers)),
       get<{ raw_materials: RawMaterial[] }>('/raw-materials').then((r) => setMaterials(r.raw_materials)),
       get<{ locations: Location[] }>('/locations').then((r) => setLocations(r.locations)),
-    ]).catch((err) => setError(err instanceof ApiError ? err.message : 'خطأ في تحميل البيانات'));
+    ]).catch((err) => setError(err instanceof ApiError ? err.message : t.stockTransfers.loadFailed));
   }
 
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function materialName(id: string) {
-    return materials.find((m) => m.id === id)?.name || '—';
+    const m = materials.find((mm) => mm.id === id);
+    return (lang === 'en' && m?.name_en) || m?.name || '—';
   }
   function locationName(id: string) {
     return locations.find((l) => l.id === id)?.name || '—';
+  }
+
+  async function handleDelete(id: string) {
+    if (!window.confirm(t.stockTransfers.undoConfirm)) return;
+    setError(null);
+    try {
+      await del(`/stock-transfers/${id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.stockTransfers.undoFailed);
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -75,7 +94,7 @@ export default function StockTransfersPage() {
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'خطأ في تنفيذ التحويل');
+      setError(err instanceof ApiError ? err.message : t.stockTransfers.transferFailed);
     } finally {
       setLoading(false);
     }
@@ -83,13 +102,13 @@ export default function StockTransfersPage() {
 
   return (
     <div>
-      <PageHeader title="تحويل المخزون" subtitle="نقل مواد خام بين المستودع والأكشاك" />
+      <PageHeader title={t.stockTransfers.title} subtitle={t.stockTransfers.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
       <div className="section-title-row">
-        <span className="muted">سجل التحويلات: {transfers.length}</span>
+        <span className="muted">{t.stockTransfers.log(transfers.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
-          <IconPlus /> تحويل جديد
+          <IconPlus /> {t.stockTransfers.newItem}
         </button>
       </div>
 
@@ -98,11 +117,12 @@ export default function StockTransfersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>المادة الخام</th>
-                <th>من</th>
-                <th>إلى</th>
-                <th className="num">الكمية</th>
-                <th>التاريخ</th>
+                <th>{t.stockTransfers.material}</th>
+                <th>{t.stockTransfers.from}</th>
+                <th>{t.stockTransfers.to}</th>
+                <th className="num">{t.stockTransfers.qty}</th>
+                <th>{t.stockTransfers.date}</th>
+                {isPrivileged && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -112,13 +132,20 @@ export default function StockTransfersPage() {
                   <td>{locationName(tr.from_location_id)}</td>
                   <td>{locationName(tr.to_location_id)}</td>
                   <td className="num">{Number(tr.qty).toFixed(3)}</td>
-                  <td>{new Date(tr.created_at).toLocaleString('ar-KW')}</td>
+                  <td>{new Date(tr.created_at).toLocaleString(lang === 'ar' ? 'ar-KW' : 'en-GB')}</td>
+                  {isPrivileged && (
+                    <td>
+                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(tr.id)}>
+                        {t.stockTransfers.undo}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {transfers.length === 0 && (
                 <tr>
-                  <td colSpan={5}>
-                    <div className="empty-state">لا توجد تحويلات مسجّلة بعد</div>
+                  <td colSpan={isPrivileged ? 6 : 5}>
+                    <div className="empty-state">{t.stockTransfers.empty}</div>
                   </td>
                 </tr>
               )}
@@ -129,60 +156,60 @@ export default function StockTransfersPage() {
 
       {open && (
         <Modal
-          title="تحويل جديد"
+          title={t.stockTransfers.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="transfer-form" disabled={loading}>
-                {loading ? 'جاري...' : 'تنفيذ التحويل'}
+                {loading ? t.common.loading : t.stockTransfers.execute}
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
-                إلغاء
+                {t.stockTransfers.cancel}
               </button>
             </>
           }
         >
           <form id="transfer-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
-              <label>المادة الخام *</label>
+              <label>{t.stockTransfers.material} *</label>
               <select value={rawMaterialId} onChange={(e) => setRawMaterialId(e.target.value)} required>
-                <option value="">اختر مادة خام</option>
+                <option value="">{t.stockTransfers.selectMaterial}</option>
                 {materials.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name}
+                    {(lang === 'en' && m.name_en) || m.name}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="field">
-              <label>من موقع *</label>
+              <label>{t.stockTransfers.fromLocation} *</label>
               <select value={fromLocationId} onChange={(e) => setFromLocationId(e.target.value)} required>
-                <option value="">اختر الموقع المصدر</option>
+                <option value="">{t.stockTransfers.selectSourceLocation}</option>
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>
-                    {l.name} ({l.type === 'warehouse' ? 'مستودع' : 'كشك'})
+                    {l.name} ({l.type === 'warehouse' ? t.locations.typeWarehouse : t.locations.typeKiosk})
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="field">
-              <label>إلى موقع *</label>
+              <label>{t.stockTransfers.toLocation} *</label>
               <select value={toLocationId} onChange={(e) => setToLocationId(e.target.value)} required>
-                <option value="">اختر الموقع الوجهة</option>
+                <option value="">{t.stockTransfers.selectDestLocation}</option>
                 {locations
                   .filter((l) => l.id !== fromLocationId)
                   .map((l) => (
                     <option key={l.id} value={l.id}>
-                      {l.name} ({l.type === 'warehouse' ? 'مستودع' : 'كشك'})
+                      {l.name} ({l.type === 'warehouse' ? t.locations.typeWarehouse : t.locations.typeKiosk})
                     </option>
                   ))}
               </select>
             </div>
 
             <div className="field">
-              <label>الكمية *</label>
+              <label>{t.stockTransfers.qty} *</label>
               <input type="number" step="0.001" value={qty} onChange={(e) => setQty(e.target.value)} required />
             </div>
           </form>

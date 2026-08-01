@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { IconPlus } from '../components/Icon';
@@ -15,6 +16,7 @@ interface WasteRecord {
 interface Product {
   id: string;
   name: string;
+  name_en: string | null;
 }
 interface Shift {
   id: string;
@@ -24,6 +26,7 @@ interface Shift {
 
 export default function WasteRecordsPage() {
   const t = useT();
+  const lang = useLangStore((s) => s.lang);
   const [items, setItems] = useState<WasteRecord[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -47,7 +50,10 @@ export default function WasteRecordsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const productName = (id: string) => products.find((p) => p.id === id)?.name || id;
+  const productName = (id: string) => {
+    const p = products.find((pp) => pp.id === id);
+    return (lang === 'en' && p?.name_en) || p?.name || id;
+  };
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -140,7 +146,7 @@ export default function WasteRecordsPage() {
                 <option value="">{t.waste.selectProduct}</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {(lang === 'en' && p.name_en) || p.name}
                   </option>
                 ))}
               </select>

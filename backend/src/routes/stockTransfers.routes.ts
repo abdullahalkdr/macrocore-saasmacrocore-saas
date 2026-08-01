@@ -8,5 +8,6 @@ const router = Router();
 router.use(requireAuth);
 router.post('/', requireRole('admin', 'manager'), controller.create);
 router.get('/', controller.list);
+router.delete('/:id', requireRole('admin', 'manager'), controller.remove);
 
 export default router;

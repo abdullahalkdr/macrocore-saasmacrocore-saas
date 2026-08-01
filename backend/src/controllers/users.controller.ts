@@ -11,6 +11,76 @@ import { logAudit } from '../utils/audit';
 const ROLES = ['admin', 'manager', 'employee', 'viewer'];
 const STATUSES = ['active', 'suspended', 'inactive'];
 
+// Settings > Profile — the logged-in user editing their own info. Deliberately
+// separate from update() below: that one is admin/manager managing OTHER users
+// (role/status), this one is self-service and can't touch role/status.
+export const getMe = asyncHandler(async (req: Request, res: Response) => {
+  const result = await pool.query(
+    `SELECT id, email, full_name, first_name, last_name, job_title, phone, role, company_id, created_at
+     FROM users WHERE id = $1`,
+    [req.auth!.userId]
+  );
+  const user = result.rows[0];
+  if (!user) throw new AppError(404, 'User not found');
+  res.status(200).json({ success: true, user });
+});
+
+export const updateMe = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth!.userId;
+  const { first_name, last_name, job_title, phone } = req.body ?? {};
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  if (first_name !== undefined) {
+    if (typeof first_name !== 'string') throw new AppError(400, 'first_name must be a string');
+    params.push(first_name.trim() || null);
+    sets.push(`first_name = $${params.length}`);
+  }
+  if (last_name !== undefined) {
+    if (typeof last_name !== 'string') throw new AppError(400, 'last_name must be a string');
+    params.push(last_name.trim() || null);
+    sets.push(`last_name = $${params.length}`);
+  }
+  if (job_title !== undefined) {
+    if (typeof job_title !== 'string') throw new AppError(400, 'job_title must be a string');
+    params.push(job_title.trim() || null);
+    sets.push(`job_title = $${params.length}`);
+  }
+  if (phone !== undefined) {
+    if (typeof phone !== 'string') throw new AppError(400, 'phone must be a string');
+    params.push(phone.trim() || null);
+    sets.push(`phone = $${params.length}`);
+  }
+  if (sets.length === 0) throw new AppError(400, 'Nothing to update');
+
+  // Keep full_name (used across the rest of the app — audit logs, employee links, etc.)
+  // in sync whenever either name half changes.
+  const current = await pool.query('SELECT first_name, last_name FROM users WHERE id = $1', [userId]);
+  if (!current.rows[0]) throw new AppError(404, 'User not found');
+  const nextFirst = first_name !== undefined ? (typeof first_name === 'string' ? first_name.trim() : null) : current.rows[0].first_name;
+  const nextLast = last_name !== undefined ? (typeof last_name === 'string' ? last_name.trim() : null) : current.rows[0].last_name;
+  const combinedName = [nextFirst, nextLast].filter(Boolean).join(' ');
+  if (combinedName) {
+    params.push(combinedName);
+    sets.push(`full_name = $${params.length}`);
+  }
+
+  sets.push('updated_at = NOW()');
+  params.push(userId);
+
+  const result = await pool.query(
+    `UPDATE users SET ${sets.join(', ')} WHERE id = $${params.length}
+     RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id`,
+    params
+  );
+  const user = result.rows[0];
+
+  await logAudit({ companyId: req.auth!.companyId, userId, action: 'profile_updated', entityType: 'users', entityId: userId, req });
+
+  res.status(200).json({ success: true, user });
+});
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { page, limit, offset } = parsePagination(req);
@@ -26,7 +96,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const totalResult = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE ${where}`, params);
   params.push(limit, offset);
   const usersResult = await pool.query(
-    `SELECT id, email, full_name, role, status, created_at FROM users
+    `SELECT id, email, full_name, first_name, last_name, phone, job_title, role, status, created_at FROM users
      WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -66,7 +136,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { role, status, full_name } = req.body ?? {};
+  const { role, status, full_name, email, new_password } = req.body ?? {};
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -86,6 +156,26 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     params.push(full_name);
     sets.push(`full_name = $${params.length}`);
   }
+  if (email !== undefined) {
+    if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
+    const clash = await pool.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email.toLowerCase(), id]);
+    if (clash.rows.length > 0) throw new AppError(409, 'Email already registered');
+    params.push(email.toLowerCase());
+    sets.push(`email = $${params.length}`);
+  }
+
+  // Admin-only password reset — a manager can edit role/status/name/email above,
+  // but resetting someone's login password is reserved for admins. Also blocked
+  // on your own account: use /auth/change-password there (requires current password).
+  if (new_password !== undefined) {
+    if (req.auth!.role !== 'admin') throw new AppError(403, 'Only an admin can reset another user’s password');
+    if (id === req.auth!.userId) throw new AppError(400, 'Use change password (in your profile) to change your own password');
+    if (typeof new_password !== 'string' || new_password.length < 6) throw new AppError(400, 'new_password must be at least 6 characters');
+    const passwordHash = await hashPassword(new_password);
+    params.push(passwordHash);
+    sets.push(`password_hash = $${params.length}`);
+  }
+
   if (sets.length === 0) throw new AppError(400, 'Nothing to update');
 
   sets.push('updated_at = NOW()');
@@ -99,7 +189,14 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const user = result.rows[0];
   if (!user) throw new AppError(404, 'User not found');
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'user_updated', entityType: 'users', entityId: user.id, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: new_password !== undefined ? 'user_password_reset' : 'user_updated',
+    entityType: 'users',
+    entityId: user.id,
+    req,
+  });
 
   res.status(200).json({ success: true, user });
 });

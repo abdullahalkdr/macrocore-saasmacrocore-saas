@@ -66,6 +66,63 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/stock-transfers/:id
+ * Admin/manager only. Reverses a transfer: deletes the batch it created at the
+ * destination and puts the qty back at the source as a fresh batch (same cost).
+ * Only allowed if none of the destination batch has been consumed yet — the
+ * original source batch split isn't stored, so a byte-for-byte undo isn't possible
+ * once downstream sales/waste have touched it.
+ */
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const transferResult = await client.query(
+      `SELECT id, raw_material_id, from_location_id, to_location_id, qty, new_batch_id
+       FROM stock_transfers WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [id, companyId]
+    );
+    if (!transferResult.rows[0]) throw new AppError(404, 'Transfer not found');
+    const t = transferResult.rows[0];
+
+    if (t.new_batch_id) {
+      const batchResult = await client.query(
+        `SELECT id, qty_purchased, qty_remaining, purchase_price, expiry_date FROM raw_material_batches WHERE id = $1 FOR UPDATE`,
+        [t.new_batch_id]
+      );
+      const batch = batchResult.rows[0];
+      if (batch) {
+        if (Number(batch.qty_remaining) !== Number(batch.qty_purchased)) {
+          throw new AppError(400, 'Cannot undo — some of the transferred stock has already been used at the destination');
+        }
+        await client.query('DELETE FROM raw_material_batches WHERE id = $1', [t.new_batch_id]);
+        await client.query(
+          `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price)
+           VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $5, $6)`,
+          [companyId, t.raw_material_id, t.from_location_id, batch.expiry_date, t.qty, batch.purchase_price]
+        );
+      }
+    }
+
+    await client.query('DELETE FROM stock_transfers WHERE id = $1 AND company_id = $2', [id, companyId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'stock_transfer_reversed', entityType: 'stock_transfers', entityId: id as string, req });
+
+  res.status(200).json({ success: true, message: 'Transfer reversed' });
+});
+
+/**
  * GET /api/stock-transfers
  * List transfer history, optionally filtered by raw_material_id/from_location_id/to_location_id.
  */

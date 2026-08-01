@@ -64,9 +64,18 @@ function emptySizeRow(): SizeRow {
   return { name: '', name_en: '', sell_price: '', ingredients: [] };
 }
 
+const PRODUCT_CATEGORY_VALUES = ['main', 'side', 'drink', 'dessert', 'other'] as const;
+
 export default function ProductsPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
+  const PRODUCT_CATEGORY_LABELS: Record<string, string> = {
+    main: t.products.categoryMain,
+    side: t.products.categorySide,
+    drink: t.products.categoryDrink,
+    dessert: t.products.categoryDessert,
+    other: t.products.categoryOther,
+  };
   const [products, setProducts] = useState<Product[]>([]);
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
   const [open, setOpen] = useState(false);
@@ -272,7 +281,7 @@ export default function ProductsPage() {
                       </>
                     )}
                   </td>
-                  <td>{p.category || '—'}</td>
+                  <td>{p.category ? PRODUCT_CATEGORY_LABELS[p.category] || p.category : '—'}</td>
                   <td className="num">{p.has_sizes ? t.products.multiplePrices : p.sell_price !== null ? `${Number(p.sell_price).toFixed(3)} KD` : '—'}</td>
                   <td>{p.status === 'active' ? <Tag color="green">{t.common.active}</Tag> : <Tag color="gray">{p.status}</Tag>}</td>
                 </tr>
@@ -292,7 +301,10 @@ export default function ProductsPage() {
       {costOpenId && (
         <div className="card">
           <div className="card-head">
-            <h2>{products.find((p) => p.id === costOpenId)?.name}</h2>
+            <h2>{(() => {
+              const p = products.find((pp) => pp.id === costOpenId);
+              return p ? (lang === 'en' && p.name_en) || p.name : '';
+            })()}</h2>
           </div>
           <div className="card-body">
             {!cost && <p className="muted">{t.common.loading}</p>}
@@ -394,7 +406,14 @@ export default function ProductsPage() {
               </div>
               <div className="field">
                 <label>{t.products.category}</label>
-                <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="main, drink..." />
+                <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  <option value="">{t.products.selectCategory}</option>
+                  {PRODUCT_CATEGORY_VALUES.map((c) => (
+                    <option key={c} value={c}>
+                      {PRODUCT_CATEGORY_LABELS[c]}
+                    </option>
+                  ))}
+                </select>
               </div>
               {!hasSizes && (
                 <div className="field">

@@ -131,6 +131,78 @@ export const close = asyncHandler(async (req: Request, res: Response) => {
   });
 });
 
+// Admin/manager only — corrects a shift's employee/location/date/status directly
+// (e.g. wrong location picked at open time). Doesn't touch sales/assignments.
+export const update = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+  const { employee_id, location_id, date, status } = req.body ?? {};
+
+  if (status !== undefined && !['open', 'closed'].includes(status)) {
+    throw new AppError(400, 'status must be open or closed');
+  }
+
+  const existing = await pool.query(
+    `SELECT id, employee_id, location_id, date, status FROM shifts WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
+  );
+  if (!existing.rows[0]) throw new AppError(404, 'Shift not found');
+  const current = existing.rows[0];
+
+  const result = await pool.query(
+    `UPDATE shifts SET employee_id = $1, location_id = $2, date = $3, status = $4, updated_at = NOW()
+     WHERE id = $5 AND company_id = $6
+     RETURNING id, employee_id, location_id, date, opened_at, closed_at, status`,
+    [
+      employee_id !== undefined ? employee_id : current.employee_id,
+      location_id !== undefined ? location_id : current.location_id,
+      date !== undefined ? date : current.date,
+      status !== undefined ? status : current.status,
+      id,
+      companyId,
+    ]
+  );
+  const shift = result.rows[0];
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'shift_updated', entityType: 'shifts', entityId: shift.id, req });
+
+  res.status(200).json({ success: true, shift });
+});
+
+// Admin/manager only — hard delete: removes the shift and everything recorded
+// directly under it (sales, waste, cash counts, product assignments). Does NOT
+// restore raw-material FIFO batch quantities those sales/waste consumed — for a
+// full pre-launch data wipe use docs/RESET_TEST_DATA.sql instead of looping this.
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const existing = await client.query('SELECT id FROM shifts WHERE id = $1 AND company_id = $2 FOR UPDATE', [id, companyId]);
+    if (!existing.rows[0]) throw new AppError(404, 'Shift not found');
+
+    await client.query('DELETE FROM sales WHERE shift_id = $1 AND company_id = $2', [id, companyId]);
+    await client.query('DELETE FROM waste_records WHERE shift_id = $1 AND company_id = $2', [id, companyId]);
+    await client.query('DELETE FROM cash_denominations WHERE shift_id = $1 AND company_id = $2', [id, companyId]);
+    await client.query('DELETE FROM shift_assignments WHERE shift_id = $1', [id]);
+    await client.query('DELETE FROM shifts WHERE id = $1 AND company_id = $2', [id, companyId]);
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'shift_deleted', entityType: 'shifts', entityId: id as string, req });
+
+  res.status(200).json({ success: true, message: 'Shift deleted' });
+});
+
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;

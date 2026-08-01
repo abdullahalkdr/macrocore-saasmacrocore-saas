@@ -31,6 +31,25 @@ interface Employee {
   age: number | null;
   wage_type: 'monthly' | 'hourly';
   hourly_rate: number | null;
+  start_date: string | null;
+  nationality: string | null;
+  civil_id_expiry: string | null;
+  residency_number: string | null;
+  residency_expiry: string | null;
+  passport_number: string | null;
+  passport_expiry: string | null;
+  bank_iban: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  days_until_civil_id_expiry: number | null;
+  days_until_residency_expiry: number | null;
+  days_until_passport_expiry: number | null;
+}
+
+function hasExpiryWarning(e: Employee): boolean {
+  return [e.days_until_civil_id_expiry, e.days_until_residency_expiry, e.days_until_passport_expiry].some(
+    (d) => d !== null && d <= 30
+  );
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -57,6 +76,16 @@ function emptyForm() {
     certificates: [] as Certificate[],
     wageType: 'monthly' as 'monthly' | 'hourly',
     hourlyRate: '',
+    startDate: '',
+    nationality: '',
+    civilIdExpiry: '',
+    residencyNumber: '',
+    residencyExpiry: '',
+    passportNumber: '',
+    passportExpiry: '',
+    bankIban: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
   };
 }
 
@@ -110,6 +139,16 @@ export default function EmployeesPage() {
       certificates: emp.certificates || [],
       wageType: emp.wage_type || 'monthly',
       hourlyRate: emp.hourly_rate !== null ? String(emp.hourly_rate) : '',
+      startDate: emp.start_date ? emp.start_date.slice(0, 10) : '',
+      nationality: emp.nationality || '',
+      civilIdExpiry: emp.civil_id_expiry ? emp.civil_id_expiry.slice(0, 10) : '',
+      residencyNumber: emp.residency_number || '',
+      residencyExpiry: emp.residency_expiry ? emp.residency_expiry.slice(0, 10) : '',
+      passportNumber: emp.passport_number || '',
+      passportExpiry: emp.passport_expiry ? emp.passport_expiry.slice(0, 10) : '',
+      bankIban: emp.bank_iban || '',
+      emergencyContactName: emp.emergency_contact_name || '',
+      emergencyContactPhone: emp.emergency_contact_phone || '',
     });
     setOpen(true);
   }
@@ -154,6 +193,16 @@ export default function EmployeesPage() {
         certificates: form.certificates.filter((c) => c.name.trim()),
         wage_type: form.wageType,
         hourly_rate: form.wageType === 'hourly' && form.hourlyRate ? Number(form.hourlyRate) : undefined,
+        start_date: form.startDate || undefined,
+        nationality: form.nationality || undefined,
+        civil_id_expiry: form.civilIdExpiry || undefined,
+        residency_number: form.residencyNumber || undefined,
+        residency_expiry: form.residencyExpiry || undefined,
+        passport_number: form.passportNumber || undefined,
+        passport_expiry: form.passportExpiry || undefined,
+        bank_iban: form.bankIban || undefined,
+        emergency_contact_name: form.emergencyContactName || undefined,
+        emergency_contact_phone: form.emergencyContactPhone || undefined,
       };
       if (editingId) {
         await patch(`/employees/${editingId}`, payload);
@@ -176,6 +225,12 @@ export default function EmployeesPage() {
       <PageHeader title={t.employees.title} subtitle={t.employees.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
+      {employees.filter(hasExpiryWarning).length > 0 && (
+        <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
+          <strong>{t.employees.expiryAlert(employees.filter(hasExpiryWarning).length)}</strong>
+        </div>
+      )}
+
       <div className="section-title-row">
         <span className="muted">{t.employees.count(employees.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={openCreate}>
@@ -191,7 +246,7 @@ export default function EmployeesPage() {
                 <th></th>
                 <th>{t.employees.name}</th>
                 <th>{t.employees.jobRole}</th>
-                <th>نظام الأجر</th>
+                <th>{t.employees.wageType}</th>
                 <th className="num">{t.employees.salary}</th>
                 <th>{t.employees.status}</th>
               </tr>
@@ -209,13 +264,19 @@ export default function EmployeesPage() {
                   <td style={{ fontWeight: 700 }}>
                     {e.name}
                     {e.age !== null && <span className="muted" style={{ fontWeight: 400 }}> ({e.age})</span>}
+                    {hasExpiryWarning(e) && (
+                      <>
+                        {' '}
+                        <Tag color="amber">{t.employees.expiringBadge}</Tag>
+                      </>
+                    )}
                   </td>
                   <td>{e.job_role || '—'}</td>
-                  <td>{e.wage_type === 'hourly' ? 'بالساعة' : 'شهري'}</td>
+                  <td>{e.wage_type === 'hourly' ? t.employees.hourly : t.employees.monthly}</td>
                   <td className="num">
                     {e.wage_type === 'hourly'
                       ? e.hourly_rate !== null
-                        ? `${Number(e.hourly_rate).toFixed(3)} KD/ساعة`
+                        ? t.employees.hourlyRateShort(Number(e.hourly_rate).toFixed(3))
                         : '—'
                       : e.salary_monthly !== null
                         ? `${Number(e.salary_monthly).toFixed(3)} KD`
@@ -268,21 +329,21 @@ export default function EmployeesPage() {
               </div>
               <div className="field">
                 <label>{t.employees.jobRole}</label>
-                <input value={form.jobRole} onChange={(e) => setForm({ ...form, jobRole: e.target.value })} placeholder="cashier..." />
+                <input value={form.jobRole} onChange={(e) => setForm({ ...form, jobRole: e.target.value })} placeholder={t.employees.jobRolePlaceholder} />
               </div>
               <div className="field">
-                <label>نظام الأجر</label>
+                <label>{t.employees.wageType}</label>
                 <select
                   value={form.wageType}
                   onChange={(e) => setForm({ ...form, wageType: e.target.value as 'monthly' | 'hourly' })}
                 >
-                  <option value="monthly">راتب شهري</option>
-                  <option value="hourly">أجر بالساعة</option>
+                  <option value="monthly">{t.employees.wageTypeMonthly}</option>
+                  <option value="hourly">{t.employees.wageTypeHourly}</option>
                 </select>
               </div>
               {form.wageType === 'hourly' ? (
                 <div className="field">
-                  <label>سعر الساعة (KD)</label>
+                  <label>{t.employees.hourlyRate}</label>
                   <input
                     type="number"
                     step="0.001"
@@ -328,6 +389,60 @@ export default function EmployeesPage() {
                 value={form.priorExperience}
                 onChange={(e) => setForm({ ...form, priorExperience: e.target.value })}
               />
+            </div>
+
+            <div className="hr" />
+            <div className="section-title-row">
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.hrSectionTitle}</span>
+            </div>
+            <div className="field-grid">
+              <div className="field">
+                <label>{t.employees.nationality}</label>
+                <input value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.joinDate}</label>
+                <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.civilIdExpiry}</label>
+                <input type="date" value={form.civilIdExpiry} onChange={(e) => setForm({ ...form, civilIdExpiry: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.residencyNumber}</label>
+                <input value={form.residencyNumber} onChange={(e) => setForm({ ...form, residencyNumber: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.residencyExpiry}</label>
+                <input type="date" value={form.residencyExpiry} onChange={(e) => setForm({ ...form, residencyExpiry: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.passportNumber}</label>
+                <input value={form.passportNumber} onChange={(e) => setForm({ ...form, passportNumber: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.passportExpiry}</label>
+                <input type="date" value={form.passportExpiry} onChange={(e) => setForm({ ...form, passportExpiry: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.bankIban}</label>
+                <input value={form.bankIban} onChange={(e) => setForm({ ...form, bankIban: e.target.value })} />
+              </div>
+            </div>
+
+            <div className="hr" />
+            <div className="section-title-row">
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.emergencyContactTitle}</span>
+            </div>
+            <div className="field-grid">
+              <div className="field">
+                <label>{t.employees.emergencyContactName}</label>
+                <input value={form.emergencyContactName} onChange={(e) => setForm({ ...form, emergencyContactName: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.emergencyContactPhone}</label>
+                <input value={form.emergencyContactPhone} onChange={(e) => setForm({ ...form, emergencyContactPhone: e.target.value })} />
+              </div>
             </div>
 
             <div className="hr" />

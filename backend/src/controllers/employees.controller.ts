@@ -12,7 +12,9 @@ interface Certificate {
 }
 
 const SELECT_COLUMNS = `id, name, email, phone, job_role, salary_monthly, start_date, status,
-  photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate, created_at`;
+  photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
+  nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
+  bank_iban, emergency_contact_name, emergency_contact_phone, created_at`;
 
 const WAGE_TYPES = ['monthly', 'hourly'];
 
@@ -37,13 +39,35 @@ function withAge<T extends { birth_date: string | null }>(row: T): T & { age: nu
   return { ...row, age };
 }
 
+function daysUntil(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  const now = new Date();
+  const msPerDay = 1000 * 60 * 60 * 24;
+  return Math.ceil((Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / msPerDay);
+}
+
+// Same expiry-countdown treatment already used for raw material batches and
+// company files — civil ID / residency / passport are the compliance-critical
+// dates for an expat-heavy kiosk workforce in Kuwait.
+function withExpiries<T extends { civil_id_expiry: string | null; residency_expiry: string | null; passport_expiry: string | null }>(
+  row: T
+): T & { days_until_civil_id_expiry: number | null; days_until_residency_expiry: number | null; days_until_passport_expiry: number | null } {
+  return {
+    ...row,
+    days_until_civil_id_expiry: daysUntil(row.civil_id_expiry),
+    days_until_residency_expiry: daysUntil(row.residency_expiry),
+    days_until_passport_expiry: daysUntil(row.passport_expiry),
+  };
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS} FROM employees WHERE company_id = $1 ORDER BY created_at DESC`,
     [companyId]
   );
-  res.status(200).json({ success: true, employees: result.rows.map(withAge) });
+  res.status(200).json({ success: true, employees: result.rows.map((r) => withExpiries(withAge(r))) });
 });
 
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
@@ -51,7 +75,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const result = await pool.query(`SELECT ${SELECT_COLUMNS} FROM employees WHERE id = $1 AND company_id = $2`, [id, companyId]);
   if (!result.rows[0]) throw new AppError(404, 'Employee not found');
-  res.status(200).json({ success: true, employee: withAge(result.rows[0]) });
+  res.status(200).json({ success: true, employee: withExpiries(withAge(result.rows[0])) });
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
@@ -71,6 +95,15 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     certificates,
     wage_type,
     hourly_rate,
+    nationality,
+    civil_id_expiry,
+    residency_number,
+    residency_expiry,
+    passport_number,
+    passport_expiry,
+    bank_iban,
+    emergency_contact_name,
+    emergency_contact_phone,
   } = req.body ?? {};
 
   if (typeof name !== 'string' || name.trim().length < 1) throw new AppError(400, 'name is required');
@@ -81,8 +114,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `INSERT INTO employees (company_id, name, email, phone, job_role, salary_monthly, start_date,
-       photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)
+       photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
+       nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
+       bank_iban, emergency_contact_name, emergency_contact_phone)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
      RETURNING ${SELECT_COLUMNS}`,
     [
       companyId,
@@ -100,13 +135,22 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       JSON.stringify(certList),
       wage_type ?? 'monthly',
       hourly_rate ?? null,
+      nationality ?? null,
+      civil_id_expiry ?? null,
+      residency_number ?? null,
+      residency_expiry ?? null,
+      passport_number ?? null,
+      passport_expiry ?? null,
+      bank_iban ?? null,
+      emergency_contact_name ?? null,
+      emergency_contact_phone ?? null,
     ]
   );
   const employee = result.rows[0];
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'employee_created', entityType: 'employees', entityId: employee.id, req });
 
-  res.status(201).json({ success: true, employee: withAge(employee) });
+  res.status(201).json({ success: true, employee: withExpiries(withAge(employee)) });
 });
 
 // Every field optional — only the ones provided get updated. Lets the Employees page
@@ -130,6 +174,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     certificates,
     wage_type,
     hourly_rate,
+    nationality,
+    civil_id_expiry,
+    residency_number,
+    residency_expiry,
+    passport_number,
+    passport_expiry,
+    bank_iban,
+    emergency_contact_name,
+    emergency_contact_phone,
   } = req.body ?? {};
 
   const sets: string[] = [];
@@ -174,6 +227,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     if (hourly_rate !== null && typeof hourly_rate !== 'number') throw new AppError(400, 'hourly_rate must be a number');
     setField('hourly_rate', hourly_rate);
   }
+  if (nationality !== undefined) setField('nationality', nationality || null);
+  if (civil_id_expiry !== undefined) setField('civil_id_expiry', civil_id_expiry || null);
+  if (residency_number !== undefined) setField('residency_number', residency_number || null);
+  if (residency_expiry !== undefined) setField('residency_expiry', residency_expiry || null);
+  if (passport_number !== undefined) setField('passport_number', passport_number || null);
+  if (passport_expiry !== undefined) setField('passport_expiry', passport_expiry || null);
+  if (bank_iban !== undefined) setField('bank_iban', bank_iban || null);
+  if (emergency_contact_name !== undefined) setField('emergency_contact_name', emergency_contact_name || null);
+  if (emergency_contact_phone !== undefined) setField('emergency_contact_phone', emergency_contact_phone || null);
 
   if (sets.length === 0) throw new AppError(400, 'No updatable fields provided');
 
@@ -190,5 +252,5 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'employee_updated', entityType: 'employees', entityId: id as string, req });
 
-  res.status(200).json({ success: true, employee: withAge(employee) });
+  res.status(200).json({ success: true, employee: withExpiries(withAge(employee)) });
 });

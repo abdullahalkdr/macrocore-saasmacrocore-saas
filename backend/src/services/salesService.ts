@@ -52,13 +52,18 @@ export async function createSaleTx(client: PoolClient, input: CreateSaleInput) {
   const ingredientsParams = [input.productSizeId || input.productId];
   const ingredientsResult = await client.query(ingredientsQuery, ingredientsParams);
 
+  // Cost of goods sold for this sale — sum of (weighted-avg cost per unit × qty
+  // consumed) across every ingredient. Persisted on the sale row so reports can
+  // compute a real profit (revenue - COGS), not just revenue - expenses.
+  let costOfGoods = 0;
   for (const ingredient of ingredientsResult.rows) {
     const factor = ingredient.usage_unit ? UNIT_TO_BASE[ingredient.usage_unit] || 1 : 1;
     const qtyToConsume = (ingredient.usage_qty || 0) * (factor ?? 1) * input.qty;
 
     if (qtyToConsume > 0) {
       try {
-        await consumeRawMaterial(client, input.companyId, locationId, ingredient.raw_material_id, qtyToConsume);
+        const { avgCostPerUnit } = await consumeRawMaterial(client, input.companyId, locationId, ingredient.raw_material_id, qtyToConsume);
+        costOfGoods += avgCostPerUnit * qtyToConsume;
       } catch (err) {
         throw new AppError(
           400,
@@ -80,7 +85,7 @@ export async function createSaleTx(client: PoolClient, input: CreateSaleInput) {
   }
   const totalPrice = input.qty * finalUnitPrice;
 
-  const columns = ['company_id', 'shift_id', 'product_id', 'product_size_id', 'qty', 'unit_price', 'total_price', 'payment_method', 'app_commission_pct', 'created_by'];
+  const columns = ['company_id', 'shift_id', 'product_id', 'product_size_id', 'qty', 'unit_price', 'total_price', 'payment_method', 'app_commission_pct', 'created_by', 'cost_of_goods'];
   const values: unknown[] = [
     input.companyId,
     input.shiftId,
@@ -92,6 +97,7 @@ export async function createSaleTx(client: PoolClient, input: CreateSaleInput) {
     input.paymentMethod ?? 'cash',
     input.appCommissionPct ?? 0,
     input.createdBy,
+    costOfGoods,
   ];
   if (input.id) {
     columns.unshift('id');

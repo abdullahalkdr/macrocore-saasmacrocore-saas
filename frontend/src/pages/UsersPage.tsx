@@ -7,6 +7,12 @@ import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
 import { IconPlus, IconTrash } from '../components/Icon';
 
+const PASSWORD_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function randomPassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(bytes, (b) => PASSWORD_CHARS[b % PASSWORD_CHARS.length]).join('');
+}
+
 interface UserRow {
   id: string;
   email: string;
@@ -20,6 +26,7 @@ const STATUSES = ['active', 'suspended', 'inactive'];
 
 export default function UsersPage() {
   const currentUser = useAuthStore((s) => s.user);
+  const isAdmin = currentUser?.role === 'admin';
   const t = useT();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [open, setOpen] = useState(false);
@@ -29,6 +36,15 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const [editUser, setEditUser] = useState<UserRow | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editLoading, setEditLoading] = useState(false);
+
+  const [resetUser, setResetUser] = useState<UserRow | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
 
   function load() {
     get<{ users: UserRow[] }>('/users')
@@ -86,6 +102,50 @@ export default function UsersPage() {
     }
   }
 
+  function openEdit(u: UserRow) {
+    setEditUser(u);
+    setEditName(u.full_name || '');
+    setEditEmail(u.email);
+  }
+
+  async function handleEditSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!editUser) return;
+    setError(null);
+    setEditLoading(true);
+    try {
+      await patch(`/users/${editUser.id}`, { full_name: editName, email: editEmail });
+      setEditUser(null);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.users.editSaveFailed);
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  function openReset(u: UserRow) {
+    setResetUser(u);
+    setNewPassword('');
+  }
+
+  async function handleResetSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!resetUser) return;
+    setError(null);
+    setNotice(null);
+    setResetLoading(true);
+    try {
+      await patch(`/users/${resetUser.id}`, { new_password: newPassword });
+      setNotice(t.users.resetSuccessNotice(resetUser.email, newPassword));
+      setResetUser(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.users.resetFailed);
+    } finally {
+      setResetLoading(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader title={t.users.title} subtitle={t.users.subtitle} />
@@ -138,7 +198,11 @@ export default function UsersPage() {
                       ))}
                     </select>
                   </td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button className="icon-btn" onClick={() => openEdit(u)} title={t.users.editItem}>✎</button>
+                    {isAdmin && u.id !== currentUser?.id && (
+                      <button className="icon-btn" onClick={() => openReset(u)} title={t.users.resetPassword}>🔑</button>
+                    )}
                     {u.id !== currentUser?.id && (
                       <button className="icon-btn" onClick={() => removeUser(u.id)} title={t.common.delete}>
                         <IconTrash />
@@ -197,6 +261,71 @@ export default function UsersPage() {
           <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
             {t.users.tempPasswordHint}
           </p>
+        </Modal>
+      )}
+
+      {editUser && (
+        <Modal
+          title={t.users.editItem}
+          onClose={() => setEditUser(null)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="submit" form="edit-user-form" disabled={editLoading}>
+                {editLoading ? t.common.loading : t.common.save}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setEditUser(null)}>
+                {t.common.cancel}
+              </button>
+            </>
+          }
+        >
+          <form id="edit-user-form" onSubmit={handleEditSubmit} className="field-grid">
+            <div className="field">
+              <label>{t.users.name}</label>
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} required autoFocus />
+            </div>
+            <div className="field">
+              <label>{t.users.email}</label>
+              <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required />
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {resetUser && (
+        <Modal
+          title={t.users.resetPasswordTitle(resetUser.email)}
+          onClose={() => setResetUser(null)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="submit" form="reset-password-form" disabled={resetLoading || newPassword.length < 6}>
+                {resetLoading ? t.common.loading : t.common.save}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setResetUser(null)}>
+                {t.common.cancel}
+              </button>
+            </>
+          }
+        >
+          <form id="reset-password-form" onSubmit={handleResetSubmit} className="field-grid">
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>{t.users.newPassword}</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  autoFocus
+                  style={{ flex: 1 }}
+                />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setNewPassword(randomPassword())}>
+                  {t.users.generate}
+                </button>
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.users.minLengthHint}</div>
+            </div>
+          </form>
         </Modal>
       )}
     </div>
