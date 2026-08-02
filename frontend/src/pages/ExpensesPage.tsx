@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import { IconPlus, IconSettings, IconTrash, IconEdit } from '../components/Icon';
+import { exportRowsToCsv } from '../utils/csv';
 
 interface Expense {
   id: string;
@@ -173,6 +174,21 @@ export default function ExpensesPage() {
     }
   }
 
+  function exportCsv() {
+    exportRowsToCsv(
+      `expenses_${dateFilter || 'all'}.csv`,
+      [t.expenses.date, t.expenses.category, t.expenses.location, t.expenses.recordedBy, t.expenses.description, t.expenses.amount],
+      items.map((x) => [
+        dateKey(x),
+        x.category,
+        x.location_name || '',
+        x.created_by_name || '',
+        x.description || '',
+        Number(x.amount).toFixed(3),
+      ])
+    );
+  }
+
   function openManage() {
     setCategoriesDraft(categories);
     setNewCategoryInput('');
@@ -266,6 +282,9 @@ export default function ExpensesPage() {
       <div className="section-title-row">
         <span className="muted">{t.expenses.count(items.length, dateFilter || undefined)}</span>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={exportCsv}>
+            {t.expenses.exportCsv}
+          </button>
           <button className="btn btn-primary btn-sm" onClick={openCreate}>
             <IconPlus /> {t.expenses.newItem}
           </button>

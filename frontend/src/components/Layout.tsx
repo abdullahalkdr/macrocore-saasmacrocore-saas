@@ -6,6 +6,7 @@ import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
 import { get } from '../api/client';
 import Avatar from './Avatar';
+import NotificationsBell from './NotificationsBell';
 import {
   IconDashboard,
   IconSales,
@@ -55,33 +56,52 @@ export default function Layout() {
       label: t.nav.groupDailyOps,
       items: [
         { to: '/shift', label: t.nav.shift, icon: IconSales },
+        { to: '/customers', label: t.nav.customers, icon: IconEmployee },
         { to: '/expenses', label: t.nav.expenses, icon: IconExpense },
         { to: '/waste', label: t.nav.waste, icon: IconTrash },
+      ],
+    },
+    {
+      label: t.nav.groupProducts,
+      items: [{ to: '/products', label: t.nav.products, icon: IconProduct, managerOnly: true }],
+    },
+    {
+      label: t.nav.groupWarehouses,
+      items: [
+        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true },
+        { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true },
+        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true },
+        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true },
+        { to: '/locations', label: t.nav.locations, icon: IconBuilding, managerOnly: true },
+        { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true },
+        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true },
+      ],
+    },
+    {
+      label: t.nav.groupHR,
+      items: [
+        { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true },
+        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true },
+        { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance },
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance },
       ],
     },
     {
-      label: t.nav.groupManagement,
+      label: t.nav.groupReportsDocs,
       items: [
-        { to: '/products', label: t.nav.products, icon: IconProduct, managerOnly: true },
-        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true },
-        { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true },
-        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true },
-        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true },
-        { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true },
-        { to: '/locations', label: t.nav.locations, icon: IconBuilding, managerOnly: true },
-        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true },
-        { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
+        { to: '/reports', label: t.nav.reports, icon: IconReports },
         { to: '/official-documents', label: t.nav.officialDocuments, icon: IconReports, managerOnly: true },
         { to: '/company-files', label: t.nav.companyFiles, icon: IconReports, managerOnly: true },
-        { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
+        { to: '/audit-log', label: t.nav.auditLog, icon: IconReports, managerOnly: true },
       ],
     },
     {
-      label: t.nav.groupReports,
+      label: t.nav.groupSettings,
       items: [
-        { to: '/reports', label: t.nav.reports, icon: IconReports },
+        { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
+        { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true },
+        { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
         { to: '/support', label: t.nav.support, icon: IconSettings },
       ],
     },
@@ -93,14 +113,23 @@ export default function Layout() {
   }
 
   const isManager = user?.role === 'admin' || user?.role === 'manager';
+  const isAdmin = user?.role === 'admin';
   const visibleGroups = navGroups
-    .map((group) => ({ ...group, items: group.items.filter((i) => !('managerOnly' in i) || !i.managerOnly || isManager) }))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (i) => (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin)
+      ),
+    }))
     .filter((group) => group.items.length > 0);
 
   return (
     <div className="app-shell">
       <div className="sidebar">
-        <h1>{company?.name || 'macrocore'}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <h1>{company?.name || 'macrocore'}</h1>
+          <NotificationsBell />
+        </div>
         {visibleGroups.map((group) => (
           <div key={group.label} style={{ padding: '10px 10px 4px' }}>
             <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>

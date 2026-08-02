@@ -225,6 +225,10 @@ tr:hover td { background: var(--surface-alt); }
 .badge.open { background: var(--emerald-50); color: var(--emerald-700); }
 .badge.closed { background: var(--surface-alt); color: var(--muted); }
 .badge.trial { background: var(--amber-50); color: var(--amber-700); }
+.badge.draft { background: var(--surface-alt); color: var(--muted); }
+.badge.ordered { background: var(--amber-50); color: var(--amber-700); }
+.badge.received { background: var(--emerald-50); color: var(--emerald-700); }
+.badge.cancelled { background: var(--surface-alt); color: var(--muted); }
 
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .product-tile {

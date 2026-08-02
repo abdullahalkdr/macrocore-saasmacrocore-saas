@@ -55,6 +55,20 @@ CREATE TABLE locations (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Suppliers as a real entity (MIGRATION_021) — raw_materials.supplier_name below stays
+-- as legacy free text for ad-hoc suppliers; supplier_id is the newer, optional link.
+CREATE TABLE suppliers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  contact_name VARCHAR(255),
+  phone VARCHAR(20),
+  email VARCHAR(255),
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE raw_materials (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -65,6 +79,7 @@ CREATE TABLE raw_materials (
   package_unit VARCHAR(20),
   purchase_price DECIMAL(10, 3),
   supplier_name VARCHAR(255),
+  supplier_id UUID REFERENCES suppliers(id),
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -101,6 +116,32 @@ CREATE TABLE stock_transfers (
   qty DECIMAL(10, 3) NOT NULL,
   new_batch_id UUID REFERENCES raw_material_batches(id),
   transferred_by UUID REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Purchase orders (MIGRATION_022) — draft -> ordered -> received, full receive only.
+-- Receiving creates raw_material_batches rows automatically.
+CREATE TABLE purchase_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  supplier_id UUID REFERENCES suppliers(id),
+  status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  order_date DATE,
+  expected_date DATE,
+  received_date DATE,
+  location_id UUID REFERENCES locations(id),
+  notes TEXT,
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE purchase_order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  raw_material_id UUID NOT NULL REFERENCES raw_materials(id),
+  qty DECIMAL(10, 3) NOT NULL,
+  unit_price DECIMAL(10, 3) NOT NULL,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -238,6 +279,22 @@ CREATE TABLE shifts (
   opened_at TIMESTAMP,
   closed_at TIMESTAMP,
   status VARCHAR(20) DEFAULT 'open',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Advance roster/planning (MIGRATION_020) — separate from the live shifts table above,
+-- purely "who's expected to work which date/location". Doesn't touch the POS flow.
+CREATE TABLE shift_schedules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  location_id UUID REFERENCES locations(id),
+  date DATE NOT NULL,
+  start_time TIME,
+  end_time TIME,
+  notes TEXT,
+  created_by UUID REFERENCES users(id),
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -487,6 +544,39 @@ CREATE TABLE api_keys (
   UNIQUE (key_hash)
 );
 
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type VARCHAR(50) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  body TEXT,
+  link VARCHAR(255),
+  read_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE customers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  phone VARCHAR(20),
+  email VARCHAR(255),
+  points INT NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE user_permissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  permission_key VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (user_id, permission_key)
+);
+
 CREATE INDEX idx_users_company ON users(company_id);
 CREATE INDEX idx_sales_company_date ON sales(company_id, created_at DESC);
 CREATE INDEX idx_sales_shift ON sales(shift_id);
@@ -505,4 +595,14 @@ CREATE INDEX idx_stock_transfers_material ON stock_transfers(raw_material_id);
 CREATE INDEX idx_payroll_adjustments_payroll ON payroll_adjustments(payroll_id);
 CREATE INDEX idx_official_documents_company ON official_documents(company_id, created_at DESC);
 CREATE INDEX idx_company_files_company ON company_files(company_id, created_at DESC);
+CREATE INDEX idx_shift_schedules_company_date ON shift_schedules(company_id, date);
+CREATE INDEX idx_shift_schedules_employee ON shift_schedules(employee_id, date);
+CREATE INDEX idx_purchase_orders_company ON purchase_orders(company_id, created_at DESC);
+CREATE INDEX idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);
 CREATE INDEX idx_company_files_expiry ON company_files(expiry_date);
+CREATE INDEX idx_user_permissions_user ON user_permissions(user_id);
+CREATE INDEX idx_user_permissions_company ON user_permissions(company_id);
+CREATE INDEX idx_customers_company ON customers(company_id);
+CREATE INDEX idx_customers_phone ON customers(company_id, phone);
+CREATE INDEX idx_notifications_user ON notifications(user_id, created_at DESC);
+CREATE INDEX idx_notifications_user_unread ON notifications(user_id) WHERE read_at IS NULL;

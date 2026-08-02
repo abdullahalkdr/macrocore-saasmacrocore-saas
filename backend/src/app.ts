@@ -27,6 +27,13 @@ import companyFilesRoutes from './routes/companyFiles.routes';
 import apiKeysRoutes from './routes/apiKeys.routes';
 import customFieldsRoutes from './routes/customFields.routes';
 import documentTemplatesRoutes from './routes/documentTemplates.routes';
+import auditLogRoutes from './routes/auditLog.routes';
+import shiftSchedulesRoutes from './routes/shiftSchedules.routes';
+import suppliersRoutes from './routes/suppliers.routes';
+import purchaseOrdersRoutes from './routes/purchaseOrders.routes';
+import permissionsRoutes from './routes/permissions.routes';
+import customersRoutes from './routes/customers.routes';
+import notificationsRoutes from './routes/notifications.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
 export const app = express();
@@ -64,6 +71,13 @@ app.use('/api/company-files', companyFilesRoutes);
 app.use('/api/api-keys', apiKeysRoutes);
 app.use('/api/custom-fields', customFieldsRoutes);
 app.use('/api/document-templates', documentTemplatesRoutes);
+app.use('/api/audit-log', auditLogRoutes);
+app.use('/api/shift-schedules', shiftSchedulesRoutes);
+app.use('/api/suppliers', suppliersRoutes);
+app.use('/api/purchase-orders', purchaseOrdersRoutes);
+app.use('/api/permissions', permissionsRoutes);
+app.use('/api/customers', customersRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

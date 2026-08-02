@@ -25,11 +25,18 @@ import AttendancePage from './pages/AttendancePage';
 import LeaveRequestsPage from './pages/LeaveRequestsPage';
 import OfficialDocumentsPage from './pages/OfficialDocumentsPage';
 import CompanyFilesPage from './pages/CompanyFilesPage';
+import AuditLogPage from './pages/AuditLogPage';
+import ShiftSchedulePage from './pages/ShiftSchedulePage';
+import SuppliersPage from './pages/SuppliersPage';
+import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
+import PermissionsPage from './pages/PermissionsPage';
+import CustomersPage from './pages/CustomersPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import RequireRole from './components/RequireRole';
 
 const MANAGER_ROLES = ['admin', 'manager'];
+const ADMIN_ROLES = ['admin'];
 
 export default function App() {
   const lang = useLangStore((s) => s.lang);
@@ -118,7 +125,32 @@ export default function App() {
                 </RequireRole>
               }
             />
+            <Route
+              path="/suppliers"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <SuppliersPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/purchase-orders"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <PurchaseOrdersPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/permissions"
+              element={
+                <RequireRole roles={ADMIN_ROLES}>
+                  <PermissionsPage />
+                </RequireRole>
+              }
+            />
             <Route path="/expenses" element={<ExpensesPage />} />
+            <Route path="/customers" element={<CustomersPage />} />
             <Route path="/waste" element={<WasteRecordsPage />} />
             <Route
               path="/payroll"
@@ -131,6 +163,7 @@ export default function App() {
             <Route path="/support" element={<SupportTicketsPage />} />
             <Route path="/attendance" element={<AttendancePage />} />
             <Route path="/leave-requests" element={<LeaveRequestsPage />} />
+            <Route path="/shift-schedule" element={<ShiftSchedulePage />} />
             <Route
               path="/official-documents"
               element={
@@ -152,6 +185,14 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <SettingsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/audit-log"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <AuditLogPage />
                 </RequireRole>
               }
             />

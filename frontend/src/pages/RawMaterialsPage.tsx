@@ -15,7 +15,13 @@ interface RawMaterial {
   package_unit: string | null;
   purchase_price: number | null;
   supplier_name: string | null;
+  supplier_id: string | null;
+  supplier_display_name: string | null;
   min_stock_qty: number | null;
+}
+interface SupplierOption {
+  id: string;
+  name: string;
 }
 
 const UNIT_GROUPS: { key: 'weight' | 'volume' | 'count'; units: string[] }[] = [
@@ -51,6 +57,7 @@ export default function RawMaterialsPage() {
     count: t.rawMaterials.unitGroupCount,
   };
   const [items, setItems] = useState<RawMaterial[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -60,6 +67,7 @@ export default function RawMaterialsPage() {
   const [packageUnit, setPackageUnit] = useState('g');
   const [purchasePrice, setPurchasePrice] = useState('');
   const [supplierName, setSupplierName] = useState('');
+  const [supplierId, setSupplierId] = useState('');
   const [minStockQty, setMinStockQty] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,7 +78,11 @@ export default function RawMaterialsPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : t.rawMaterials.loadFailed));
   }
 
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    get<{ suppliers: SupplierOption[] }>('/suppliers').then((r) => setSuppliers(r.suppliers)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function resetForm() {
     setName('');
@@ -80,6 +92,7 @@ export default function RawMaterialsPage() {
     setPackageUnit('g');
     setPurchasePrice('');
     setSupplierName('');
+    setSupplierId('');
     setMinStockQty('');
     setEditingId(null);
   }
@@ -98,6 +111,7 @@ export default function RawMaterialsPage() {
     setPackageUnit(m.package_unit || 'g');
     setPurchasePrice(m.purchase_price !== null ? String(m.purchase_price) : '');
     setSupplierName(m.supplier_name || '');
+    setSupplierId(m.supplier_id || '');
     setMinStockQty(m.min_stock_qty !== null ? String(m.min_stock_qty) : '');
     setOpen(true);
   }
@@ -115,6 +129,7 @@ export default function RawMaterialsPage() {
         package_unit: packageUnit || undefined,
         purchase_price: purchasePrice ? Number(purchasePrice) : undefined,
         supplier_name: supplierName || undefined,
+        supplier_id: supplierId || null,
         min_stock_qty: minStockQty ? Number(minStockQty) : null,
       };
       if (editingId) {
@@ -211,7 +226,7 @@ export default function RawMaterialsPage() {
                   <td>{m.category ? CATEGORY_LABELS[m.category] || m.category : '—'}</td>
                   <td className="num">{m.package_qty ? `${fmtQty(Number(m.package_qty))} ${m.package_unit || ''}` : '—'}</td>
                   <td className="num">{m.purchase_price !== null ? `${Number(m.purchase_price).toFixed(3)} KD` : '—'}</td>
-                  <td>{m.supplier_name || '—'}</td>
+                  <td>{m.supplier_display_name || m.supplier_name || '—'}</td>
                   <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-sm" onClick={() => openEdit(m)}>
                       {t.rawMaterials.edit}
@@ -300,6 +315,17 @@ export default function RawMaterialsPage() {
             </div>
             <div className="muted" style={{ gridColumn: '1 / -1', fontSize: 11, marginTop: -6 }}>{t.rawMaterials.costExample}</div>
 
+            <div className="field">
+              <label>{t.suppliers.title}</label>
+              <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                <option value="">—</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="field">
               <label>{t.rawMaterials.supplier}</label>
               <input

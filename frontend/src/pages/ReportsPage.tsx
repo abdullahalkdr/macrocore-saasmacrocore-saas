@@ -105,6 +105,54 @@ export default function ReportsPage() {
     downloadCsv(`report_${label}.csv`, rows);
   }
 
+  // Same "open a formatted window and call print()" approach PayrollPage.tsx already
+  // uses for payslips — the browser's own print dialog offers "Save as PDF" natively,
+  // no PDF-generation library needed.
+  function printCurrent() {
+    if (!report) return;
+    const label = tab === 'daily' ? date : tab === 'monthly' ? month : `${fromDate} — ${toDate}`;
+    const rows: [string, string][] = [
+      [t.reports.sales, String(report.total_sales)],
+      [t.reports.revenue, `${Number(report.total_revenue).toFixed(3)} KD`],
+      [t.reports.cogs, `${Number(report.cost_of_goods).toFixed(3)} KD`],
+      [t.reports.wasteCost, `${Number(report.waste_cost).toFixed(3)} KD`],
+      [t.reports.expenses, `${Number(report.total_expenses).toFixed(3)} KD`],
+      [t.reports.payrollCost, `${Number(report.payroll_cost).toFixed(3)} KD`],
+      [t.reports.profit, `${Number(report.profit).toFixed(3)} KD`],
+    ];
+    if ('shifts_closed' in report) rows.push([t.reports.shiftsClosed, String((report as DailyReport | RangeReport).shifts_closed)]);
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(`
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="utf-8" />
+        <title>${t.reports.title} — ${label}</title>
+        <style>
+          body { font-family: 'Tajawal', Arial, sans-serif; padding: 40px; color: #1c1917; }
+          h1 { font-size: 20px; margin: 0 0 4px; }
+          .meta { color: #57534e; font-size: 13px; margin-bottom: 20px; }
+          table { width: 100%; border-collapse: collapse; }
+          td { padding: 8px 4px; border-bottom: 1px solid #e7e5e4; font-size: 14px; }
+          td:last-child { text-align: left; direction: ltr; font-weight: 700; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <h1>${t.reports.title}</h1>
+        <div class="meta">${label}</div>
+        <table>
+          ${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+        </table>
+      </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   return (
     <div>
       <PageHeader title={t.reports.title} subtitle={t.reports.subtitle} />
@@ -153,9 +201,14 @@ export default function ReportsPage() {
         <>
           <div className="section-title-row">
             <span />
-            <button className="btn btn-secondary btn-sm" onClick={exportCurrent}>
-              {t.reports.exportCsv}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-secondary btn-sm" onClick={printCurrent}>
+                {t.reports.printPdf}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={exportCurrent}>
+                {t.reports.exportCsv}
+              </button>
+            </div>
           </div>
           <div className="stat-grid">
             <StatCard label={t.reports.sales} value={report.total_sales} color="blue" />

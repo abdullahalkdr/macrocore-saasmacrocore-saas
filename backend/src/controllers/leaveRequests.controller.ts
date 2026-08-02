@@ -4,6 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { isForeignKeyViolation } from '../utils/dbErrors';
 import { logAudit } from '../utils/audit';
+import { notifyRoles } from '../utils/notifications';
 
 const TYPES = ['annual_leave', 'sick_leave', 'permission'];
 
@@ -24,6 +25,17 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     );
     const leaveRequest = result.rows[0];
     await logAudit({ companyId, userId: req.auth!.userId, action: 'leave_request_created', entityType: 'leave_requests', entityId: leaveRequest.id, req });
+
+    const employee = await pool.query('SELECT name FROM employees WHERE id = $1', [employee_id]);
+    notifyRoles({
+      companyId,
+      roles: ['admin', 'manager'],
+      type: 'leave_request_created',
+      title: `New leave request — ${employee.rows[0]?.name ?? ''}`,
+      body: `${type} starting ${start_date}`,
+      link: '/leave-requests',
+    });
+
     res.status(201).json({ success: true, leave_request: leaveRequest });
   } catch (err) {
     if (isForeignKeyViolation(err)) throw new AppError(400, 'employee_id does not exist');

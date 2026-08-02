@@ -7,6 +7,7 @@ import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import StatCard from '../components/StatCard';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
+import { exportRowsToCsv } from '../utils/csv';
 
 interface PayrollRecord {
   id: string;
@@ -272,6 +273,22 @@ export default function PayrollPage() {
     }
   }
 
+  function exportCsv() {
+    exportRowsToCsv(
+      `payroll_${filterMonth || 'all'}.csv`,
+      [t.payroll.employee, t.payroll.month, t.payroll.wageType, t.payroll.base, t.payroll.attendanceDeductionCol, t.payroll.netCol, t.payroll.status],
+      visibleItems.map((p) => [
+        employeeName(p.employee_id),
+        p.month_year,
+        p.wage_type === 'hourly' ? t.payroll.hourly : t.payroll.monthly,
+        Number(p.base_salary).toFixed(3),
+        Number(p.attendance_deduction || 0).toFixed(3),
+        Number(p.total_paid).toFixed(3),
+        p.paid_date ? t.payroll.paid : t.payroll.unpaid,
+      ])
+    );
+  }
+
   return (
     <div>
       <PageHeader title={t.payroll.title} subtitle={t.payroll.subtitle} />
@@ -279,9 +296,14 @@ export default function PayrollPage() {
 
       <div className="section-title-row">
         <span className="muted">{t.payroll.count(visibleItems.length)}</span>
-        <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          <IconPlus /> {t.payroll.newItem}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={exportCsv}>
+            {t.payroll.exportCsv}
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={openCreate}>
+            <IconPlus /> {t.payroll.newItem}
+          </button>
+        </div>
       </div>
 
       <div className="card">
