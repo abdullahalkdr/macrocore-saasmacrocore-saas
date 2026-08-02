@@ -10,6 +10,7 @@ interface RawMaterial {
   id: string;
   name: string;
   name_en: string | null;
+  package_unit: string | null;
 }
 
 interface Location {
@@ -27,6 +28,7 @@ interface Batch {
   qty_purchased: number;
   qty_remaining: number;
   purchase_price: number;
+  unit: string;
   days_until_expiry: number | null;
   created_at: string;
 }
@@ -146,6 +148,8 @@ export default function RawMaterialBatchesPage() {
     return '#27ae60'; // green
   }
 
+  const selectedMaterialUnit = materials.find((m) => m.id === rawMaterialId)?.package_unit || '';
+
   const expiringBatches = batches.filter((b) => getExpiryStatus(b) !== 'safe');
   const safeBatches = batches.filter((b) => getExpiryStatus(b) === 'safe');
 
@@ -185,6 +189,7 @@ export default function RawMaterialBatchesPage() {
                     <th>{t.rawMaterialBatches.expiryDate}</th>
                     <th>{t.rawMaterialBatches.daysLeft}</th>
                     <th className="num">{t.rawMaterialBatches.qtyRemaining}</th>
+                    <th>{t.rawMaterialBatches.unit}</th>
                     <th className="num">{t.rawMaterialBatches.purchasePrice}</th>
                     <th>{t.rawMaterialBatches.status}</th>
                     <th></th>
@@ -201,6 +206,7 @@ export default function RawMaterialBatchesPage() {
                         <strong>{b.days_until_expiry !== null ? b.days_until_expiry : '—'}</strong>
                       </td>
                       <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
+                      <td>{b.unit}</td>
                       <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
                       <td>
                         <span style={{ color: getStatusColor(getExpiryStatus(b)), fontWeight: 'bold' }}>
@@ -234,6 +240,7 @@ export default function RawMaterialBatchesPage() {
                 <th>{t.rawMaterialBatches.daysLeft}</th>
                 <th className="num">{t.rawMaterialBatches.qtyPurchased}</th>
                 <th className="num">{t.rawMaterialBatches.qtyRemaining}</th>
+                <th>{t.rawMaterialBatches.unit}</th>
                 <th className="num">{t.rawMaterialBatches.purchasePrice}</th>
                 <th></th>
               </tr>
@@ -248,6 +255,7 @@ export default function RawMaterialBatchesPage() {
                   <td className="num">{b.days_until_expiry !== null ? b.days_until_expiry : '∞'}</td>
                   <td className="num">{Number(b.qty_purchased).toFixed(3)}</td>
                   <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
+                  <td>{b.unit}</td>
                   <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
                   <td>
                     <button className="btn btn-sm" onClick={() => openEditModal(b)}>{t.rawMaterialBatches.edit}</button>
@@ -256,7 +264,7 @@ export default function RawMaterialBatchesPage() {
               ))}
               {safeBatches.length === 0 && (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">{t.rawMaterialBatches.empty}</div>
                   </td>
                 </tr>
@@ -319,7 +327,9 @@ export default function RawMaterialBatchesPage() {
                 </div>
 
                 <div className="field">
-                  <label>{t.rawMaterialBatches.qtyPurchased} *</label>
+                  <label>
+                    {t.rawMaterialBatches.qtyPurchased} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
+                  </label>
                   <input
                     type="number"
                     step="0.001"
@@ -327,10 +337,13 @@ export default function RawMaterialBatchesPage() {
                     onChange={(e) => setQtyPurchased(e.target.value)}
                     required
                   />
+                  {selectedMaterialUnit && <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.rawMaterialBatches.unitHint(selectedMaterialUnit)}</p>}
                 </div>
 
                 <div className="field">
-                  <label>{t.rawMaterialBatches.purchasePrice} *</label>
+                  <label>
+                    {t.rawMaterialBatches.purchasePrice} * {selectedMaterialUnit && `(${t.rawMaterialBatches.perUnit(selectedMaterialUnit)})`}
+                  </label>
                   <input
                     type="number"
                     step="0.001"

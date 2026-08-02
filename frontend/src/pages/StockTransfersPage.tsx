@@ -11,6 +11,7 @@ interface RawMaterial {
   id: string;
   name: string;
   name_en: string | null;
+  package_unit: string | null;
 }
 
 interface Location {
@@ -64,6 +65,7 @@ export default function StockTransfersPage() {
   function locationName(id: string) {
     return locations.find((l) => l.id === id)?.name || '—';
   }
+  const selectedMaterialUnit = materials.find((m) => m.id === rawMaterialId)?.package_unit || '';
 
   async function handleDelete(id: string) {
     if (!window.confirm(t.stockTransfers.undoConfirm)) return;
@@ -209,7 +211,9 @@ export default function StockTransfersPage() {
             </div>
 
             <div className="field">
-              <label>{t.stockTransfers.qty} *</label>
+              <label>
+                {t.stockTransfers.qty} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
+              </label>
               <input type="number" step="0.001" value={qty} onChange={(e) => setQty(e.target.value)} required />
             </div>
           </form>

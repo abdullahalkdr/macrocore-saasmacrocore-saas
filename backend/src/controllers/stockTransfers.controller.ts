@@ -91,7 +91,7 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 
     if (t.new_batch_id) {
       const batchResult = await client.query(
-        `SELECT id, qty_purchased, qty_remaining, purchase_price, expiry_date FROM raw_material_batches WHERE id = $1 FOR UPDATE`,
+        `SELECT id, qty_purchased, qty_remaining, purchase_price, expiry_date, unit FROM raw_material_batches WHERE id = $1 FOR UPDATE`,
         [t.new_batch_id]
       );
       const batch = batchResult.rows[0];
@@ -101,9 +101,9 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
         }
         await client.query('DELETE FROM raw_material_batches WHERE id = $1', [t.new_batch_id]);
         await client.query(
-          `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price)
-           VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $5, $6)`,
-          [companyId, t.raw_material_id, t.from_location_id, batch.expiry_date, t.qty, batch.purchase_price]
+          `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit)
+           VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $5, $6, $7)`,
+          [companyId, t.raw_material_id, t.from_location_id, batch.expiry_date, t.qty, batch.purchase_price, batch.unit]
         );
       }
     }

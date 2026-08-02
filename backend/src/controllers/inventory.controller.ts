@@ -4,6 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { consumeRawMaterial, getCurrentPurchasePrice } from '../utils/inventory';
+import { UNIT_TO_BASE } from '../utils/costing';
 
 // Task #28 "integrated warehouse management" — ties the FIFO batch system (already
 // scoped per-location) into one place a manager can see current stock across every
@@ -119,8 +120,9 @@ export const adjust = asyncHandler(async (req: Request, res: Response) => {
   if (typeof qty_delta !== 'number' || qty_delta === 0) throw new AppError(400, 'qty_delta must be a non-zero number');
   if (typeof reason !== 'string' || reason.trim().length < 1) throw new AppError(400, 'reason is required');
 
-  const material = await pool.query('SELECT id FROM raw_materials WHERE id = $1 AND company_id = $2', [raw_material_id, companyId]);
+  const material = await pool.query('SELECT id, package_unit FROM raw_materials WHERE id = $1 AND company_id = $2', [raw_material_id, companyId]);
   if (!material.rows[0]) throw new AppError(404, 'Raw material not found');
+  const unit: string = material.rows[0].package_unit || 'g';
   const location = await pool.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
   if (!location.rows[0]) throw new AppError(404, 'Location not found');
 
@@ -131,16 +133,20 @@ export const adjust = asyncHandler(async (req: Request, res: Response) => {
 
     let newBatchId: string | null = null;
     if (qty_delta > 0) {
+      // qty_delta is entered in the material's own unit (matches every batch — see
+      // MIGRATION_027), stored as-is; no base-unit conversion needed for a plain insert.
       const price = await getCurrentPurchasePrice(client, companyId, raw_material_id);
       const batchResult = await client.query(
-        `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price)
-         VALUES ($1, $2, $3, CURRENT_DATE, NULL, $4, $4, $5)
+        `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit)
+         VALUES ($1, $2, $3, CURRENT_DATE, NULL, $4, $4, $5, $6)
          RETURNING id`,
-        [companyId, raw_material_id, location_id, qty_delta, price]
+        [companyId, raw_material_id, location_id, qty_delta, price, unit]
       );
       newBatchId = batchResult.rows[0].id;
     } else {
-      await consumeRawMaterial(client, companyId, location_id, raw_material_id, Math.abs(qty_delta));
+      // consumeRawMaterial expects base units — convert the entered (native-unit) qty.
+      const factor = UNIT_TO_BASE[unit] || 1;
+      await consumeRawMaterial(client, companyId, location_id, raw_material_id, Math.abs(qty_delta) * factor);
     }
 
     const adjResult = await client.query(

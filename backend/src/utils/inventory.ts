@@ -5,6 +5,7 @@
 
 import { PoolClient } from 'pg';
 import { AppError } from '../middleware/errorHandler';
+import { UNIT_TO_BASE } from './costing';
 
 export interface RawMaterialBatch {
   id: string;
@@ -16,6 +17,7 @@ export interface RawMaterialBatch {
   qty_purchased: number;
   qty_remaining: number;
   purchase_price: number;
+  unit: string;
   created_at: string;
   updated_at: string;
 }
@@ -48,14 +50,20 @@ export interface ConsumeResult {
  * @param companyId - Company ID
  * @param locationId - Location ID (kiosk or warehouse) to consume from
  * @param rawMaterialId - Raw material ID
- * @param qty - Quantity to consume (in base units, e.g., grams, ml, pieces)
- * @returns consumed qty, weighted-average cost, earliest expiry among consumed batches,
- *          and the per-batch breakdown — or throws AppError if insufficient stock at this location.
+ * @param qty - Quantity to consume, in BASE units (e.g., grams, ml, pieces) — always,
+ *              regardless of what unit the batches themselves are recorded in. Each
+ *              batch carries its own `unit` (see MIGRATION_027); this function converts
+ *              via UNIT_TO_BASE before comparing/deducting so a batch entered in kg and
+ *              a recipe consuming in grams reconcile correctly.
+ * @returns consumed qty (in base units), weighted-average cost PER BASE UNIT, earliest
+ *          expiry among consumed batches, and the per-batch breakdown — or throws
+ *          AppError if insufficient stock at this location.
  *
  * Logic:
  *  1. Fetch this location's batches for this material, ordered by: expired-first, expiry_date ASC, purchase_date ASC
- *  2. Iterate through batches, deducting qty from qty_remaining
- *  3. Calculate weighted average of purchase prices from all batches touched
+ *  2. Iterate through batches, converting each batch's qty_remaining to base units for
+ *     comparison, deducting in the batch's own native unit
+ *  3. Calculate weighted average of purchase prices (converted to per-base-unit) from all batches touched
  */
 export async function consumeRawMaterial(
   client: PoolClient,
@@ -70,7 +78,7 @@ export async function consumeRawMaterial(
 
   // Fetch this location's batches for this material, ordered by expiry (expired first), then purchase date (oldest first).
   const batchesResult = await client.query(
-    `SELECT id, qty_remaining, purchase_price, expiry_date
+    `SELECT id, qty_remaining, purchase_price, expiry_date, unit
      FROM raw_material_batches
      WHERE company_id = $1 AND location_id = $2 AND raw_material_id = $3 AND qty_remaining > 0
      ORDER BY
@@ -87,17 +95,23 @@ export async function consumeRawMaterial(
   }
 
   let remainingQty = qty;
-  const consumedBatches: ConsumedBatchDetail[] = [];
+  // qtyConsumed on ConsumedBatchDetail stays in BASE units (external contract, used by
+  // callers' cost math below); qtyConsumedNative tracks the same amount in the batch's
+  // own unit, only used internally to write the correct qty_remaining deduction.
+  const consumedBatches: (ConsumedBatchDetail & { qtyConsumedNative: number })[] = [];
 
   for (const batch of batches) {
     if (remainingQty <= 0) break;
 
-    const qtyConsumed = Math.min(remainingQty, batch.qty_remaining);
+    const factor = UNIT_TO_BASE[batch.unit] || 1;
+    const batchRemainingBase = Number(batch.qty_remaining) * factor;
+    const qtyConsumed = Math.min(remainingQty, batchRemainingBase);
     remainingQty -= qtyConsumed;
 
     consumedBatches.push({
       batchId: batch.id,
       qtyConsumed,
+      qtyConsumedNative: qtyConsumed / factor,
       purchasePrice: batch.purchase_price,
       expiryDate: batch.expiry_date,
     });
@@ -110,21 +124,22 @@ export async function consumeRawMaterial(
     );
   }
 
-  // Deduct from batches (in the same order as above)
+  // Deduct from batches (in the same order as above), in each batch's own native unit.
   for (const cb of consumedBatches) {
     await client.query(
       `UPDATE raw_material_batches SET qty_remaining = qty_remaining - $1, updated_at = NOW()
        WHERE id = $2`,
-      [cb.qtyConsumed, cb.batchId]
+      [cb.qtyConsumedNative, cb.batchId]
     );
   }
 
-  // Calculate weighted average cost per unit
+  // Weighted average cost, expressed per BASE unit — purchase_price is per one native
+  // unit of that batch, so cost-per-base-unit = purchase_price / factor.
   let totalCost = 0;
   let totalQty = 0;
   let earliestExpiryDate: string | null = null;
   for (const cb of consumedBatches) {
-    totalCost += cb.qtyConsumed * cb.purchasePrice;
+    totalCost += cb.qtyConsumedNative * cb.purchasePrice;
     totalQty += cb.qtyConsumed;
     if (cb.expiryDate !== null) {
       if (earliestExpiryDate === null || cb.expiryDate < earliestExpiryDate) {
@@ -141,12 +156,17 @@ export async function consumeRawMaterial(
  * Transfer stock from one location to another (e.g. warehouse -> kiosk).
  * Consumes FIFO from the source location's batches (possibly spanning several),
  * then creates ONE new batch at the destination with:
- *   - purchase_price = weighted-average cost of what was consumed
+ *   - purchase_price = weighted-average cost of what was consumed (per native unit)
  *   - purchase_date  = today (this is when stock entered the destination location)
  *   - expiry_date    = earliest expiry among the consumed source batches (most
  *                      conservative — a transfer never resets a shelf-life clock)
+ *   - unit           = the material's package_unit (matches every other batch of
+ *                      this material — see MIGRATION_027)
  *
- * @returns the newly created batch id and the transfer's effective unit cost
+ * @param qty - Transfer quantity in the material's own unit (e.g. kg for a
+ *              kg-tracked material), same as what a user types on the Stock
+ *              Transfers page — NOT base units. Converted internally.
+ * @returns the newly created batch id and the transfer's effective cost per native unit
  */
 export async function transferStock(
   client: PoolClient,
@@ -163,16 +183,24 @@ export async function transferStock(
     throw new AppError(400, 'Transfer quantity must be positive');
   }
 
-  const { avgCostPerUnit, earliestExpiryDate } = await consumeRawMaterial(client, companyId, fromLocationId, rawMaterialId, qty);
+  const materialResult = await client.query('SELECT package_unit FROM raw_materials WHERE id = $1 AND company_id = $2', [rawMaterialId, companyId]);
+  const unit: string = materialResult.rows[0]?.package_unit || 'g';
+  const factor = UNIT_TO_BASE[unit] || 1;
+
+  const { avgCostPerUnit, earliestExpiryDate } = await consumeRawMaterial(client, companyId, fromLocationId, rawMaterialId, qty * factor);
+  // avgCostPerUnit from consumeRawMaterial is per BASE unit — convert back to a
+  // per-native-unit price so the new batch's purchase_price matches how every other
+  // batch of this material stores price (per one `unit`, e.g. per kg).
+  const avgCostPerNativeUnit = avgCostPerUnit * factor;
 
   const newBatchResult = await client.query(
-    `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price)
-     VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $5, $6)
+    `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit)
+     VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $5, $6, $7)
      RETURNING id`,
-    [companyId, rawMaterialId, toLocationId, earliestExpiryDate, qty, avgCostPerUnit]
+    [companyId, rawMaterialId, toLocationId, earliestExpiryDate, qty, avgCostPerNativeUnit, unit]
   );
 
-  return { newBatchId: newBatchResult.rows[0].id, avgCostPerUnit };
+  return { newBatchId: newBatchResult.rows[0].id, avgCostPerUnit: avgCostPerNativeUnit };
 }
 
 /**
@@ -230,7 +258,7 @@ export async function getExpiringBatches(
   daysThreshold: number = 30
 ): Promise<RawMaterialBatch[]> {
   const result = await client.query(
-    `SELECT id, company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, created_at, updated_at
+    `SELECT id, company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit, created_at, updated_at
      FROM raw_material_batches
      WHERE company_id = $1
        AND qty_remaining > 0
@@ -265,7 +293,7 @@ export async function getBatchesForMaterial(
     where += ` AND location_id = $${params.length}`;
   }
   const result = await client.query(
-    `SELECT id, company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, created_at, updated_at
+    `SELECT id, company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit, created_at, updated_at
      FROM raw_material_batches
      WHERE ${where}
      ORDER BY

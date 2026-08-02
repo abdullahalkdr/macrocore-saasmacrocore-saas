@@ -24,22 +24,26 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   if (typeof qty_purchased !== 'number' || qty_purchased <= 0) throw new AppError(400, 'qty_purchased must be a positive number');
   if (typeof purchase_price !== 'number' || purchase_price < 0) throw new AppError(400, 'purchase_price must be a non-negative number');
 
-  // Verify raw material exists
+  // Verify raw material exists — also pulls package_unit, which becomes this batch's
+  // unit (see MIGRATION_027: one unit per material, never chosen per-batch, so it
+  // always matches what the Inventory Overview page displays and what consumeRawMaterial
+  // expects).
   const matResult = await pool.query(
-    `SELECT id FROM raw_materials WHERE id = $1 AND company_id = $2`,
+    `SELECT id, package_unit FROM raw_materials WHERE id = $1 AND company_id = $2`,
     [raw_material_id, companyId]
   );
   if (!matResult.rows[0]) throw new AppError(404, 'Raw material not found');
+  const unit: string = matResult.rows[0].package_unit || 'g';
 
   // Verify location exists
   const locResult = await pool.query(`SELECT id FROM locations WHERE id = $1 AND company_id = $2`, [location_id, companyId]);
   if (!locResult.rows[0]) throw new AppError(404, 'Location not found');
 
   const result = await pool.query(
-    `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price)
-     VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
-     RETURNING id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, created_at`,
-    [companyId, raw_material_id, location_id, purchase_date, expiry_date ?? null, qty_purchased, purchase_price]
+    `INSERT INTO raw_material_batches (company_id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit)
+     VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8)
+     RETURNING id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit, created_at`,
+    [companyId, raw_material_id, location_id, purchase_date, expiry_date ?? null, qty_purchased, purchase_price, unit]
   );
 
   const batch = result.rows[0];
@@ -69,7 +73,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await pool.query(
-    `SELECT id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price,
+    `SELECT id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit,
             COALESCE(expiry_date::date - CURRENT_DATE, NULL) AS days_until_expiry,
             created_at
      FROM raw_material_batches
@@ -93,7 +97,7 @@ export const getById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const result = await pool.query(
-    `SELECT id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price,
+    `SELECT id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit,
             COALESCE(expiry_date::date - CURRENT_DATE, NULL) AS days_until_expiry,
             created_at, updated_at
      FROM raw_material_batches

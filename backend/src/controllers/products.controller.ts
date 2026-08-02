@@ -11,6 +11,7 @@ interface IngredientInput {
   raw_material_id: string;
   usage_qty: number;
   usage_unit?: string;
+  is_packaging?: boolean;
 }
 
 interface SizeInput {
@@ -25,6 +26,9 @@ function validateIngredients(ingredients: unknown): IngredientInput[] {
   for (const ing of list) {
     if (typeof ing.raw_material_id !== 'string' || typeof ing.usage_qty !== 'number') {
       throw new AppError(400, 'each ingredient needs raw_material_id (string) and usage_qty (number)');
+    }
+    if (ing.is_packaging !== undefined && typeof ing.is_packaging !== 'boolean') {
+      throw new AppError(400, 'is_packaging must be a boolean when provided');
     }
   }
   return list;
@@ -74,7 +78,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
       sizeIds.length === 0
         ? { rows: [] as { product_size_id: string }[] }
         : await pool.query(
-            `SELECT psi.product_size_id, psi.raw_material_id, psi.usage_qty, psi.usage_unit,
+            `SELECT psi.product_size_id, psi.raw_material_id, psi.usage_qty, psi.usage_unit, psi.is_packaging,
                     rm.name AS raw_material_name, rm.name_en AS raw_material_name_en, rm.category AS raw_material_category
              FROM product_size_ingredients psi
              JOIN raw_materials rm ON rm.id = psi.raw_material_id
@@ -90,7 +94,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const ingredients = await pool.query(
-    `SELECT pi.raw_material_id, pi.usage_qty, pi.usage_unit,
+    `SELECT pi.raw_material_id, pi.usage_qty, pi.usage_unit, pi.is_packaging,
             rm.name AS raw_material_name, rm.name_en AS raw_material_name_en, rm.category AS raw_material_category
      FROM product_ingredients pi
      JOIN raw_materials rm ON rm.id = pi.raw_material_id
@@ -129,9 +133,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
     for (const ing of ingredientList) {
       await client.query(
-        `INSERT INTO product_ingredients (product_id, raw_material_id, usage_qty, usage_unit)
-         VALUES ($1, $2, $3, $4)`,
-        [product.id, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+        `INSERT INTO product_ingredients (product_id, raw_material_id, usage_qty, usage_unit, is_packaging)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [product.id, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null, ing.is_packaging === true]
       );
     }
 
@@ -146,9 +150,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       const sizeId = sizeResult.rows[0].id;
       for (const ing of size.ingredients ?? []) {
         await client.query(
-          `INSERT INTO product_size_ingredients (product_size_id, raw_material_id, usage_qty, usage_unit)
-           VALUES ($1, $2, $3, $4)`,
-          [sizeId, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+          `INSERT INTO product_size_ingredients (product_size_id, raw_material_id, usage_qty, usage_unit, is_packaging)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [sizeId, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null, ing.is_packaging === true]
         );
       }
     }
@@ -249,8 +253,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       await client.query(`DELETE FROM product_ingredients WHERE product_id = $1`, [id]);
       for (const ing of ingredientList) {
         await client.query(
-          `INSERT INTO product_ingredients (product_id, raw_material_id, usage_qty, usage_unit) VALUES ($1, $2, $3, $4)`,
-          [id, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+          `INSERT INTO product_ingredients (product_id, raw_material_id, usage_qty, usage_unit, is_packaging) VALUES ($1, $2, $3, $4, $5)`,
+          [id, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null, ing.is_packaging === true]
         );
       }
     }
@@ -266,8 +270,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
         const sizeId = sizeResult.rows[0].id;
         for (const ing of size.ingredients ?? []) {
           await client.query(
-            `INSERT INTO product_size_ingredients (product_size_id, raw_material_id, usage_qty, usage_unit) VALUES ($1, $2, $3, $4)`,
-            [sizeId, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+            `INSERT INTO product_size_ingredients (product_size_id, raw_material_id, usage_qty, usage_unit, is_packaging) VALUES ($1, $2, $3, $4, $5)`,
+            [sizeId, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null, ing.is_packaging === true]
           );
         }
       }
@@ -432,6 +436,64 @@ export const getCost = asyncHandler(async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       has_sizes: false,
+      raw_cost: rawCost,
+      total_fixed_monthly: totalFixedMonthly,
+      estimated_orders: estimatedOrders,
+      overhead_per_order: overheadPerOrder,
+      full_cost: fullCost,
+      sell_price: sellPrice,
+      profit,
+      margin_pct: marginPct,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /products/cost-preview — same cost math as GET /:id/cost, but works on an
+// in-progress (possibly unsaved) ingredient list instead of a stored product, so the
+// add/edit modal can show live margin/profit stats as the user types — matching the
+// CornLab reference where the stat cards update immediately, before "Save" is pressed.
+export const costPreview = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { ingredients, sell_price } = req.body ?? {};
+
+  if (sell_price !== undefined && sell_price !== null && (typeof sell_price !== 'number' || sell_price < 0)) {
+    throw new AppError(400, 'sell_price must be a non-negative number');
+  }
+  const ingredientList = validateIngredients(ingredients);
+
+  const { totalFixedMonthly, estimatedOrders, overheadPerOrder } = await getOverheadPerOrder(companyId);
+
+  const client = await pool.connect();
+  try {
+    let rawCost = 0;
+    if (ingredientList.length > 0) {
+      const ids = ingredientList.map((ing) => ing.raw_material_id);
+      const materials = await pool.query(
+        `SELECT id, package_qty, package_unit FROM raw_materials WHERE company_id = $1 AND id = ANY($2::uuid[])`,
+        [companyId, ids]
+      );
+      const materialsById = new Map(materials.rows.map((m) => [m.id, m]));
+      const rows = ingredientList
+        .filter((ing) => materialsById.has(ing.raw_material_id))
+        .map((ing) => ({
+          raw_material_id: ing.raw_material_id,
+          usage_qty: ing.usage_qty,
+          usage_unit: ing.usage_unit ?? null,
+          package_qty: materialsById.get(ing.raw_material_id)!.package_qty,
+          package_unit: materialsById.get(ing.raw_material_id)!.package_unit,
+        }));
+      rawCost = await sumRawCostWithCurrentPrices(client, companyId, rows);
+    }
+
+    const fullCost = rawCost + overheadPerOrder;
+    const sellPrice: number | null = typeof sell_price === 'number' ? sell_price : null;
+    const profit = sellPrice !== null ? sellPrice - fullCost : null;
+    const marginPct = sellPrice !== null && sellPrice > 0 ? (profit! / sellPrice) * 100 : null;
+
+    res.status(200).json({
+      success: true,
       raw_cost: rawCost,
       total_fixed_monthly: totalFixedMonthly,
       estimated_orders: estimatedOrders,

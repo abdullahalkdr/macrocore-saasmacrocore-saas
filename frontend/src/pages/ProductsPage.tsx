@@ -33,6 +33,15 @@ interface SizeRow {
   name_en: string;
   sell_price: string;
   ingredients: IngredientRow[];
+  packaging: IngredientRow[];
+}
+interface CostPreview {
+  raw_cost: number;
+  overhead_per_order: number;
+  full_cost: number;
+  sell_price: number | null;
+  profit: number | null;
+  margin_pct: number | null;
 }
 interface SizeCost {
   id: string;
@@ -62,7 +71,20 @@ function emptyIngredientRow(): IngredientRow {
   return { raw_material_id: '', usage_qty: '', usage_unit: 'g' };
 }
 function emptySizeRow(): SizeRow {
-  return { name: '', name_en: '', sell_price: '', ingredients: [] };
+  return { name: '', name_en: '', sell_price: '', ingredients: [], packaging: [] };
+}
+interface IngredientPayloadItem {
+  raw_material_id: string;
+  usage_qty: number;
+  usage_unit: string;
+  is_packaging: boolean;
+}
+function combineIngredients(food: IngredientRow[], packaging: IngredientRow[]): IngredientPayloadItem[] {
+  const toPayload = (rows: IngredientRow[], isPackaging: boolean) =>
+    rows
+      .filter((r) => r.raw_material_id && r.usage_qty)
+      .map((r) => ({ raw_material_id: r.raw_material_id, usage_qty: Number(r.usage_qty), usage_unit: r.usage_unit, is_packaging: isPackaging }));
+  return [...toPayload(food, false), ...toPayload(packaging, true)];
 }
 
 const PRODUCT_CATEGORY_VALUES = ['main', 'side', 'drink', 'dessert', 'other'] as const;
@@ -89,9 +111,12 @@ export default function ProductsPage() {
   const [sellPrice, setSellPrice] = useState('');
   const [hasSizes, setHasSizes] = useState(false);
   const [ingredientRows, setIngredientRows] = useState<IngredientRow[]>([]);
+  const [packagingRows, setPackagingRows] = useState<IngredientRow[]>([]);
   const [sizeRows, setSizeRows] = useState<SizeRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [livePreview, setLivePreview] = useState<CostPreview | null>(null);
+  const [sizePreviews, setSizePreviews] = useState<Record<number, CostPreview>>({});
 
   const [costOpenId, setCostOpenId] = useState<string | null>(null);
   const [cost, setCost] = useState<CostBreakdown | null>(null);
@@ -118,6 +143,16 @@ export default function ProductsPage() {
     setIngredientRows(ingredientRows.filter((_, idx) => idx !== i));
   }
 
+  function addPackagingRow() {
+    setPackagingRows([...packagingRows, emptyIngredientRow()]);
+  }
+  function updatePackagingRow(i: number, patch: Partial<IngredientRow>) {
+    setPackagingRows(packagingRows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function removePackagingRow(i: number) {
+    setPackagingRows(packagingRows.filter((_, idx) => idx !== i));
+  }
+
   function addSizeRow() {
     setSizeRows([...sizeRows, emptySizeRow()]);
   }
@@ -141,6 +176,20 @@ export default function ProductsPage() {
     setSizeRows(sizeRows.map((s, idx) => (idx === sizeIdx ? { ...s, ingredients: s.ingredients.filter((_, ii) => ii !== ingIdx) } : s)));
   }
 
+  function addSizePackaging(sizeIdx: number) {
+    setSizeRows(sizeRows.map((s, idx) => (idx === sizeIdx ? { ...s, packaging: [...s.packaging, emptyIngredientRow()] } : s)));
+  }
+  function updateSizePackaging(sizeIdx: number, pkgIdx: number, patch: Partial<IngredientRow>) {
+    setSizeRows(
+      sizeRows.map((s, idx) =>
+        idx === sizeIdx ? { ...s, packaging: s.packaging.map((pkg, pi) => (pi === pkgIdx ? { ...pkg, ...patch } : pkg)) } : s
+      )
+    );
+  }
+  function removeSizePackaging(sizeIdx: number, pkgIdx: number) {
+    setSizeRows(sizeRows.map((s, idx) => (idx === sizeIdx ? { ...s, packaging: s.packaging.filter((_, pi) => pi !== pkgIdx) } : s)));
+  }
+
   function resetForm() {
     setName('');
     setNameEn('');
@@ -148,7 +197,10 @@ export default function ProductsPage() {
     setSellPrice('');
     setHasSizes(false);
     setIngredientRows([]);
+    setPackagingRows([]);
     setSizeRows([]);
+    setLivePreview(null);
+    setSizePreviews({});
   }
 
   function openCreate() {
@@ -166,40 +218,38 @@ export default function ProductsPage() {
     setSellPrice(p.sell_price !== null ? String(p.sell_price) : '');
     setHasSizes(p.has_sizes);
     setIngredientRows([]);
+    setPackagingRows([]);
     setSizeRows([]);
     setOpen(true);
     try {
       const detail = await get<{
         product: Product;
-        ingredients?: { raw_material_id: string; usage_qty: number; usage_unit: string | null }[];
+        ingredients?: { raw_material_id: string; usage_qty: number; usage_unit: string | null; is_packaging?: boolean }[];
         sizes?: {
           name: string;
           name_en: string | null;
           sell_price: number | null;
-          ingredients: { raw_material_id: string; usage_qty: number; usage_unit: string | null }[];
+          ingredients: { raw_material_id: string; usage_qty: number; usage_unit: string | null; is_packaging?: boolean }[];
         }[];
       }>(`/products/${p.id}`);
+      const toRow = (ing: { raw_material_id: string; usage_qty: number; usage_unit: string | null }): IngredientRow => ({
+        raw_material_id: ing.raw_material_id,
+        usage_qty: String(ing.usage_qty),
+        usage_unit: ing.usage_unit || 'g',
+      });
       if (detail.sizes) {
         setSizeRows(
           detail.sizes.map((s) => ({
             name: s.name,
             name_en: s.name_en || '',
             sell_price: s.sell_price !== null ? String(s.sell_price) : '',
-            ingredients: s.ingredients.map((ing) => ({
-              raw_material_id: ing.raw_material_id,
-              usage_qty: String(ing.usage_qty),
-              usage_unit: ing.usage_unit || 'g',
-            })),
+            ingredients: s.ingredients.filter((ing) => !ing.is_packaging).map(toRow),
+            packaging: s.ingredients.filter((ing) => ing.is_packaging).map(toRow),
           }))
         );
       } else if (detail.ingredients) {
-        setIngredientRows(
-          detail.ingredients.map((ing) => ({
-            raw_material_id: ing.raw_material_id,
-            usage_qty: String(ing.usage_qty),
-            usage_unit: ing.usage_unit || 'g',
-          }))
-        );
+        setIngredientRows(detail.ingredients.filter((ing) => !ing.is_packaging).map(toRow));
+        setPackagingRows(detail.ingredients.filter((ing) => ing.is_packaging).map(toRow));
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.products.loadFailed);
@@ -211,11 +261,6 @@ export default function ProductsPage() {
     setError(null);
     setLoading(true);
     try {
-      const toIngredientPayload = (rows: IngredientRow[]) =>
-        rows
-          .filter((r) => r.raw_material_id && r.usage_qty)
-          .map((r) => ({ raw_material_id: r.raw_material_id, usage_qty: Number(r.usage_qty), usage_unit: r.usage_unit }));
-
       const payload = hasSizes
         ? {
             name,
@@ -228,7 +273,7 @@ export default function ProductsPage() {
                 name: s.name.trim(),
                 name_en: s.name_en.trim() || undefined,
                 sell_price: s.sell_price ? Number(s.sell_price) : undefined,
-                ingredients: toIngredientPayload(s.ingredients),
+                ingredients: combineIngredients(s.ingredients, s.packaging),
               })),
           }
         : {
@@ -237,7 +282,7 @@ export default function ProductsPage() {
             category: category || undefined,
             has_sizes: false,
             sell_price: sellPrice ? Number(sellPrice) : undefined,
-            ingredients: toIngredientPayload(ingredientRows),
+            ingredients: combineIngredients(ingredientRows, packagingRows),
           };
 
       if (editingId) {
@@ -274,6 +319,35 @@ export default function ProductsPage() {
       .then(setCost)
       .catch((err) => setError(err instanceof ApiError ? err.message : t.products.loadFailed));
   }
+
+  // Live cost/margin preview inside the add/edit modal — recalculates as the user
+  // types, using the same server-side cost formula as the saved-product cost view
+  // (GET /:id/cost), just fed an unsaved ingredient list instead.
+  useEffect(() => {
+    if (!open || hasSizes) return;
+    const combined = combineIngredients(ingredientRows, packagingRows);
+    const handle = setTimeout(() => {
+      post<CostPreview>('/products/cost-preview', { ingredients: combined, sell_price: sellPrice ? Number(sellPrice) : undefined })
+        .then(setLivePreview)
+        .catch(() => {});
+    }, 400);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasSizes, ingredientRows, packagingRows, sellPrice]);
+
+  useEffect(() => {
+    if (!open || !hasSizes) return;
+    const timers = sizeRows.map((size, idx) =>
+      setTimeout(() => {
+        const combined = combineIngredients(size.ingredients, size.packaging);
+        post<CostPreview>('/products/cost-preview', { ingredients: combined, sell_price: size.sell_price ? Number(size.sell_price) : undefined })
+          .then((res) => setSizePreviews((prev) => ({ ...prev, [idx]: res })))
+          .catch(() => {});
+      }, 400)
+    );
+    return () => timers.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasSizes, sizeRows]);
 
   const materialName = (m: RawMaterial) => (lang === 'en' && m.name_en ? m.name_en : m.name);
 
@@ -318,6 +392,29 @@ export default function ProductsPage() {
           <IconPlus /> {t.products.addIngredient}
         </button>
       </>
+    );
+  }
+
+  function renderLiveStats(preview: CostPreview | null) {
+    return (
+      <div className="stat-grid" style={{ marginTop: 10 }}>
+        <div className={`stat-card ${preview && preview.margin_pct !== null && preview.margin_pct >= 0 ? 'green' : 'red'}`}>
+          <div className="stat-label">{t.products.liveMarginLabel}</div>
+          <div className="stat-value">{preview && preview.margin_pct !== null ? `${preview.margin_pct.toFixed(1)}%` : '—'}</div>
+        </div>
+        <div className={`stat-card ${preview && preview.profit !== null && preview.profit >= 0 ? 'green' : 'red'}`}>
+          <div className="stat-label">{t.products.liveProfitLabel}</div>
+          <div className="stat-value">{preview && preview.profit !== null ? `${preview.profit.toFixed(3)} KD` : '—'}</div>
+        </div>
+        <div className="stat-card amber">
+          <div className="stat-label">{t.products.liveOverheadLabel}</div>
+          <div className="stat-value">{preview ? preview.overhead_per_order.toFixed(3) : '0.000'} KD</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">{t.products.liveRawCostLabel}</div>
+          <div className="stat-value">{preview ? preview.raw_cost.toFixed(3) : '0.000'} KD</div>
+        </div>
+      </div>
     );
   }
 
@@ -522,7 +619,7 @@ export default function ProductsPage() {
             {!hasSizes && (
               <>
                 <div className="section-title-row">
-                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.ingredients}</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.ingredientsOnly}</span>
                 </div>
                 {renderIngredientEditor(ingredientRows, addIngredientRow, updateIngredientRow, removeIngredientRow)}
                 {ingredientRows.length === 0 && rawMaterials.length === 0 && (
@@ -530,6 +627,13 @@ export default function ProductsPage() {
                     {t.products.addRawMaterialFirst}
                   </p>
                 )}
+
+                <div className="section-title-row" style={{ marginTop: 16 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.packagingTitle}</span>
+                </div>
+                {renderIngredientEditor(packagingRows, addPackagingRow, updatePackagingRow, removePackagingRow)}
+
+                {renderLiveStats(livePreview)}
               </>
             )}
 
@@ -575,6 +679,18 @@ export default function ProductsPage() {
                         (i, patch) => updateSizeIngredient(sizeIdx, i, patch),
                         (i) => removeSizeIngredient(sizeIdx, i)
                       )}
+
+                      <div className="muted" style={{ fontSize: 12, marginTop: 12, marginBottom: 6 }}>
+                        {t.products.packagingTitle}
+                      </div>
+                      {renderIngredientEditor(
+                        size.packaging,
+                        () => addSizePackaging(sizeIdx),
+                        (i, patch) => updateSizePackaging(sizeIdx, i, patch),
+                        (i) => removeSizePackaging(sizeIdx, i)
+                      )}
+
+                      {renderLiveStats(sizePreviews[sizeIdx] ?? null)}
                     </div>
                   </div>
                 ))}

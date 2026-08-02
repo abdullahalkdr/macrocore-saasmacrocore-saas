@@ -99,6 +99,7 @@ CREATE TABLE raw_material_batches (
   qty_purchased DECIMAL(10, 3) NOT NULL,
   qty_remaining DECIMAL(10, 3) NOT NULL,
   purchase_price DECIMAL(10, 3) NOT NULL,
+  unit VARCHAR(10) NOT NULL DEFAULT 'g',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -164,6 +165,7 @@ CREATE TABLE product_ingredients (
   raw_material_id UUID NOT NULL REFERENCES raw_materials(id),
   usage_qty DECIMAL(10, 3),
   usage_unit VARCHAR(20),
+  is_packaging BOOLEAN NOT NULL DEFAULT false,
   UNIQUE (product_id, raw_material_id)
 );
 
@@ -188,6 +190,7 @@ CREATE TABLE product_size_ingredients (
   raw_material_id UUID NOT NULL REFERENCES raw_materials(id),
   usage_qty DECIMAL(10, 3),
   usage_unit VARCHAR(20),
+  is_packaging BOOLEAN NOT NULL DEFAULT false,
   UNIQUE (product_size_id, raw_material_id)
 );
 
