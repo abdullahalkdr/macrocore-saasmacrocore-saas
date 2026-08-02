@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { create, list, updateStatus, calendar } from '../controllers/leaveRequests.controller';
+import { create, list, update, remove, calendar } from '../controllers/leaveRequests.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/requireRole';
 
@@ -9,6 +9,7 @@ router.use(requireAuth);
 router.get('/', list);
 router.get('/calendar', calendar);
 router.post('/', create);
-router.patch('/:id', requireRole('admin', 'manager'), updateStatus);
+router.patch('/:id', requireRole('admin', 'manager'), update);
+router.delete('/:id', requireRole('admin', 'manager'), remove);
 
 export default router;

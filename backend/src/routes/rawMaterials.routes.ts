@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { list, create, update } from '../controllers/rawMaterials.controller';
+import { list, create, update, remove } from '../controllers/rawMaterials.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/requireRole';
 
@@ -9,5 +9,6 @@ router.use(requireAuth);
 router.get('/', list);
 router.post('/', requireRole('admin', 'manager'), create);
 router.patch('/:id', requireRole('admin', 'manager'), update);
+router.delete('/:id', requireRole('admin', 'manager'), remove);
 
 export default router;

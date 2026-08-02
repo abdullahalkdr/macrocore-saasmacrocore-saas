@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { isForeignKeyViolation } from '../utils/dbErrors';
 
 const SELECT_COLUMNS = 'id, name, name_en, category, package_qty, package_unit, purchase_price, supplier_name, min_stock_qty, created_at';
 
@@ -88,4 +89,27 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'raw_material_updated', entityType: 'raw_materials', entityId: id as string, req });
 
   res.status(200).json({ success: true, raw_material: rawMaterial });
+});
+
+// Admin/manager only (see routes). raw_material_batches cascades away with the
+// material (its own inventory history), but product_ingredients/product_size_ingredients
+// (any recipe using it) and stock_transfers do NOT cascade — blocked by a FK violation,
+// caught below, if this material is used in a product recipe or has transfer history.
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM raw_materials WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
+    if (result.rows.length === 0) throw new AppError(404, 'Raw material not found');
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      throw new AppError(409, 'This raw material is used in a product recipe or has transfer history and cannot be deleted — remove it from recipes first');
+    }
+    throw err;
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'raw_material_deleted', entityType: 'raw_materials', entityId: id as string, req });
+
+  res.status(200).json({ success: true });
 });

@@ -63,6 +63,9 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); transition: background .15s, color .15s; }
+/* Dropdowns use the same bold weight as headings/labels project-wide (not the regular
+   weight typed text gets) — applies everywhere, not just inside .field wrappers. */
+select { font-family: inherit; font-weight: 700; }
 /* direction now follows the html[dir] attribute set at runtime by the language toggle */
 
 .app-shell { display: flex; min-height: 100vh; }
@@ -169,6 +172,11 @@ tr:hover td { background: var(--surface-alt); }
 
 .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
 .form-row .field { flex: 1; min-width: 160px; }
+
+.field-section-title { grid-column: 1 / -1; font-size: 12px; font-weight: 800; color: var(--text); margin: 4px 0 -4px; }
+.unit-cost-box { grid-column: 1 / -1; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.unit-cost-box .unit-cost-value { font-size: 20px; font-weight: 900; color: var(--success); font-variant-numeric: tabular-nums; }
+.unit-cost-box .unit-cost-caption { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
 .error-banner {
   background: var(--red-50);

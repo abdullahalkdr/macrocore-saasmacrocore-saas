@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, post, patch, ApiError } from '../api/client';
+import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash } from '../components/Icon';
 
 interface Location {
   id: string;
@@ -71,6 +71,17 @@ export default function LocationsPage() {
     }
   }
 
+  async function handleDelete(id: string) {
+    if (!confirm(t.locations.deleteConfirm)) return;
+    setError(null);
+    try {
+      await del(`/locations/${id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.locations.deleteFailed);
+    }
+  }
+
   return (
     <div>
       <PageHeader title={t.locations.title} subtitle={t.locations.subtitle} />
@@ -115,9 +126,12 @@ export default function LocationsPage() {
                   </td>
                   <td>{l.area || '—'}</td>
                   <td>{l.address || '—'}</td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-sm" onClick={() => openEditModal(l)}>
                       {t.locations.edit}
+                    </button>{' '}
+                    <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(l.id)}>
+                      <IconTrash />
                     </button>
                   </td>
                 </tr>

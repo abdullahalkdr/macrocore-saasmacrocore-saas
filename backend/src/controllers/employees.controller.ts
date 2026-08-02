@@ -3,20 +3,35 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { isForeignKeyViolation } from '../utils/dbErrors';
 
 interface Certificate {
   name: string;
   name_en?: string;
+  issuer?: string;
   issued_date?: string;
   file_base64?: string;
+}
+
+interface Allowance {
+  label: string;
+  amount: number;
 }
 
 const SELECT_COLUMNS = `id, name, email, phone, job_role, salary_monthly, start_date, status,
   photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
   nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
-  bank_iban, emergency_contact_name, emergency_contact_phone, created_at`;
+  bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
+  late_grace_minutes, created_at`;
+
+// Same columns, prefixed with e. — used by list()/getOne() which LEFT JOIN locations
+// (unprefixed column names would be ambiguous once joined, since locations also has id/name).
+const SELECT_COLUMNS_JOINED = SELECT_COLUMNS.split(',')
+  .map((c) => `e.${c.trim()}`)
+  .join(', ');
 
 const WAGE_TYPES = ['monthly', 'hourly'];
+const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
 
 function validateCertificates(certificates: unknown): Certificate[] {
   if (certificates === undefined) return [];
@@ -25,6 +40,18 @@ function validateCertificates(certificates: unknown): Certificate[] {
     if (typeof c.name !== 'string' || c.name.trim().length < 1) throw new AppError(400, 'each certificate needs a name');
   }
   return certificates;
+}
+
+// Itemized monthly allowances (housing, transport, etc.) — summed automatically into
+// the base salary at payroll generation time (see payroll.controller.ts's create()).
+function validateAllowances(allowances: unknown): Allowance[] {
+  if (allowances === undefined) return [];
+  if (!Array.isArray(allowances)) throw new AppError(400, 'allowances must be an array');
+  for (const a of allowances) {
+    if (typeof a?.label !== 'string' || a.label.trim().length < 1) throw new AppError(400, 'each allowance needs a label');
+    if (typeof a?.amount !== 'number' || a.amount < 0) throw new AppError(400, 'each allowance needs a non-negative amount');
+  }
+  return allowances;
 }
 
 // Computed in JS rather than SQL (e.g. AGE()/EXTRACT) — keeps the query portable and
@@ -64,7 +91,9 @@ function withExpiries<T extends { civil_id_expiry: string | null; residency_expi
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
-    `SELECT ${SELECT_COLUMNS} FROM employees WHERE company_id = $1 ORDER BY created_at DESC`,
+    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name FROM employees e
+     LEFT JOIN locations l ON l.id = e.location_id
+     WHERE e.company_id = $1 ORDER BY e.created_at DESC`,
     [companyId]
   );
   res.status(200).json({ success: true, employees: result.rows.map((r) => withExpiries(withAge(r))) });
@@ -73,7 +102,12 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const result = await pool.query(`SELECT ${SELECT_COLUMNS} FROM employees WHERE id = $1 AND company_id = $2`, [id, companyId]);
+  const result = await pool.query(
+    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name FROM employees e
+     LEFT JOIN locations l ON l.id = e.location_id
+     WHERE e.id = $1 AND e.company_id = $2`,
+    [id, companyId]
+  );
   if (!result.rows[0]) throw new AppError(404, 'Employee not found');
   res.status(200).json({ success: true, employee: withExpiries(withAge(result.rows[0])) });
 });
@@ -104,20 +138,37 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     bank_iban,
     emergency_contact_name,
     emergency_contact_phone,
+    location_id,
+    allowances,
+    shift_start_time,
+    late_grace_minutes,
   } = req.body ?? {};
 
   if (typeof name !== 'string' || name.trim().length < 1) throw new AppError(400, 'name is required');
   if (wage_type !== undefined && !WAGE_TYPES.includes(wage_type)) {
     throw new AppError(400, `wage_type must be one of ${WAGE_TYPES.join(', ')}`);
   }
+  if (shift_start_time !== undefined && shift_start_time !== null && !TIME_RE.test(shift_start_time)) {
+    throw new AppError(400, 'shift_start_time must be HH:MM');
+  }
+  if (late_grace_minutes !== undefined && late_grace_minutes !== null && (typeof late_grace_minutes !== 'number' || late_grace_minutes < 0)) {
+    throw new AppError(400, 'late_grace_minutes must be a non-negative number');
+  }
+  if (location_id) {
+    const loc = await pool.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
+    if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
+  }
   const certList = validateCertificates(certificates);
+  const allowanceList = validateAllowances(allowances);
 
   const result = await pool.query(
     `INSERT INTO employees (company_id, name, email, phone, job_role, salary_monthly, start_date,
        photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
        nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
-       bank_iban, emergency_contact_name, emergency_contact_phone)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+       bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
+       late_grace_minutes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21,
+       $22, $23, $24, $25, $26::jsonb, $27, $28)
      RETURNING ${SELECT_COLUMNS}`,
     [
       companyId,
@@ -144,6 +195,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       bank_iban ?? null,
       emergency_contact_name ?? null,
       emergency_contact_phone ?? null,
+      location_id ?? null,
+      JSON.stringify(allowanceList),
+      shift_start_time ?? null,
+      late_grace_minutes ?? null,
     ]
   );
   const employee = result.rows[0];
@@ -183,6 +238,10 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     bank_iban,
     emergency_contact_name,
     emergency_contact_phone,
+    location_id,
+    allowances,
+    shift_start_time,
+    late_grace_minutes,
   } = req.body ?? {};
 
   const sets: string[] = [];
@@ -236,6 +295,24 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   if (bank_iban !== undefined) setField('bank_iban', bank_iban || null);
   if (emergency_contact_name !== undefined) setField('emergency_contact_name', emergency_contact_name || null);
   if (emergency_contact_phone !== undefined) setField('emergency_contact_phone', emergency_contact_phone || null);
+  if (location_id !== undefined) {
+    if (location_id) {
+      const loc = await pool.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
+      if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
+    }
+    setField('location_id', location_id || null);
+  }
+  if (allowances !== undefined) setField('allowances', JSON.stringify(validateAllowances(allowances)), 'jsonb');
+  if (shift_start_time !== undefined) {
+    if (shift_start_time !== null && !TIME_RE.test(shift_start_time)) throw new AppError(400, 'shift_start_time must be HH:MM');
+    setField('shift_start_time', shift_start_time || null);
+  }
+  if (late_grace_minutes !== undefined) {
+    if (late_grace_minutes !== null && (typeof late_grace_minutes !== 'number' || late_grace_minutes < 0)) {
+      throw new AppError(400, 'late_grace_minutes must be a non-negative number');
+    }
+    setField('late_grace_minutes', late_grace_minutes);
+  }
 
   if (sets.length === 0) throw new AppError(400, 'No updatable fields provided');
 
@@ -253,4 +330,27 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'employee_updated', entityType: 'employees', entityId: id as string, req });
 
   res.status(200).json({ success: true, employee: withExpiries(withAge(employee)) });
+});
+
+// Admin/manager only (see routes). Blocked by a FK violation if the employee has
+// shifts or payroll records (both plain REFERENCES, no cascade) — attendance_records
+// and leave_requests do cascade and vanish with them. Use `status: 'inactive'` via
+// update() instead once an employee has any work history.
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM employees WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
+    if (result.rows.length === 0) throw new AppError(404, 'Employee not found');
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      throw new AppError(409, 'This employee has shifts or payroll history and cannot be deleted — set them to inactive instead');
+    }
+    throw err;
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'employee_deleted', entityType: 'employees', entityId: id as string, req });
+
+  res.status(200).json({ success: true });
 });

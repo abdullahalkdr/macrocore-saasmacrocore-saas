@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { isForeignKeyViolation } from '../utils/dbErrors';
 
 const LOCATION_TYPES = ['kiosk', 'warehouse'];
 
@@ -73,4 +74,26 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'location_updated', entityType: 'locations', entityId: location.id, req });
 
   res.status(200).json({ success: true, location });
+});
+
+// Admin/manager only (see routes). Blocked by a FK violation if the location has
+// shifts, raw material batches, stock transfers, or expenses pointing at it — there's
+// no "inactive" flag on locations, so the fix is to reassign/clear those first.
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM locations WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
+    if (result.rows.length === 0) throw new AppError(404, 'Location not found');
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      throw new AppError(409, 'This location is in use (shifts, inventory, or expenses reference it) and cannot be deleted');
+    }
+    throw err;
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'location_deleted', entityType: 'locations', entityId: id as string, req });
+
+  res.status(200).json({ success: true });
 });

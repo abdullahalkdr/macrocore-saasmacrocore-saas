@@ -6,7 +6,7 @@ import { logAudit } from '../utils/audit';
 
 const COMPANY_SELECT_FIELDS = `
   id, name, plan, subscription_status, trial_start_date, trial_end_date, created_at,
-  fixed_cost_items, estimated_orders_mode, estimated_orders_manual,
+  fixed_cost_items, expense_categories, estimated_orders_mode, estimated_orders_manual,
   default_jahez_commission_pct, default_vthru_commission_pct,
   official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes,
   industry, employee_count_range, country, street, building_number, district, city, postal_code,
@@ -48,6 +48,7 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
   const {
     name,
     fixed_cost_items,
+    expense_categories,
     estimated_orders_mode,
     estimated_orders_manual,
     default_jahez_commission_pct,
@@ -78,6 +79,13 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
     }
     sets.push(`fixed_cost_items = $${i++}::jsonb`);
     values.push(JSON.stringify(fixed_cost_items));
+  }
+  if (expense_categories !== undefined) {
+    if (!Array.isArray(expense_categories) || expense_categories.some((c) => typeof c !== 'string' || !c.trim())) {
+      throw new AppError(400, 'expense_categories must be an array of non-empty strings');
+    }
+    sets.push(`expense_categories = $${i++}::jsonb`);
+    values.push(JSON.stringify(expense_categories.map((c: string) => c.trim())));
   }
   if (estimated_orders_mode !== undefined) {
     if (!['auto', 'manual'].includes(estimated_orders_mode)) throw new AppError(400, 'estimated_orders_mode must be auto or manual');

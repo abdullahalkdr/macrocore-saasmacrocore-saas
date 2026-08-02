@@ -19,6 +19,9 @@ CREATE TABLE companies (
   grace_period_minutes INT DEFAULT 15,
   working_days_per_month INT DEFAULT 26,
   standard_shift_minutes INT DEFAULT 480,
+  -- Editable expense category labels, managed from Expenses > "إدارة الفئات"
+  -- (see MIGRATION_017_expenses_location_categories.sql).
+  expense_categories JSONB DEFAULT '["إيجار", "صيانة", "مشتريات مخزون", "تسويق", "فواتير"]'::jsonb,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -168,6 +171,23 @@ CREATE TABLE employees (
   -- hours actually worked (computed from attendance_records at payroll generation time).
   wage_type VARCHAR(10) DEFAULT 'monthly', -- monthly | hourly
   hourly_rate DECIMAL(10, 3),
+  -- HR/compliance fields (MIGRATION_013) — expat-heavy Kuwait kiosk workforce.
+  nationality VARCHAR(100),
+  civil_id_expiry DATE,
+  residency_number VARCHAR(50),
+  residency_expiry DATE,
+  passport_number VARCHAR(50),
+  passport_expiry DATE,
+  bank_iban VARCHAR(50),
+  emergency_contact_name VARCHAR(150),
+  emergency_contact_phone VARCHAR(30),
+  -- Home/assigned location, itemized monthly allowances (summed into payroll base pay
+  -- at generation time), and shift-start/grace-period pair for a future automatic
+  -- late-deduction feature (MIGRATION_019).
+  location_id UUID REFERENCES locations(id),
+  allowances JSONB DEFAULT '[]'::jsonb,
+  shift_start_time TIME,
+  late_grace_minutes INT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -203,6 +223,8 @@ CREATE TABLE leave_requests (
   status VARCHAR(20) DEFAULT 'pending',
   reviewed_by UUID REFERENCES users(id),
   reviewed_at TIMESTAMP,
+  -- Manager-only note, set/edited alongside status (see MIGRATION_018).
+  manager_note TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -253,6 +275,11 @@ CREATE TABLE expenses (
   amount DECIMAL(10, 3),
   description VARCHAR(500),
   receipt_image TEXT,
+  -- Which kiosk/warehouse this was spent at (nullable — older rows and
+  -- company-wide expenses have no single location).
+  location_id UUID REFERENCES locations(id),
+  -- Backdatable spend date, separate from created_at (when the row was entered).
+  expense_date DATE,
   created_at TIMESTAMP DEFAULT NOW(),
   created_by UUID REFERENCES users(id)
 );
@@ -264,6 +291,7 @@ CREATE TABLE waste_records (
   product_id UUID NOT NULL REFERENCES products(id),
   qty DECIMAL(10, 3),
   image_base64 TEXT,
+  cost_of_goods DECIMAL(10, 3),
   created_at TIMESTAMP DEFAULT NOW()
 );
 

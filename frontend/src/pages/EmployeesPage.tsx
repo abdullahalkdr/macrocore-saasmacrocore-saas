@@ -1,17 +1,28 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, post, patch, ApiError } from '../api/client';
+import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import Avatar from '../components/Avatar';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash } from '../components/Icon';
 
 interface Certificate {
   name: string;
   name_en?: string;
+  issuer?: string;
   issued_date?: string;
   file_base64?: string;
+}
+
+interface Allowance {
+  label: string;
+  amount: number;
+}
+
+interface Location {
+  id: string;
+  name: string;
 }
 
 interface Employee {
@@ -41,10 +52,27 @@ interface Employee {
   bank_iban: string | null;
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
+  location_id: string | null;
+  location_name: string | null;
+  allowances: Allowance[];
+  shift_start_time: string | null;
+  late_grace_minutes: number | null;
   days_until_civil_id_expiry: number | null;
   days_until_residency_expiry: number | null;
   days_until_passport_expiry: number | null;
 }
+
+const JOB_ROLE_VALUES = [
+  'kioskWorker',
+  'shiftSupervisor',
+  'branchManager',
+  'prepWorker',
+  'cashier',
+  'delivery',
+  'cleaner',
+  'accountant',
+] as const;
+const JOB_ROLE_OTHER = '__other__';
 
 function hasExpiryWarning(e: Employee): boolean {
   return [e.days_until_civil_id_expiry, e.days_until_residency_expiry, e.days_until_passport_expiry].some(
@@ -61,12 +89,18 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
+interface AllowanceRow {
+  label: string;
+  amount: string;
+}
+
 function emptyForm() {
   return {
     name: '',
     email: '',
     phone: '',
-    jobRole: '',
+    jobRoleSelect: '',
+    jobRole: '', // custom text, only used when jobRoleSelect === JOB_ROLE_OTHER
     salary: '',
     photoBase64: '' as string | null,
     civilId: '',
@@ -86,6 +120,11 @@ function emptyForm() {
     bankIban: '',
     emergencyContactName: '',
     emergencyContactPhone: '',
+    locationId: '',
+    status: 'active' as 'active' | 'inactive',
+    allowances: [] as AllowanceRow[],
+    shiftStartTime: '',
+    lateGraceMinutes: '',
   };
 }
 
@@ -102,7 +141,18 @@ function calcAge(birthDate: string): number | null {
 
 export default function EmployeesPage() {
   const t = useT();
+  const JOB_ROLE_LABELS: Record<(typeof JOB_ROLE_VALUES)[number], string> = {
+    kioskWorker: t.employees.jobRoleKioskWorker,
+    shiftSupervisor: t.employees.jobRoleShiftSupervisor,
+    branchManager: t.employees.jobRoleBranchManager,
+    prepWorker: t.employees.jobRolePrepWorker,
+    cashier: t.employees.jobRoleCashier,
+    delivery: t.employees.jobRoleDelivery,
+    cleaner: t.employees.jobRoleCleaner,
+    accountant: t.employees.jobRoleAccountant,
+  };
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm());
@@ -115,7 +165,21 @@ export default function EmployeesPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : t.employees.loadFailed));
   }
 
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    get<{ locations: Location[] }>('/locations').then((r) => setLocations(r.locations)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Old free-text job_role values (entered before this dropdown existed) may not
+  // match any known option's label — fall back to "Other" with the raw text kept
+  // editable, instead of silently losing/blanking it.
+  function resolveJobRoleSelect(raw: string): { select: string; custom: string } {
+    for (const key of JOB_ROLE_VALUES) {
+      if (raw === JOB_ROLE_LABELS[key]) return { select: key, custom: '' };
+    }
+    return raw ? { select: JOB_ROLE_OTHER, custom: raw } : { select: '', custom: '' };
+  }
 
   function openCreate() {
     setEditingId(null);
@@ -125,11 +189,13 @@ export default function EmployeesPage() {
 
   function openEdit(emp: Employee) {
     setEditingId(emp.id);
+    const jobRoleResolved = resolveJobRoleSelect(emp.job_role || '');
     setForm({
       name: emp.name,
       email: emp.email || '',
       phone: emp.phone || '',
-      jobRole: emp.job_role || '',
+      jobRoleSelect: jobRoleResolved.select,
+      jobRole: jobRoleResolved.custom,
       salary: emp.salary_monthly !== null ? String(emp.salary_monthly) : '',
       photoBase64: emp.photo_base64,
       civilId: emp.civil_id || '',
@@ -149,6 +215,11 @@ export default function EmployeesPage() {
       bankIban: emp.bank_iban || '',
       emergencyContactName: emp.emergency_contact_name || '',
       emergencyContactPhone: emp.emergency_contact_phone || '',
+      locationId: emp.location_id || '',
+      status: emp.status === 'inactive' ? 'inactive' : 'active',
+      allowances: (emp.allowances || []).map((a) => ({ label: a.label, amount: String(a.amount) })),
+      shiftStartTime: emp.shift_start_time ? emp.shift_start_time.slice(0, 5) : '',
+      lateGraceMinutes: emp.late_grace_minutes !== null && emp.late_grace_minutes !== undefined ? String(emp.late_grace_minutes) : '',
     });
     setOpen(true);
   }
@@ -174,16 +245,33 @@ export default function EmployeesPage() {
     updateCertificate(i, { file_base64: base64 });
   }
 
+  function addAllowance() {
+    setForm((f) => ({ ...f, allowances: [...f.allowances, { label: '', amount: '' }] }));
+  }
+  function updateAllowance(i: number, patchObj: Partial<AllowanceRow>) {
+    setForm((f) => ({ ...f, allowances: f.allowances.map((a, idx) => (idx === i ? { ...a, ...patchObj } : a)) }));
+  }
+  function removeAllowance(i: number) {
+    setForm((f) => ({ ...f, allowances: f.allowances.filter((_, idx) => idx !== i) }));
+  }
+  const allowancesTotal = form.allowances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
+      const finalJobRole =
+        form.jobRoleSelect === JOB_ROLE_OTHER
+          ? form.jobRole.trim()
+          : form.jobRoleSelect
+            ? JOB_ROLE_LABELS[form.jobRoleSelect as (typeof JOB_ROLE_VALUES)[number]]
+            : '';
       const payload = {
         name: form.name,
         email: form.email || undefined,
         phone: form.phone || undefined,
-        job_role: form.jobRole || undefined,
+        job_role: finalJobRole || undefined,
         salary_monthly: form.salary ? Number(form.salary) : undefined,
         photo_base64: form.photoBase64 || undefined,
         civil_id: form.civilId || undefined,
@@ -203,6 +291,13 @@ export default function EmployeesPage() {
         bank_iban: form.bankIban || undefined,
         emergency_contact_name: form.emergencyContactName || undefined,
         emergency_contact_phone: form.emergencyContactPhone || undefined,
+        location_id: form.locationId || undefined,
+        status: editingId ? form.status : undefined,
+        allowances: form.allowances
+          .filter((a) => a.label.trim() && a.amount)
+          .map((a) => ({ label: a.label.trim(), amount: Number(a.amount) })),
+        shift_start_time: form.shiftStartTime || undefined,
+        late_grace_minutes: form.lateGraceMinutes ? Number(form.lateGraceMinutes) : undefined,
       };
       if (editingId) {
         await patch(`/employees/${editingId}`, payload);
@@ -215,6 +310,17 @@ export default function EmployeesPage() {
       setError(err instanceof ApiError ? err.message : t.employees.saveFailed);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm(t.employees.deleteConfirm)) return;
+    setError(null);
+    try {
+      await del(`/employees/${id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.employees.deleteFailed);
     }
   }
 
@@ -249,6 +355,7 @@ export default function EmployeesPage() {
                 <th>{t.employees.wageType}</th>
                 <th className="num">{t.employees.salary}</th>
                 <th>{t.employees.status}</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -282,12 +389,23 @@ export default function EmployeesPage() {
                         ? `${Number(e.salary_monthly).toFixed(3)} KD`
                         : '—'}
                   </td>
-                  <td>{e.status === 'active' ? <Tag color="green">{t.common.active}</Tag> : <Tag color="gray">{e.status}</Tag>}</td>
+                  <td>
+                    {e.status === 'active' ? (
+                      <Tag color="green">{t.common.active}</Tag>
+                    ) : (
+                      <Tag color="gray">{e.status === 'inactive' ? t.employees.statusInactive : e.status}</Tag>
+                    )}
+                  </td>
+                  <td onClick={(ev) => ev.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                    <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(e.id)}>
+                      <IconTrash />
+                    </button>
+                  </td>
                 </tr>
               ))}
               {employees.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <div className="empty-state">{t.employees.empty}</div>
                   </td>
                 </tr>
@@ -313,24 +431,126 @@ export default function EmployeesPage() {
           }
         >
           <form id="employee-form" onSubmit={handleSubmit}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-              {form.photoBase64 ? (
-                <img src={form.photoBase64} alt="" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover' }} />
-              ) : (
-                <Avatar name={form.name || '?'} />
-              )}
-              <input type="file" accept="image/*" onChange={(e) => handlePhotoChange(e.target.files?.[0])} />
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', marginBottom: 14 }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="field">
+                  <label>{t.employees.name}</label>
+                  <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required autoFocus />
+                </div>
+                <div className="field">
+                  <label>{t.employees.jobRole}</label>
+                  <select
+                    value={form.jobRoleSelect}
+                    onChange={(e) =>
+                      setForm({ ...form, jobRoleSelect: e.target.value, jobRole: e.target.value === JOB_ROLE_OTHER ? form.jobRole : '' })
+                    }
+                  >
+                    <option value="">{t.employees.jobRoleSelectPlaceholder}</option>
+                    {JOB_ROLE_VALUES.map((k) => (
+                      <option key={k} value={k}>
+                        {JOB_ROLE_LABELS[k]}
+                      </option>
+                    ))}
+                    <option value={JOB_ROLE_OTHER}>{t.employees.jobRoleOther}</option>
+                  </select>
+                  {form.jobRoleSelect === JOB_ROLE_OTHER && (
+                    <input
+                      style={{ marginTop: 6 }}
+                      value={form.jobRole}
+                      onChange={(e) => setForm({ ...form, jobRole: e.target.value })}
+                      placeholder={t.employees.jobRolePlaceholder}
+                    />
+                  )}
+                </div>
+                <div className="field">
+                  <label>{t.employees.location}</label>
+                  <select value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
+                    <option value="">{t.employees.selectLocation}</option>
+                    {locations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                {form.photoBase64 ? (
+                  <img src={form.photoBase64} alt="" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover' }} />
+                ) : (
+                  <Avatar name={form.name || '?'} />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handlePhotoChange(e.target.files?.[0])}
+                  style={{ maxWidth: 150, fontSize: 11 }}
+                />
+              </div>
             </div>
 
+            <div className="hr" />
+            <div className="section-title-row">
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.personalDataTitle}</span>
+            </div>
             <div className="field-grid">
               <div className="field">
-                <label>{t.employees.name}</label>
-                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required autoFocus />
+                <label>{t.employees.nationality}</label>
+                <input value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })} />
               </div>
               <div className="field">
-                <label>{t.employees.jobRole}</label>
-                <input value={form.jobRole} onChange={(e) => setForm({ ...form, jobRole: e.target.value })} placeholder={t.employees.jobRolePlaceholder} />
+                <label>{t.employees.civilId}</label>
+                <input value={form.civilId} onChange={(e) => setForm({ ...form, civilId: e.target.value })} />
               </div>
+              <div className="field">
+                <label>{t.employees.phone}</label>
+                <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.birthDate}</label>
+                <input type="date" value={form.birthDate} onChange={(e) => setForm({ ...form, birthDate: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.weight}</label>
+                <input type="number" step="0.1" value={form.weightKg} onChange={(e) => setForm({ ...form, weightKg: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.ageFieldLabel}</label>
+                <input value={liveAge !== null ? String(liveAge) : ''} disabled />
+              </div>
+              {editingId && (
+                <div className="field">
+                  <label>{t.employees.status}</label>
+                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as 'active' | 'inactive' })}>
+                    <option value="active">{t.common.active}</option>
+                    <option value="inactive">{t.employees.statusInactive}</option>
+                  </select>
+                </div>
+              )}
+              <div className="field">
+                <label>{t.employees.joinDate}</label>
+                <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>{t.employees.email}</label>
+                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </div>
+            </div>
+
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>{t.employees.priorExperience}</label>
+              <textarea
+                rows={2}
+                value={form.priorExperience}
+                onChange={(e) => setForm({ ...form, priorExperience: e.target.value })}
+              />
+            </div>
+
+            <div className="hr" />
+            <div className="section-title-row">
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.payInfoTitle}</span>
+            </div>
+            <div className="field-grid">
               <div className="field">
                 <label>{t.employees.wageType}</label>
                 <select
@@ -357,53 +577,59 @@ export default function EmployeesPage() {
                   <input type="number" step="0.001" value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
                 </div>
               )}
-              <div className="field">
-                <label>{t.employees.phone}</label>
-                <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </div>
-              <div className="field">
-                <label>{t.employees.email}</label>
-                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </div>
-              <div className="field">
-                <label>{t.employees.civilId}</label>
-                <input value={form.civilId} onChange={(e) => setForm({ ...form, civilId: e.target.value })} />
-              </div>
-              <div className="field">
-                <label>
-                  {t.employees.birthDate}
-                  {liveAge !== null && <span className="muted"> ({t.employees.age(liveAge)})</span>}
-                </label>
-                <input type="date" value={form.birthDate} onChange={(e) => setForm({ ...form, birthDate: e.target.value })} />
-              </div>
-              <div className="field">
-                <label>{t.employees.weight}</label>
-                <input type="number" step="0.1" value={form.weightKg} onChange={(e) => setForm({ ...form, weightKg: e.target.value })} />
-              </div>
             </div>
 
-            <div className="field" style={{ marginTop: 10 }}>
-              <label>{t.employees.priorExperience}</label>
-              <textarea
-                rows={2}
-                value={form.priorExperience}
-                onChange={(e) => setForm({ ...form, priorExperience: e.target.value })}
-              />
+            <div className="section-title-row" style={{ marginTop: 10 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t.employees.allowancesTitle} — {t.employees.allowancesTotal(allowancesTotal.toFixed(3))}
+              </span>
+              <button className="btn btn-secondary btn-sm" type="button" onClick={addAllowance}>
+                <IconPlus /> {t.employees.addAllowance}
+              </button>
             </div>
+            {form.allowances.map((a, i) => (
+              <div key={i} className="form-row" style={{ marginBottom: 8 }}>
+                <div className="field" style={{ flex: 2 }}>
+                  <input
+                    placeholder={t.employees.allowanceLabelPlaceholder}
+                    value={a.label}
+                    onChange={(e) => updateAllowance(i, { label: e.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <input type="number" step="0.001" placeholder="KD" value={a.amount} onChange={(e) => updateAllowance(i, { amount: e.target.value })} />
+                </div>
+                <button className="icon-btn" type="button" onClick={() => removeAllowance(i)} style={{ alignSelf: 'center' }}>
+                  ×
+                </button>
+              </div>
+            ))}
+
+            <div className="field-grid" style={{ marginTop: 10 }}>
+              <div className="field">
+                <label>{t.employees.lateGraceMinutes}</label>
+                <input
+                  type="number"
+                  step="1"
+                  min={0}
+                  value={form.lateGraceMinutes}
+                  onChange={(e) => setForm({ ...form, lateGraceMinutes: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>{t.employees.shiftStartTime}</label>
+                <input type="time" value={form.shiftStartTime} onChange={(e) => setForm({ ...form, shiftStartTime: e.target.value })} />
+              </div>
+            </div>
+            <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              {t.employees.schedulingNote}
+            </p>
 
             <div className="hr" />
             <div className="section-title-row">
               <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.hrSectionTitle}</span>
             </div>
             <div className="field-grid">
-              <div className="field">
-                <label>{t.employees.nationality}</label>
-                <input value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })} />
-              </div>
-              <div className="field">
-                <label>{t.employees.joinDate}</label>
-                <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
-              </div>
               <div className="field">
                 <label>{t.employees.civilIdExpiry}</label>
                 <input type="date" value={form.civilIdExpiry} onChange={(e) => setForm({ ...form, civilIdExpiry: e.target.value })} />
@@ -459,6 +685,13 @@ export default function EmployeesPage() {
                     placeholder={t.employees.certificateName}
                     value={c.name}
                     onChange={(e) => updateCertificate(i, { name: e.target.value })}
+                  />
+                </div>
+                <div className="field" style={{ flex: 2 }}>
+                  <input
+                    placeholder={t.employees.certificateIssuer}
+                    value={c.issuer || ''}
+                    onChange={(e) => updateCertificate(i, { issuer: e.target.value })}
                   />
                 </div>
                 <div className="field">

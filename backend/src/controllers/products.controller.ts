@@ -170,6 +170,150 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   res.status(201).json({ success: true, product });
 });
 
+// Admin/manager only (see routes). Scalar fields (name/category/price/status) update
+// in place; sending `ingredients` (non-sized) or `sizes` (sized) fully replaces the
+// existing recipe/size list, same shape as create() — simplest correct option since
+// recipes are small and there's no meaningful "diff" UI on the frontend.
+export const update = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+  const { name, name_en, category, sell_price, status, has_sizes, ingredients, sizes } = req.body ?? {};
+
+  const existing = await pool.query('SELECT id, has_sizes FROM products WHERE id = $1 AND company_id = $2', [id, companyId]);
+  if (!existing.rows[0]) throw new AppError(404, 'Product not found');
+  const currentHasSizes: boolean = existing.rows[0].has_sizes;
+
+  if (name !== undefined && (typeof name !== 'string' || name.trim().length < 1)) throw new AppError(400, 'name must be a non-empty string');
+  if (sell_price !== undefined && sell_price !== null && (typeof sell_price !== 'number' || sell_price < 0)) {
+    throw new AppError(400, 'sell_price must be a non-negative number');
+  }
+  if (status !== undefined && !['active', 'inactive'].includes(status)) throw new AppError(400, 'status must be active or inactive');
+
+  const nextHasSizes = has_sizes !== undefined ? has_sizes === true : currentHasSizes;
+  const replaceIngredients = has_sizes !== undefined || ingredients !== undefined;
+  const replaceSizes = has_sizes !== undefined || sizes !== undefined;
+  const ingredientList = replaceIngredients ? (nextHasSizes ? [] : validateIngredients(ingredients)) : null;
+  const sizeList = replaceSizes ? (nextHasSizes ? validateSizes(sizes) : []) : null;
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  if (name !== undefined) {
+    sets.push(`name = $${i++}`);
+    values.push(name.trim());
+  }
+  if (name_en !== undefined) {
+    sets.push(`name_en = $${i++}`);
+    values.push(typeof name_en === 'string' && name_en.trim() ? name_en.trim() : null);
+  }
+  if (category !== undefined) {
+    sets.push(`category = $${i++}`);
+    values.push(category);
+  }
+  if (sell_price !== undefined) {
+    sets.push(`sell_price = $${i++}`);
+    values.push(nextHasSizes ? null : sell_price);
+  }
+  if (status !== undefined) {
+    sets.push(`status = $${i++}`);
+    values.push(status);
+  }
+  if (has_sizes !== undefined) {
+    sets.push(`has_sizes = $${i++}`);
+    values.push(nextHasSizes);
+  }
+
+  const client = await pool.connect();
+  let product;
+  try {
+    await client.query('BEGIN');
+
+    if (sets.length > 0) {
+      sets.push(`updated_at = NOW()`);
+      values.push(id, companyId);
+      const result = await client.query(
+        `UPDATE products SET ${sets.join(', ')} WHERE id = $${i++} AND company_id = $${i++}
+         RETURNING id, name, name_en, category, sell_price, status, has_sizes, created_at`,
+        values
+      );
+      product = result.rows[0];
+    } else {
+      const result = await client.query(
+        `SELECT id, name, name_en, category, sell_price, status, has_sizes, created_at FROM products WHERE id = $1 AND company_id = $2`,
+        [id, companyId]
+      );
+      product = result.rows[0];
+    }
+
+    if (ingredientList !== null) {
+      await client.query(`DELETE FROM product_ingredients WHERE product_id = $1`, [id]);
+      for (const ing of ingredientList) {
+        await client.query(
+          `INSERT INTO product_ingredients (product_id, raw_material_id, usage_qty, usage_unit) VALUES ($1, $2, $3, $4)`,
+          [id, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+        );
+      }
+    }
+    if (sizeList !== null) {
+      await client.query(`DELETE FROM product_sizes WHERE product_id = $1`, [id]); // cascades product_size_ingredients
+      for (let idx = 0; idx < sizeList.length; idx++) {
+        const size = sizeList[idx];
+        const sizeResult = await client.query(
+          `INSERT INTO product_sizes (company_id, product_id, name, name_en, sell_price, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [companyId, id, size.name.trim(), size.name_en?.trim() || null, size.sell_price ?? null, idx]
+        );
+        const sizeId = sizeResult.rows[0].id;
+        for (const ing of size.ingredients ?? []) {
+          await client.query(
+            `INSERT INTO product_size_ingredients (product_size_id, raw_material_id, usage_qty, usage_unit) VALUES ($1, $2, $3, $4)`,
+            [sizeId, ing.raw_material_id, ing.usage_qty, ing.usage_unit ?? null]
+          );
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (isForeignKeyViolation(err)) {
+      throw new AppError(400, 'One of the ingredients references a raw_material_id that does not exist');
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (!product) throw new AppError(404, 'Product not found');
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'product_updated', entityType: 'products', entityId: id as string, req });
+
+  res.status(200).json({ success: true, product });
+});
+
+// Admin/manager only. Blocked by a foreign key violation (friendly-messaged below) if
+// the product has any sales/shift-assignment/waste history — that's intentional, we
+// never want a delete to silently wipe historical revenue/cost numbers. Use `status:
+// 'inactive'` via update() instead to retire a product that already has history.
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM products WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
+    if (result.rows.length === 0) throw new AppError(404, 'Product not found');
+  } catch (err) {
+    if (isForeignKeyViolation(err)) {
+      throw new AppError(409, 'This product has sales/waste history and cannot be deleted — set it to inactive instead');
+    }
+    throw err;
+  }
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'product_deleted', entityType: 'products', entityId: id as string, req });
+
+  res.status(200).json({ success: true });
+});
+
 // Shared cost math: raw ingredient cost for a set of {package_qty, package_unit,
 // purchase_price, usage_qty, usage_unit} rows.
 function sumRawCost(rows: { usage_qty: number; usage_unit: string | null; package_qty: number | null; package_unit: string | null; purchase_price: number | null }[]) {

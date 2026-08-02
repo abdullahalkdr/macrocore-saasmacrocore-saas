@@ -1,11 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, post, patch, ApiError } from '../api/client';
+import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
 interface Employee {
   id: string;
@@ -24,13 +24,18 @@ interface LeaveRequest {
   reason: string | null;
   attachment_base64: string | null;
   status: string;
+  manager_note: string | null;
 }
 
+// Green = annual leave, red = sick leave, orange = permission — matches the status
+// legend shown above the calendar.
 const TYPE_COLOR: Record<string, string> = {
-  annual_leave: '#3b82f6',
+  annual_leave: '#059669',
   sick_leave: '#ef4444',
   permission: '#f59e0b',
 };
+
+const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,6 +55,7 @@ export default function LeaveRequestsPage() {
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const [employeeId, setEmployeeId] = useState('');
@@ -60,11 +66,12 @@ export default function LeaveRequestsPage() {
   const [endTime, setEndTime] = useState('');
   const [reason, setReason] = useState('');
   const [attachment, setAttachment] = useState<string | null>(null);
+  const [status, setStatus] = useState('pending');
+  const [managerNote, setManagerNote] = useState('');
 
-  const now = new Date();
-  const [calYear, setCalYear] = useState(now.getFullYear());
-  const [calMonth, setCalMonth] = useState(now.getMonth() + 1); // 1-12
-  const [calLeaves, setCalLeaves] = useState<LeaveRequest[]>([]);
+  // Full-year calendar — all 12 months of calYear, not just the current month.
+  const [calYear, setCalYear] = useState(new Date().getFullYear());
+  const [calByMonth, setCalByMonth] = useState<Record<number, LeaveRequest[]>>({});
 
   function loadRequests() {
     get<{ leave_requests: LeaveRequest[] }>('/leave-requests')
@@ -72,32 +79,31 @@ export default function LeaveRequestsPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : t.leaveRequests.loadFailed));
   }
 
-  function loadCalendar(year: number, month: number) {
-    get<{ leave_requests: LeaveRequest[] }>(`/leave-requests/calendar?year=${year}&month=${month}`)
-      .then((r) => setCalLeaves(r.leave_requests))
-      .catch(() => {});
+  function loadCalendarYear(year: number) {
+    Promise.all(
+      MONTHS.map((m) =>
+        get<{ leave_requests: LeaveRequest[] }>(`/leave-requests/calendar?year=${year}&month=${m}`)
+          .then((r): [number, LeaveRequest[]] => [m, r.leave_requests])
+          .catch((): [number, LeaveRequest[]] => [m, []])
+      )
+    ).then((pairs) => {
+      const byMonth: Record<number, LeaveRequest[]> = {};
+      for (const [m, leaves] of pairs) byMonth[m] = leaves;
+      setCalByMonth(byMonth);
+    });
   }
 
   useEffect(() => {
     get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
     loadRequests();
-    loadCalendar(calYear, calMonth);
+    loadCalendarYear(calYear);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function changeMonth(delta: number) {
-    let y = calYear;
-    let m = calMonth + delta;
-    if (m < 1) {
-      m = 12;
-      y -= 1;
-    } else if (m > 12) {
-      m = 1;
-      y += 1;
-    }
+  function changeYear(delta: number) {
+    const y = calYear + delta;
     setCalYear(y);
-    setCalMonth(m);
-    loadCalendar(y, m);
+    loadCalendarYear(y);
   }
 
   async function handleAttachmentChange(file: File | undefined) {
@@ -114,6 +120,29 @@ export default function LeaveRequestsPage() {
     setEndTime('');
     setReason('');
     setAttachment(null);
+    setStatus('pending');
+    setManagerNote('');
+  }
+
+  function openCreate() {
+    resetForm();
+    setEditingId(null);
+    setOpen(true);
+  }
+
+  function openEdit(r: LeaveRequest) {
+    setEditingId(r.id);
+    setEmployeeId(r.employee_id);
+    setType(r.type);
+    setStartDate(r.start_date.slice(0, 10));
+    setEndDate(r.end_date ? r.end_date.slice(0, 10) : '');
+    setStartTime(r.start_time ? r.start_time.slice(0, 5) : '');
+    setEndTime(r.end_time ? r.end_time.slice(0, 5) : '');
+    setReason(r.reason || '');
+    setAttachment(null);
+    setStatus(r.status);
+    setManagerNote(r.manager_note || '');
+    setOpen(true);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -121,7 +150,7 @@ export default function LeaveRequestsPage() {
     setError(null);
     setLoading(true);
     try {
-      await post('/leave-requests', {
+      const base = {
         employee_id: employeeId,
         type,
         start_date: startDate,
@@ -130,11 +159,17 @@ export default function LeaveRequestsPage() {
         end_time: type === 'permission' ? endTime || undefined : undefined,
         reason: reason || undefined,
         attachment_base64: attachment || undefined,
-      });
+      };
+      if (editingId) {
+        await patch(`/leave-requests/${editingId}`, { ...base, status, manager_note: managerNote || undefined });
+      } else {
+        await post('/leave-requests', base);
+      }
       resetForm();
+      setEditingId(null);
       setOpen(false);
       loadRequests();
-      loadCalendar(calYear, calMonth);
+      loadCalendarYear(calYear);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.leaveRequests.saveFailed);
     } finally {
@@ -142,14 +177,15 @@ export default function LeaveRequestsPage() {
     }
   }
 
-  async function reviewRequest(id: string, status: 'approved' | 'rejected') {
+  async function handleDelete(id: string) {
+    if (!confirm(t.leaveRequests.deleteConfirm)) return;
     setError(null);
     try {
-      await patch(`/leave-requests/${id}`, { status });
+      await del(`/leave-requests/${id}`);
       loadRequests();
-      loadCalendar(calYear, calMonth);
+      loadCalendarYear(calYear);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.leaveRequests.updateFailed);
+      setError(err instanceof ApiError ? err.message : t.leaveRequests.deleteFailed);
     }
   }
 
@@ -159,27 +195,40 @@ export default function LeaveRequestsPage() {
     return t.leaveRequests.typePermission;
   }
 
-  function statusTag(status: string) {
-    if (status === 'approved') return <Tag color="green">{t.leaveRequests.statusApproved}</Tag>;
-    if (status === 'rejected') return <Tag color="red">{t.leaveRequests.statusRejected}</Tag>;
+  function statusTag(s: string) {
+    if (s === 'approved') return <Tag color="green">{t.leaveRequests.statusApproved}</Tag>;
+    if (s === 'rejected') return <Tag color="red">{t.leaveRequests.statusRejected}</Tag>;
     return <Tag color="amber">{t.leaveRequests.statusPending}</Tag>;
   }
 
-  // Build day -> leaves-covering-that-day map for the calendar grid.
-  const daysInMonth = new Date(calYear, calMonth, 0).getDate();
-  const firstWeekday = new Date(calYear, calMonth - 1, 1).getDay(); // 0=Sun
-  const dayMap: Record<number, LeaveRequest[]> = {};
-  for (const lr of calLeaves) {
-    const start = new Date(lr.start_date);
-    const end = lr.end_date ? new Date(lr.end_date) : start;
-    for (let d = 1; d <= daysInMonth; d++) {
-      const day = new Date(calYear, calMonth - 1, d);
-      if (day >= new Date(start.getFullYear(), start.getMonth(), start.getDate()) && day <= new Date(end.getFullYear(), end.getMonth(), end.getDate())) {
-        (dayMap[d] ||= []).push(lr);
+  function viewAttachment(base64: string) {
+    const w = window.open();
+    if (w) w.document.write(`<img src="${base64}" style="max-width:100%" />`);
+  }
+
+  function monthGrid(month: number) {
+    const daysInMonth = new Date(calYear, month, 0).getDate();
+    const firstWeekday = new Date(calYear, month - 1, 1).getDay();
+    const leaves = calByMonth[month] || [];
+    const dayMap: Record<number, LeaveRequest[]> = {};
+    for (const lr of leaves) {
+      const start = new Date(lr.start_date);
+      const end = lr.end_date ? new Date(lr.end_date) : start;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const day = new Date(calYear, month - 1, d);
+        if (
+          day >= new Date(start.getFullYear(), start.getMonth(), start.getDate()) &&
+          day <= new Date(end.getFullYear(), end.getMonth(), end.getDate())
+        ) {
+          (dayMap[d] ||= []).push(lr);
+        }
       }
     }
+    const cells: (number | null)[] = [...Array(firstWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+    return { cells, dayMap };
   }
-  const cells: (number | null)[] = [...Array(firstWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+
+  const monthFormatter = new Intl.DateTimeFormat(undefined, { month: 'long' });
 
   return (
     <div>
@@ -188,76 +237,9 @@ export default function LeaveRequestsPage() {
 
       <div className="section-title-row">
         <span className="muted">{t.leaveRequests.count(requests.length)}</span>
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={() => {
-            resetForm();
-            setOpen(true);
-          }}
-        >
+        <button className="btn btn-primary btn-sm" onClick={openCreate}>
           <IconPlus /> {t.leaveRequests.newItem}
         </button>
-      </div>
-
-      <div className="card">
-        <div className="card-head">
-          <h2>{t.leaveRequests.calendarTitle}</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeMonth(-1)}>
-              {t.leaveRequests.prevMonth}
-            </button>
-            <span style={{ alignSelf: 'center', fontWeight: 700, fontSize: 13 }}>
-              {calYear}-{String(calMonth).padStart(2, '0')}
-            </span>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeMonth(1)}>
-              {t.leaveRequests.nextMonth}
-            </button>
-          </div>
-        </div>
-        <div className="card-body">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
-            {cells.map((day, i) => (
-              <div
-                key={i}
-                style={{
-                  minHeight: 56,
-                  border: '1px solid var(--stone-100)',
-                  borderRadius: 6,
-                  padding: 4,
-                  fontSize: 11,
-                  background: day ? '#fff' : 'transparent',
-                }}
-              >
-                {day && (
-                  <>
-                    <div className="muted" style={{ fontSize: 10 }}>
-                      {day}
-                    </div>
-                    {(dayMap[day] || []).slice(0, 3).map((lr) => (
-                      <div
-                        key={lr.id}
-                        title={`${lr.employee_name} — ${typeLabel(lr.type)}`}
-                        style={{
-                          background: TYPE_COLOR[lr.type] || '#999',
-                          color: '#fff',
-                          borderRadius: 3,
-                          padding: '1px 4px',
-                          marginTop: 2,
-                          fontSize: 9,
-                          overflow: 'hidden',
-                          whiteSpace: 'nowrap',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {lr.employee_name}
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div className="card">
@@ -272,6 +254,8 @@ export default function LeaveRequestsPage() {
                 <th>{t.leaveRequests.type}</th>
                 <th>{t.leaveRequests.startDate}</th>
                 <th>{t.leaveRequests.endDate}</th>
+                <th>{t.leaveRequests.reason}</th>
+                <th>{t.leaveRequests.attachment}</th>
                 <th>{t.leaveRequests.status}</th>
                 {isManager && <th></th>}
               </tr>
@@ -283,26 +267,34 @@ export default function LeaveRequestsPage() {
                   <td>{typeLabel(r.type)}</td>
                   <td>{r.start_date.slice(0, 10)}</td>
                   <td>{r.end_date ? r.end_date.slice(0, 10) : '—'}</td>
+                  <td>{r.reason || '—'}</td>
+                  <td>
+                    {r.attachment_base64 ? (
+                      <a href="#" onClick={(e) => { e.preventDefault(); viewAttachment(r.attachment_base64 as string); }}>
+                        {t.leaveRequests.viewAttachment}
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                   <td>{statusTag(r.status)}</td>
                   {isManager && (
                     <td>
-                      {r.status === 'pending' && (
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => reviewRequest(r.id, 'approved')}>
-                            {t.leaveRequests.approve}
-                          </button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => reviewRequest(r.id, 'rejected')}>
-                            {t.leaveRequests.reject}
-                          </button>
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="icon-btn" title={t.leaveRequests.editItem} onClick={() => openEdit(r)}>
+                          <IconEdit />
+                        </button>
+                        <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(r.id)}>
+                          <IconTrash />
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>
               ))}
               {requests.length === 0 && (
                 <tr>
-                  <td colSpan={isManager ? 6 : 5}>
+                  <td colSpan={isManager ? 8 : 7}>
                     <div className="empty-state">{t.leaveRequests.empty}</div>
                   </td>
                 </tr>
@@ -312,14 +304,70 @@ export default function LeaveRequestsPage() {
         </div>
       </div>
 
+      <div className="card">
+        <div className="card-head">
+          <h2>{t.leaveRequests.calendarTitle}</h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeYear(-1)}>
+              {t.leaveRequests.prevMonth}
+            </button>
+            <span style={{ alignSelf: 'center', fontWeight: 700, fontSize: 13 }}>{calYear}</span>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeYear(1)}>
+              {t.leaveRequests.nextMonth}
+            </button>
+          </div>
+        </div>
+        <div className="card-body">
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12 }}>
+            {(['annual_leave', 'sick_leave', 'permission'] as const).map((ty) => (
+              <div key={ty} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: TYPE_COLOR[ty], display: 'inline-block' }} />
+                {typeLabel(ty)}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            {MONTHS.map((month) => {
+              const { cells, dayMap } = monthGrid(month);
+              return (
+                <div key={month} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 8 }}>
+                  <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 6, textAlign: 'center' }}>
+                    {monthFormatter.format(new Date(calYear, month - 1, 1))} {calYear}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+                    {cells.map((day, i) => (
+                      <div
+                        key={i}
+                        title={(dayMap[day || 0] || []).map((lr) => `${lr.employee_name} — ${typeLabel(lr.type)}`).join('\n')}
+                        style={{
+                          minHeight: 20,
+                          borderRadius: 3,
+                          fontSize: 9,
+                          textAlign: 'center',
+                          padding: 1,
+                          background: day && (dayMap[day] || []).length > 0 ? TYPE_COLOR[dayMap[day][0].type] || '#999' : 'transparent',
+                          color: day && (dayMap[day] || []).length > 0 ? '#fff' : 'var(--muted)',
+                        }}
+                      >
+                        {day || ''}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {open && (
         <Modal
-          title={t.leaveRequests.newItem}
+          title={editingId ? t.leaveRequests.editItem : t.leaveRequests.newItem}
           onClose={() => setOpen(false)}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="leave-form" disabled={loading}>
-                {loading ? t.common.loading : t.common.save}
+                {loading ? t.common.loading : editingId ? t.leaveRequests.saveEdit : t.common.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
                 {t.common.cancel}
@@ -328,6 +376,14 @@ export default function LeaveRequestsPage() {
           }
         >
           <form id="leave-form" onSubmit={handleSubmit} className="field-grid">
+            <div className="field">
+              <label>{t.leaveRequests.type}</label>
+              <select value={type} onChange={(e) => setType(e.target.value)}>
+                <option value="annual_leave">{t.leaveRequests.typeAnnual}</option>
+                <option value="sick_leave">{t.leaveRequests.typeSick}</option>
+                <option value="permission">{t.leaveRequests.typePermission}</option>
+              </select>
+            </div>
             <div className="field">
               <label>{t.leaveRequests.employee}</label>
               <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required>
@@ -339,28 +395,36 @@ export default function LeaveRequestsPage() {
                 ))}
               </select>
             </div>
-            <div className="field">
-              <label>{t.leaveRequests.type}</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="annual_leave">{t.leaveRequests.typeAnnual}</option>
-                <option value="sick_leave">{t.leaveRequests.typeSick}</option>
-                <option value="permission">{t.leaveRequests.typePermission}</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>{t.leaveRequests.startDate}</label>
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
-            </div>
-            {type !== 'permission' ? (
+            {editingId && (
               <div className="field">
-                <label>{t.leaveRequests.endDate}</label>
-                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                <label>{t.leaveRequests.status}</label>
+                <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="pending">{t.leaveRequests.statusPending}</option>
+                  <option value="approved">{t.leaveRequests.statusApproved}</option>
+                  <option value="rejected">{t.leaveRequests.statusRejected}</option>
+                </select>
               </div>
+            )}
+            {type !== 'permission' ? (
+              <>
+                <div className="field">
+                  <label>{t.leaveRequests.startDate}</label>
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+                </div>
+                <div className="field">
+                  <label>{t.leaveRequests.endDate}</label>
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                </div>
+              </>
             ) : (
               <>
                 <div className="field">
                   <label>{t.leaveRequests.startTime}</label>
                   <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>{t.leaveRequests.startDate}</label>
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
                 </div>
                 <div className="field">
                   <label>{t.leaveRequests.endTime}</label>
@@ -372,7 +436,13 @@ export default function LeaveRequestsPage() {
               <label>{t.leaveRequests.reason}</label>
               <textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
             </div>
-            <div className="field">
+            {editingId && (
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>{t.leaveRequests.managerNote}</label>
+                <textarea rows={2} value={managerNote} onChange={(e) => setManagerNote(e.target.value)} />
+              </div>
+            )}
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>{t.leaveRequests.attachment}</label>
               <input type="file" onChange={(e) => handleAttachmentChange(e.target.files?.[0])} />
             </div>

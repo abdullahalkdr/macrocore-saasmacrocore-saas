@@ -1,12 +1,12 @@
 import { FormEvent, Fragment, useEffect, useState } from 'react';
-import { get, post, ApiError } from '../api/client';
+import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import StatCard from '../components/StatCard';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
 interface PayrollRecord {
   id: string;
@@ -20,6 +20,7 @@ interface PayrollRecord {
   hours_worked: number | null;
   attendance_deduction: number;
   total_paid: number;
+  status?: 'pending' | 'paid';
   paid_date: string | null;
 }
 interface Employee {
@@ -56,9 +57,13 @@ function todayStr() {
 export default function PayrollPage() {
   const t = useT();
   const company = useAuthStore((s) => s.company);
+  const user = useAuthStore((s) => s.user);
+  const isManager = user?.role === 'admin' || user?.role === 'manager';
   const [items, setItems] = useState<PayrollRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editStatus, setEditStatus] = useState<'pending' | 'paid'>('pending');
   const [employeeId, setEmployeeId] = useState('');
   const [monthYear, setMonthYear] = useState(monthStr());
   const [paidDate, setPaidDate] = useState(todayStr());
@@ -169,6 +174,39 @@ export default function PayrollPage() {
     setAdjustments((a) => a.filter((_, idx) => idx !== i));
   }
 
+  function openCreate() {
+    setEditingId(null);
+    setEmployeeId('');
+    setMonthYear(monthStr());
+    setPaidDate(todayStr());
+    setBonus('');
+    setDeductions('');
+    setFinalAmount('');
+    setAdjustments([]);
+    setEditStatus('pending');
+    setOpen(true);
+  }
+
+  async function openEdit(p: PayrollRecord) {
+    setError(null);
+    setEditingId(p.id);
+    setEmployeeId(p.employee_id);
+    setMonthYear(p.month_year);
+    setPaidDate(p.paid_date ? p.paid_date.slice(0, 10) : '');
+    setBonus(String(p.attendance_bonus || 0));
+    setDeductions(String(p.other_deductions || 0));
+    setFinalAmount(String(p.total_paid));
+    setEditStatus(p.paid_date ? 'paid' : 'pending');
+    setAdjustments([]);
+    setOpen(true);
+    try {
+      const detail = await get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${p.id}`);
+      setAdjustments(detail.adjustments.map((a) => ({ type: a.type, label: a.label, amount: String(a.amount) })));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.payroll.loadFailed);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -178,24 +216,36 @@ export default function PayrollPage() {
         .filter((a) => a.label.trim() && a.amount)
         .map((a) => ({ type: a.type, label: a.label.trim(), amount: Number(a.amount) }));
 
-      await post('/payroll', {
-        employee_id: employeeId,
-        month_year: monthYear,
-        paid_date: paidDate || undefined,
-        attendance_bonus: bonus ? Number(bonus) : undefined,
-        other_deductions: deductions ? Number(deductions) : undefined,
-        adjustments: validAdjustments,
-        total_paid_override: finalAmount ? Number(finalAmount) : undefined,
-      });
+      if (editingId) {
+        await patch(`/payroll/${editingId}`, {
+          attendance_bonus: bonus ? Number(bonus) : 0,
+          other_deductions: deductions ? Number(deductions) : 0,
+          adjustments: validAdjustments,
+          paid_date: editStatus === 'paid' ? paidDate || todayStr() : null,
+          status: editStatus,
+          total_paid_override: finalAmount ? Number(finalAmount) : undefined,
+        });
+      } else {
+        await post('/payroll', {
+          employee_id: employeeId,
+          month_year: monthYear,
+          paid_date: paidDate || undefined,
+          attendance_bonus: bonus ? Number(bonus) : undefined,
+          other_deductions: deductions ? Number(deductions) : undefined,
+          adjustments: validAdjustments,
+          total_paid_override: finalAmount ? Number(finalAmount) : undefined,
+        });
+      }
       setBonus('');
       setDeductions('');
       setFinalAmount('');
       setPaidDate(todayStr());
       setAdjustments([]);
+      setEditingId(null);
       setOpen(false);
       load(filterMonth || undefined);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.payroll.saveFailed);
+      setError(err instanceof ApiError ? err.message : editingId ? t.payroll.updateFailed : t.payroll.saveFailed);
     } finally {
       setLoading(false);
     }
@@ -211,6 +261,17 @@ export default function PayrollPage() {
     }
   }
 
+  async function handleDelete(id: string) {
+    if (!confirm(t.payroll.deleteConfirm)) return;
+    setError(null);
+    try {
+      await del(`/payroll/${id}`);
+      load(filterMonth || undefined);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.payroll.deleteFailed);
+    }
+  }
+
   return (
     <div>
       <PageHeader title={t.payroll.title} subtitle={t.payroll.subtitle} />
@@ -218,7 +279,7 @@ export default function PayrollPage() {
 
       <div className="section-title-row">
         <span className="muted">{t.payroll.count(visibleItems.length)}</span>
-        <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
+        <button className="btn btn-primary btn-sm" onClick={openCreate}>
           <IconPlus /> {t.payroll.newItem}
         </button>
       </div>
@@ -283,6 +344,16 @@ export default function PayrollPage() {
                         <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); markPaid(p.id); }}>
                           {t.payroll.markPaid}
                         </button>
+                      )}{' '}
+                      {isManager && (
+                        <>
+                          <button className="icon-btn" title={t.payroll.editItem} onClick={(e) => { e.stopPropagation(); openEdit(p); }}>
+                            <IconEdit />
+                          </button>
+                          <button className="icon-btn" title={t.common.delete} onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}>
+                            <IconTrash />
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -320,14 +391,24 @@ export default function PayrollPage() {
 
       {open && (
         <Modal
-          title={t.payroll.newItem}
-          onClose={() => setOpen(false)}
+          title={editingId ? t.payroll.editItem : t.payroll.newItem}
+          onClose={() => {
+            setOpen(false);
+            setEditingId(null);
+          }}
           actions={
             <>
               <button className="btn btn-primary" type="submit" form="payroll-form" disabled={loading}>
-                {loading ? t.common.loading : t.payroll.generate}
+                {loading ? t.common.loading : editingId ? t.common.save : t.payroll.generate}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setEditingId(null);
+                }}
+              >
                 {t.common.cancel}
               </button>
             </>
@@ -336,11 +417,11 @@ export default function PayrollPage() {
           <form id="payroll-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.payroll.month}</label>
-              <input type="month" value={monthYear} onChange={(e) => setMonthYear(e.target.value)} required />
+              <input type="month" value={monthYear} onChange={(e) => setMonthYear(e.target.value)} required disabled={!!editingId} />
             </div>
             <div className="field">
               <label>{t.payroll.employee}</label>
-              <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required>
+              <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required disabled={!!editingId}>
                 <option value="">{t.payroll.selectEmployee}</option>
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>
@@ -349,13 +430,22 @@ export default function PayrollPage() {
                 ))}
               </select>
             </div>
+            {editingId ? (
+              <div className="field">
+                <label>{t.payroll.status}</label>
+                <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as 'pending' | 'paid')}>
+                  <option value="pending">{t.payroll.unpaid}</option>
+                  <option value="paid">{t.payroll.paid}</option>
+                </select>
+              </div>
+            ) : null}
             <div className="field">
               <label>{t.payroll.paidDate}</label>
-              <input type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} />
+              <input type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} disabled={!!editingId && editStatus !== 'paid'} />
             </div>
           </form>
           <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            {t.payroll.paidDateHint}
+            {editingId ? t.payroll.editLockedNote : t.payroll.paidDateHint}
           </p>
 
           {selectedEmployee && (

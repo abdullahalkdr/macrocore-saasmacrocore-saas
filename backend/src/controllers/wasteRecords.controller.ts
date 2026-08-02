@@ -91,3 +91,68 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
   res.status(201).json({ success: true, waste_record: wasteRecord });
 });
+
+// Admin/manager only (see routes). Deliberately does NOT let product_id/shift_id
+// change, and does NOT touch raw_material_batches — the FIFO consumption from
+// create() isn't persisted at the batch level (only the resulting weighted avg
+// cost_of_goods is stored), so there's nothing to reverse/redo safely against the
+// right batches. Only qty (a mistyped amount) and the photo are correctable here;
+// cost_of_goods scales linearly with the qty change so reports stay consistent.
+// If the product/shift was wrong, delete this entry and record a new one instead.
+export const update = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+  const { qty, image_base64 } = req.body ?? {};
+
+  const existing = await pool.query('SELECT id, qty, cost_of_goods FROM waste_records WHERE id = $1 AND company_id = $2', [id, companyId]);
+  if (!existing.rows[0]) throw new AppError(404, 'Waste record not found');
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+
+  if (qty !== undefined) {
+    if (typeof qty !== 'number' || qty <= 0) throw new AppError(400, 'qty must be a positive number');
+    const oldQty = Number(existing.rows[0].qty) || 0;
+    const oldCost = Number(existing.rows[0].cost_of_goods) || 0;
+    const newCost = oldQty > 0 ? (oldCost / oldQty) * qty : oldCost;
+    sets.push(`qty = $${i++}`);
+    values.push(qty);
+    sets.push(`cost_of_goods = $${i++}`);
+    values.push(newCost);
+  }
+  if (image_base64 !== undefined) {
+    sets.push(`image_base64 = $${i++}`);
+    values.push(image_base64);
+  }
+
+  if (sets.length === 0) throw new AppError(400, 'No updatable fields provided');
+
+  values.push(id, companyId);
+  const result = await pool.query(
+    `UPDATE waste_records SET ${sets.join(', ')} WHERE id = $${i++} AND company_id = $${i++}
+     RETURNING id, shift_id, product_id, qty, created_at, cost_of_goods`,
+    values
+  );
+  const wasteRecord = result.rows[0];
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'waste_updated', entityType: 'waste_records', entityId: id as string, req });
+
+  res.status(200).json({ success: true, waste_record: wasteRecord });
+});
+
+// Admin/manager only. Does not restore raw_material_batches (see update() comment
+// above) — deleting corrects the record of the event, it doesn't un-waste the
+// physical goods, which is the more common real-world reason for a delete here
+// (duplicate entry, wrong shift, etc.).
+export const remove = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+
+  const result = await pool.query('DELETE FROM waste_records WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
+  if (result.rows.length === 0) throw new AppError(404, 'Waste record not found');
+
+  await logAudit({ companyId, userId: req.auth!.userId, action: 'waste_deleted', entityType: 'waste_records', entityId: id as string, req });
+
+  res.status(200).json({ success: true });
+});

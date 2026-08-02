@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, post, ApiError } from '../api/client';
+import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useAuthStore } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
 interface Product {
   id: string;
@@ -76,9 +77,12 @@ export default function ProductsPage() {
     dessert: t.products.categoryDessert,
     other: t.products.categoryOther,
   };
+  const user = useAuthStore((s) => s.user);
+  const isManager = user?.role === 'admin' || user?.role === 'manager';
   const [products, setProducts] = useState<Product[]>([]);
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [nameEn, setNameEn] = useState('');
   const [category, setCategory] = useState('');
@@ -147,6 +151,61 @@ export default function ProductsPage() {
     setSizeRows([]);
   }
 
+  function openCreate() {
+    resetForm();
+    setEditingId(null);
+    setOpen(true);
+  }
+
+  async function openEdit(p: Product) {
+    setError(null);
+    setEditingId(p.id);
+    setName(p.name);
+    setNameEn(p.name_en || '');
+    setCategory(p.category || '');
+    setSellPrice(p.sell_price !== null ? String(p.sell_price) : '');
+    setHasSizes(p.has_sizes);
+    setIngredientRows([]);
+    setSizeRows([]);
+    setOpen(true);
+    try {
+      const detail = await get<{
+        product: Product;
+        ingredients?: { raw_material_id: string; usage_qty: number; usage_unit: string | null }[];
+        sizes?: {
+          name: string;
+          name_en: string | null;
+          sell_price: number | null;
+          ingredients: { raw_material_id: string; usage_qty: number; usage_unit: string | null }[];
+        }[];
+      }>(`/products/${p.id}`);
+      if (detail.sizes) {
+        setSizeRows(
+          detail.sizes.map((s) => ({
+            name: s.name,
+            name_en: s.name_en || '',
+            sell_price: s.sell_price !== null ? String(s.sell_price) : '',
+            ingredients: s.ingredients.map((ing) => ({
+              raw_material_id: ing.raw_material_id,
+              usage_qty: String(ing.usage_qty),
+              usage_unit: ing.usage_unit || 'g',
+            })),
+          }))
+        );
+      } else if (detail.ingredients) {
+        setIngredientRows(
+          detail.ingredients.map((ing) => ({
+            raw_material_id: ing.raw_material_id,
+            usage_qty: String(ing.usage_qty),
+            usage_unit: ing.usage_unit || 'g',
+          }))
+        );
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.products.loadFailed);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -157,37 +216,54 @@ export default function ProductsPage() {
           .filter((r) => r.raw_material_id && r.usage_qty)
           .map((r) => ({ raw_material_id: r.raw_material_id, usage_qty: Number(r.usage_qty), usage_unit: r.usage_unit }));
 
-      if (hasSizes) {
-        await post('/products', {
-          name,
-          name_en: nameEn || undefined,
-          category: category || undefined,
-          has_sizes: true,
-          sizes: sizeRows
-            .filter((s) => s.name.trim())
-            .map((s) => ({
-              name: s.name.trim(),
-              name_en: s.name_en.trim() || undefined,
-              sell_price: s.sell_price ? Number(s.sell_price) : undefined,
-              ingredients: toIngredientPayload(s.ingredients),
-            })),
-        });
+      const payload = hasSizes
+        ? {
+            name,
+            name_en: nameEn || undefined,
+            category: category || undefined,
+            has_sizes: true,
+            sizes: sizeRows
+              .filter((s) => s.name.trim())
+              .map((s) => ({
+                name: s.name.trim(),
+                name_en: s.name_en.trim() || undefined,
+                sell_price: s.sell_price ? Number(s.sell_price) : undefined,
+                ingredients: toIngredientPayload(s.ingredients),
+              })),
+          }
+        : {
+            name,
+            name_en: nameEn || undefined,
+            category: category || undefined,
+            has_sizes: false,
+            sell_price: sellPrice ? Number(sellPrice) : undefined,
+            ingredients: toIngredientPayload(ingredientRows),
+          };
+
+      if (editingId) {
+        await patch(`/products/${editingId}`, payload);
       } else {
-        await post('/products', {
-          name,
-          name_en: nameEn || undefined,
-          category: category || undefined,
-          sell_price: sellPrice ? Number(sellPrice) : undefined,
-          ingredients: toIngredientPayload(ingredientRows),
-        });
+        await post('/products', payload);
       }
       resetForm();
+      setEditingId(null);
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.products.saveFailed);
+      setError(err instanceof ApiError ? err.message : editingId ? t.products.updateFailed : t.products.saveFailed);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm(t.products.deleteConfirm)) return;
+    setError(null);
+    try {
+      await del(`/products/${id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.products.deleteFailed);
     }
   }
 
@@ -252,7 +328,7 @@ export default function ProductsPage() {
 
       <div className="section-title-row">
         <span className="muted">{t.products.count(products.length)}</span>
-        <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
+        <button className="btn btn-primary btn-sm" onClick={openCreate}>
           <IconPlus /> {t.products.newItem}
         </button>
       </div>
@@ -266,6 +342,7 @@ export default function ProductsPage() {
                 <th>{t.products.category}</th>
                 <th className="num">{t.products.sellPrice}</th>
                 <th>{t.products.status}</th>
+                {isManager && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -284,11 +361,21 @@ export default function ProductsPage() {
                   <td>{p.category ? PRODUCT_CATEGORY_LABELS[p.category] || p.category : '—'}</td>
                   <td className="num">{p.has_sizes ? t.products.multiplePrices : p.sell_price !== null ? `${Number(p.sell_price).toFixed(3)} KD` : '—'}</td>
                   <td>{p.status === 'active' ? <Tag color="green">{t.common.active}</Tag> : <Tag color="gray">{p.status}</Tag>}</td>
+                  {isManager && (
+                    <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                      <button className="icon-btn" title={t.products.editItem} onClick={() => openEdit(p)}>
+                        <IconEdit />
+                      </button>
+                      <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(p.id)}>
+                        <IconTrash />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {products.length === 0 && (
                 <tr>
-                  <td colSpan={4}>
+                  <td colSpan={isManager ? 5 : 4}>
                     <div className="empty-state">{t.products.empty}</div>
                   </td>
                 </tr>
@@ -371,9 +458,10 @@ export default function ProductsPage() {
 
       {open && (
         <Modal
-          title={t.products.newItem}
+          title={editingId ? t.products.editItem : t.products.newItem}
           onClose={() => {
             setOpen(false);
+            setEditingId(null);
             resetForm();
           }}
           actions={
@@ -386,6 +474,7 @@ export default function ProductsPage() {
                 type="button"
                 onClick={() => {
                   setOpen(false);
+                  setEditingId(null);
                   resetForm();
                 }}
               >
