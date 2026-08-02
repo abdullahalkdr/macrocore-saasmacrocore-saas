@@ -279,6 +279,7 @@ CREATE TABLE shifts (
   opened_at TIMESTAMP,
   closed_at TIMESTAMP,
   status VARCHAR(20) DEFAULT 'open',
+  closing_notes TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -306,6 +307,7 @@ CREATE TABLE shift_assignments (
   product_size_id UUID REFERENCES product_sizes(id),
   assigned_qty DECIMAL(10, 3),
   remaining_qty DECIMAL(10, 3),
+  actual_remaining_qty DECIMAL(10, 3),
   created_at TIMESTAMP DEFAULT NOW()
 );
 
