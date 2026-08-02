@@ -5,7 +5,7 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import Avatar from '../components/Avatar';
-import { IconPlus, IconTrash } from '../components/Icon';
+import { IconPlus, IconTrash, IconEdit } from '../components/Icon';
 
 interface Certificate {
   name: string;
@@ -352,60 +352,76 @@ export default function EmployeesPage() {
                 <th></th>
                 <th>{t.employees.name}</th>
                 <th>{t.employees.jobRole}</th>
-                <th>{t.employees.wageType}</th>
-                <th className="num">{t.employees.salary}</th>
+                <th>{t.employees.location}</th>
+                <th className="num">{t.employees.baseSalaryCol}</th>
+                <th className="num">{t.employees.allowanceCol}</th>
+                <th className="num">{t.employees.totalMonthlyCol}</th>
                 <th>{t.employees.status}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {employees.map((e) => (
-                <tr key={e.id} onClick={() => openEdit(e)} style={{ cursor: 'pointer' }}>
-                  <td>
-                    {e.photo_base64 ? (
-                      <img src={e.photo_base64} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
-                    ) : (
-                      <Avatar name={e.name} />
-                    )}
-                  </td>
-                  <td style={{ fontWeight: 700 }}>
-                    {e.name}
-                    {e.age !== null && <span className="muted" style={{ fontWeight: 400 }}> ({e.age})</span>}
-                    {hasExpiryWarning(e) && (
-                      <>
-                        {' '}
-                        <Tag color="amber">{t.employees.expiringBadge}</Tag>
-                      </>
-                    )}
-                  </td>
-                  <td>{e.job_role || '—'}</td>
-                  <td>{e.wage_type === 'hourly' ? t.employees.hourly : t.employees.monthly}</td>
-                  <td className="num">
-                    {e.wage_type === 'hourly'
-                      ? e.hourly_rate !== null
-                        ? t.employees.hourlyRateShort(Number(e.hourly_rate).toFixed(3))
-                        : '—'
-                      : e.salary_monthly !== null
-                        ? `${Number(e.salary_monthly).toFixed(3)} KD`
-                        : '—'}
-                  </td>
-                  <td>
-                    {e.status === 'active' ? (
-                      <Tag color="green">{t.common.active}</Tag>
-                    ) : (
-                      <Tag color="gray">{e.status === 'inactive' ? t.employees.statusInactive : e.status}</Tag>
-                    )}
-                  </td>
-                  <td onClick={(ev) => ev.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
-                    <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(e.id)}>
-                      <IconTrash />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {employees.map((e) => {
+                const allowanceTotal = (e.allowances || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+                const baseDisplay =
+                  e.wage_type === 'hourly'
+                    ? e.hourly_rate !== null
+                      ? t.employees.hourlyRateShort(Number(e.hourly_rate).toFixed(3))
+                      : '—'
+                    : e.salary_monthly !== null
+                      ? `${Number(e.salary_monthly).toFixed(3)} KD`
+                      : '—';
+                const totalDisplay =
+                  e.wage_type === 'monthly' && e.salary_monthly !== null
+                    ? `${(Number(e.salary_monthly) + allowanceTotal).toFixed(3)} KD`
+                    : '—';
+                return (
+                  <tr key={e.id} onClick={() => openEdit(e)} style={{ cursor: 'pointer' }}>
+                    <td>
+                      {e.photo_base64 ? (
+                        <img src={e.photo_base64} alt="" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
+                      ) : (
+                        <Avatar name={e.name} />
+                      )}
+                    </td>
+                    <td style={{ fontWeight: 700 }}>
+                      {e.name}
+                      {e.age !== null && <span className="muted" style={{ fontWeight: 400 }}> ({e.age})</span>}
+                      {hasExpiryWarning(e) && (
+                        <>
+                          {' '}
+                          <Tag color="amber">{t.employees.expiringBadge}</Tag>
+                        </>
+                      )}
+                    </td>
+                    <td>{e.job_role || '—'}</td>
+                    <td>{e.location_name || '—'}</td>
+                    <td className="num">{baseDisplay}</td>
+                    <td className="num">{allowanceTotal > 0 ? `${allowanceTotal.toFixed(3)} KD` : '—'}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>
+                      {totalDisplay}
+                    </td>
+                    <td>
+                      {e.status === 'active' ? (
+                        <Tag color="green">{t.common.active}</Tag>
+                      ) : (
+                        <Tag color="gray">{e.status === 'inactive' ? t.employees.statusInactive : e.status}</Tag>
+                      )}
+                    </td>
+                    <td onClick={(ev) => ev.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+                      <button className="icon-btn" title={t.employees.newItem} onClick={() => openEdit(e)}>
+                        <IconEdit />
+                      </button>
+                      <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(e.id)}>
+                        <IconTrash />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
               {employees.length === 0 && (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <div className="empty-state">{t.employees.empty}</div>
                   </td>
                 </tr>

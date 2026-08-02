@@ -189,6 +189,17 @@ export default function LeaveRequestsPage() {
     }
   }
 
+  async function handleQuickStatus(id: string, newStatus: 'approved' | 'rejected') {
+    setError(null);
+    try {
+      await patch(`/leave-requests/${id}`, { status: newStatus });
+      loadRequests();
+      loadCalendarYear(calYear);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.leaveRequests.saveFailed);
+    }
+  }
+
   function typeLabel(ty: string) {
     if (ty === 'annual_leave') return t.leaveRequests.typeAnnual;
     if (ty === 'sick_leave') return t.leaveRequests.typeSick;
@@ -280,7 +291,17 @@ export default function LeaveRequestsPage() {
                   <td>{statusTag(r.status)}</td>
                   {isManager && (
                     <td>
-                      <div style={{ display: 'flex', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {r.status === 'pending' && (
+                          <>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleQuickStatus(r.id, 'approved')}>
+                              {t.leaveRequests.approve}
+                            </button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => handleQuickStatus(r.id, 'rejected')}>
+                              {t.leaveRequests.reject}
+                            </button>
+                          </>
+                        )}
                         <button className="icon-btn" title={t.leaveRequests.editItem} onClick={() => openEdit(r)}>
                           <IconEdit />
                         </button>
