@@ -1,6 +1,52 @@
 import { Request, Response } from 'express';
 import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
+import { AppError } from '../middleware/errorHandler';
+
+const PLAN_VALUES = ['trial', 'basic', 'pro', 'enterprise'];
+const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
+
+// Every tenant, for the platform-admin dashboard's companies table. No payment
+// gateway is wired up yet (see docs/MIGRATION_029_subscription_enforcement.sql), so
+// until one is chosen, this is also the only way to actually turn a signup into a
+// paying, unblocked account — updateCompany below does that manually.
+export const listCompanies = asyncHandler(async (_req: Request, res: Response) => {
+  const result = await pool.query(
+    `SELECT id, name, industry, country, employee_count_range, plan, subscription_status,
+            trial_start_date, trial_end_date, created_at
+     FROM companies ORDER BY created_at DESC`
+  );
+  res.status(200).json({ success: true, companies: result.rows });
+});
+
+export const updateCompany = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { plan, subscription_status, trial_end_date } = req.body ?? {};
+
+  if (plan !== undefined && !PLAN_VALUES.includes(plan)) {
+    throw new AppError(400, `plan must be one of: ${PLAN_VALUES.join(', ')}`);
+  }
+  if (subscription_status !== undefined && !STATUS_VALUES.includes(subscription_status)) {
+    throw new AppError(400, `subscription_status must be one of: ${STATUS_VALUES.join(', ')}`);
+  }
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  if (plan !== undefined) { sets.push(`plan = $${i++}`); values.push(plan); }
+  if (subscription_status !== undefined) { sets.push(`subscription_status = $${i++}`); values.push(subscription_status); }
+  if (trial_end_date !== undefined) { sets.push(`trial_end_date = $${i++}`); values.push(trial_end_date); }
+  if (sets.length === 0) throw new AppError(400, 'Nothing to update');
+
+  values.push(id);
+  const result = await pool.query(
+    `UPDATE companies SET ${sets.join(', ')} WHERE id = $${i} RETURNING id, name, plan, subscription_status, trial_end_date`,
+    values
+  );
+  if (!result.rows[0]) throw new AppError(404, 'Company not found');
+
+  res.status(200).json({ success: true, company: result.rows[0] });
+});
 
 export const listSubscriptions = asyncHandler(async (_req: Request, res: Response) => {
   const result = await pool.query(

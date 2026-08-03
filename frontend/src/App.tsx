@@ -4,6 +4,8 @@ import { useLangStore, isRTL } from './store/langStore';
 import { useThemeStore } from './store/themeStore';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import SubscriptionExpiredPage from './pages/SubscriptionExpiredPage';
+import PlatformAdminPage from './pages/PlatformAdminPage';
 import DashboardPage from './pages/DashboardPage';
 import ProductsPage from './pages/ProductsPage';
 import EmployeesPage from './pages/EmployeesPage';
@@ -56,6 +58,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
+        <Route path="/platform-admin" element={<PlatformAdminPage />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/dashboard" element={<DashboardPage />} />

@@ -2,6 +2,18 @@ import { useLangStore } from './store/langStore';
 
 const en = {
   brand: 'macrocore.io',
+  subscriptionExpired: {
+    title: 'Subscription inactive',
+    trialMessage: 'Your free trial has ended.',
+    inactiveMessage: 'Your subscription is not active.',
+    body: 'Renew to keep using macrocore — your data is safe and waiting for you.',
+    plan: 'Plan',
+    status: 'Status',
+    contactUs: 'Contact us to renew',
+    openSupportTicket: 'Open a support ticket',
+    logout: 'Log out',
+    loadFailed: 'Failed to load your account status',
+  },
   common: {
     save: 'Save',
     cancel: 'Cancel',
@@ -1162,6 +1174,18 @@ const en = {
 
 const ar: typeof en = {
   brand: 'macrocore.io',
+  subscriptionExpired: {
+    title: 'الاشتراك غير مفعّل',
+    trialMessage: 'انتهت فترتك التجريبية المجانية.',
+    inactiveMessage: 'اشتراكك غير مفعّل حالياً.',
+    body: 'جدّد الاشتراك عشان تكمل استخدام macrocore — بياناتك محفوظة وبانتظارك.',
+    plan: 'الباقة',
+    status: 'الحالة',
+    contactUs: 'تواصل معنا للتجديد',
+    openSupportTicket: 'افتح تذكرة دعم',
+    logout: 'تسجيل خروج',
+    loadFailed: 'فشل تحميل حالة حسابك',
+  },
   common: {
     save: 'حفظ',
     cancel: 'إلغاء',

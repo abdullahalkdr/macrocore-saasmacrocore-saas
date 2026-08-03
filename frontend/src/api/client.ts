@@ -1,10 +1,15 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+// Exported for PlatformAdminPage, which authenticates with X-Admin-Key instead of a
+// per-company JWT and so can't go through request() below (it always attaches the
+// tenant Bearer token from authStore).
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -40,6 +45,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const message = (data as { error?: string } | null)?.error || `Request failed (${res.status})`;
+    const code = (data as { code?: string } | null)?.code;
     // A 401 here always means the JWT is missing/expired/invalid (see backend
     // middleware/auth.ts) — the token in localStorage is now dead weight. Clear it
     // and bounce to /login instead of leaving every page showing a raw "Invalid or
@@ -54,7 +60,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         window.location.href = '/login?expired=1';
       }
     }
-    throw new ApiError(res.status, message);
+    // 402 + SUBSCRIPTION_INACTIVE (see backend/src/middleware/subscription.ts) — unlike
+    // 401, the token stays valid, so don't clear it; just bounce to the renewal page
+    // instead of leaving every page showing a raw "subscription is inactive" banner.
+    if (res.status === 402 && code === 'SUBSCRIPTION_INACTIVE' && typeof window !== 'undefined') {
+      if (window.location.pathname !== '/subscription-expired') {
+        window.location.href = '/subscription-expired';
+      }
+    }
+    throw new ApiError(res.status, message, code);
   }
   return data as T;
 }

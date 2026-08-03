@@ -2,15 +2,21 @@ import { Request, Response, NextFunction } from 'express';
 
 export class AppError extends Error {
   statusCode: number;
-  constructor(statusCode: number, message: string) {
+  // Optional machine-readable code for cases where the frontend needs to react
+  // differently than "show the message" — e.g. SUBSCRIPTION_INACTIVE triggers a
+  // redirect to the renewal page instead of a normal error banner (see
+  // middleware/subscription.ts and frontend/src/api/client.ts).
+  code?: string;
+  constructor(statusCode: number, message: string, code?: string) {
     super(message);
     this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
 export function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof AppError) {
-    res.status(err.statusCode).json({ error: err.message });
+    res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
     return;
   }
   // Postgres 22P02 = invalid_text_representation — almost always a malformed UUID
