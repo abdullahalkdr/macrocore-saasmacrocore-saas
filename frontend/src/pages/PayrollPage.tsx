@@ -523,7 +523,7 @@ export default function PayrollPage() {
                 />
               </div>
               <button className="icon-btn" type="button" onClick={() => removeAdjustment(i)} style={{ alignSelf: 'center' }}>
-                ×
+                <IconTrash />
               </button>
             </div>
           ))}

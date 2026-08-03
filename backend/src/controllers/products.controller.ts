@@ -467,7 +467,10 @@ export const costPreview = asyncHandler(async (req: Request, res: Response) => {
 
   const client = await pool.connect();
   try {
-    let rawCost = 0;
+    // item_costs mirrors ingredientList 1:1 (0 for a raw_material_id that no longer
+    // exists) so the frontend can show a live per-row price next to each ingredient,
+    // not just the product-level total — matches the CornLab reference layout.
+    const itemCosts: number[] = [];
     if (ingredientList.length > 0) {
       const ids = ingredientList.map((ing) => ing.raw_material_id);
       const materials = await pool.query(
@@ -475,17 +478,25 @@ export const costPreview = asyncHandler(async (req: Request, res: Response) => {
         [companyId, ids]
       );
       const materialsById = new Map(materials.rows.map((m) => [m.id, m]));
-      const rows = ingredientList
-        .filter((ing) => materialsById.has(ing.raw_material_id))
-        .map((ing) => ({
-          raw_material_id: ing.raw_material_id,
-          usage_qty: ing.usage_qty,
-          usage_unit: ing.usage_unit ?? null,
-          package_qty: materialsById.get(ing.raw_material_id)!.package_qty,
-          package_unit: materialsById.get(ing.raw_material_id)!.package_unit,
-        }));
-      rawCost = await sumRawCostWithCurrentPrices(client, companyId, rows);
+      for (const ing of ingredientList) {
+        const material = materialsById.get(ing.raw_material_id);
+        if (!material) {
+          itemCosts.push(0);
+          continue;
+        }
+        const cost = await sumRawCostWithCurrentPrices(client, companyId, [
+          {
+            raw_material_id: ing.raw_material_id,
+            usage_qty: ing.usage_qty,
+            usage_unit: ing.usage_unit ?? null,
+            package_qty: material.package_qty,
+            package_unit: material.package_unit,
+          },
+        ]);
+        itemCosts.push(cost);
+      }
     }
+    const rawCost = itemCosts.reduce((sum, c) => sum + c, 0);
 
     const fullCost = rawCost + overheadPerOrder;
     const sellPrice: number | null = typeof sell_price === 'number' ? sell_price : null;
@@ -495,6 +506,7 @@ export const costPreview = asyncHandler(async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       raw_cost: rawCost,
+      item_costs: itemCosts,
       total_fixed_monthly: totalFixedMonthly,
       estimated_orders: estimatedOrders,
       overhead_per_order: overheadPerOrder,

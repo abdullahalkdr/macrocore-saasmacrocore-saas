@@ -616,7 +616,7 @@ export default function EmployeesPage() {
                   <input type="number" step="0.001" placeholder="KD" value={a.amount} onChange={(e) => updateAllowance(i, { amount: e.target.value })} />
                 </div>
                 <button className="icon-btn" type="button" onClick={() => removeAllowance(i)} style={{ alignSelf: 'center' }}>
-                  ×
+                  <IconTrash />
                 </button>
               </div>
             ))}
@@ -717,7 +717,7 @@ export default function EmployeesPage() {
                   <input type="file" onChange={(e) => handleCertificateFile(i, e.target.files?.[0])} />
                 </div>
                 <button className="icon-btn" type="button" onClick={() => removeCertificate(i)} style={{ alignSelf: 'center' }}>
-                  ×
+                  <IconTrash />
                 </button>
               </div>
             ))}

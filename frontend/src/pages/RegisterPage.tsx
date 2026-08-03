@@ -5,7 +5,7 @@ import { post, ApiError } from '../api/client';
 import { useAuthStore, AuthUser, AuthCompany } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
 import { useT } from '../i18n';
-import { IconBuilding } from '../components/Icon';
+import { IconBuilding, IconTrash } from '../components/Icon';
 
 interface RegisterResponse {
   success: boolean;
@@ -406,7 +406,7 @@ export default function RegisterPage() {
                       className="icon-btn"
                       onClick={() => setInvites(invites.filter((i) => i !== email))}
                     >
-                      ×
+                      <IconTrash />
                     </button>
                   </div>
                 ))}

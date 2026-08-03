@@ -37,6 +37,7 @@ interface SizeRow {
 }
 interface CostPreview {
   raw_cost: number;
+  item_costs: number[];
   overhead_per_order: number;
   full_cost: number;
   sell_price: number | null;
@@ -87,12 +88,44 @@ function combineIngredients(food: IngredientRow[], packaging: IngredientRow[]): 
   return [...toPayload(food, false), ...toPayload(packaging, true)];
 }
 
-const PRODUCT_CATEGORY_VALUES = ['main', 'side', 'drink', 'dessert', 'other'] as const;
+// Same shape as combineIngredients, but keeps each row's original array index so a
+// per-row cost returned by /products/cost-preview (item_costs, same order as the
+// payload) can be mapped straight back onto the right row in the UI — including rows
+// the user hasn't finished filling in yet, which combineIngredients silently drops.
+function buildPreviewIngredients(food: IngredientRow[], packaging: IngredientRow[]) {
+  const foodIdx: number[] = [];
+  const packagingIdx: number[] = [];
+  const payload: IngredientPayloadItem[] = [];
+  food.forEach((r, i) => {
+    if (r.raw_material_id && r.usage_qty) {
+      foodIdx.push(i);
+      payload.push({ raw_material_id: r.raw_material_id, usage_qty: Number(r.usage_qty), usage_unit: r.usage_unit, is_packaging: false });
+    }
+  });
+  packaging.forEach((r, i) => {
+    if (r.raw_material_id && r.usage_qty) {
+      packagingIdx.push(i);
+      payload.push({ raw_material_id: r.raw_material_id, usage_qty: Number(r.usage_qty), usage_unit: r.usage_unit, is_packaging: true });
+    }
+  });
+  return { payload, foodIdx, packagingIdx };
+}
+
+const PRODUCT_CATEGORY_VALUES = ['cups_drinks', 'plates', 'snacks', 'desserts', 'addons'] as const;
+const CATEGORY_OTHER = 'other';
 
 export default function ProductsPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
   const PRODUCT_CATEGORY_LABELS: Record<string, string> = {
+    cups_drinks: t.products.categoryCupsDrinks,
+    plates: t.products.categoryPlates,
+    snacks: t.products.categorySnacks,
+    desserts: t.products.categoryDesserts,
+    addons: t.products.categoryAddons,
+    // legacy values from before the category list was aligned to the CornLab
+    // reference — kept only so old products still display a translated label
+    // instead of a raw slug.
     main: t.products.categoryMain,
     side: t.products.categorySide,
     drink: t.products.categoryDrink,
@@ -107,7 +140,8 @@ export default function ProductsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [nameEn, setNameEn] = useState('');
-  const [category, setCategory] = useState('');
+  const [categorySelect, setCategorySelect] = useState('');
+  const [categoryCustom, setCategoryCustom] = useState('');
   const [sellPrice, setSellPrice] = useState('');
   const [hasSizes, setHasSizes] = useState(false);
   const [ingredientRows, setIngredientRows] = useState<IngredientRow[]>([]);
@@ -117,6 +151,12 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(false);
   const [livePreview, setLivePreview] = useState<CostPreview | null>(null);
   const [sizePreviews, setSizePreviews] = useState<Record<number, CostPreview>>({});
+  const [ingredientCosts, setIngredientCosts] = useState<(number | null)[]>([]);
+  const [packagingCosts, setPackagingCosts] = useState<(number | null)[]>([]);
+  const [sizeIngredientCosts, setSizeIngredientCosts] = useState<Record<number, (number | null)[]>>({});
+  const [sizePackagingCosts, setSizePackagingCosts] = useState<Record<number, (number | null)[]>>({});
+  const ingredientMaterials = rawMaterials.filter((m) => m.category !== 'packaging');
+  const packagingMaterials = rawMaterials.filter((m) => m.category === 'packaging');
 
   const [costOpenId, setCostOpenId] = useState<string | null>(null);
   const [cost, setCost] = useState<CostBreakdown | null>(null);
@@ -193,7 +233,8 @@ export default function ProductsPage() {
   function resetForm() {
     setName('');
     setNameEn('');
-    setCategory('');
+    setCategorySelect('');
+    setCategoryCustom('');
     setSellPrice('');
     setHasSizes(false);
     setIngredientRows([]);
@@ -201,6 +242,10 @@ export default function ProductsPage() {
     setSizeRows([]);
     setLivePreview(null);
     setSizePreviews({});
+    setIngredientCosts([]);
+    setPackagingCosts([]);
+    setSizeIngredientCosts({});
+    setSizePackagingCosts({});
   }
 
   function openCreate() {
@@ -214,7 +259,14 @@ export default function ProductsPage() {
     setEditingId(p.id);
     setName(p.name);
     setNameEn(p.name_en || '');
-    setCategory(p.category || '');
+    const cat = p.category || '';
+    if (cat && !(PRODUCT_CATEGORY_VALUES as readonly string[]).includes(cat)) {
+      setCategorySelect(CATEGORY_OTHER);
+      setCategoryCustom(cat);
+    } else {
+      setCategorySelect(cat);
+      setCategoryCustom('');
+    }
     setSellPrice(p.sell_price !== null ? String(p.sell_price) : '');
     setHasSizes(p.has_sizes);
     setIngredientRows([]);
@@ -265,7 +317,7 @@ export default function ProductsPage() {
         ? {
             name,
             name_en: nameEn || undefined,
-            category: category || undefined,
+            category: categorySelect === CATEGORY_OTHER ? categoryCustom.trim() || undefined : categorySelect || undefined,
             has_sizes: true,
             sizes: sizeRows
               .filter((s) => s.name.trim())
@@ -279,7 +331,7 @@ export default function ProductsPage() {
         : {
             name,
             name_en: nameEn || undefined,
-            category: category || undefined,
+            category: categorySelect === CATEGORY_OTHER ? categoryCustom.trim() || undefined : categorySelect || undefined,
             has_sizes: false,
             sell_price: sellPrice ? Number(sellPrice) : undefined,
             ingredients: combineIngredients(ingredientRows, packagingRows),
@@ -325,10 +377,18 @@ export default function ProductsPage() {
   // (GET /:id/cost), just fed an unsaved ingredient list instead.
   useEffect(() => {
     if (!open || hasSizes) return;
-    const combined = combineIngredients(ingredientRows, packagingRows);
+    const { payload, foodIdx, packagingIdx } = buildPreviewIngredients(ingredientRows, packagingRows);
     const handle = setTimeout(() => {
-      post<CostPreview>('/products/cost-preview', { ingredients: combined, sell_price: sellPrice ? Number(sellPrice) : undefined })
-        .then(setLivePreview)
+      post<CostPreview>('/products/cost-preview', { ingredients: payload, sell_price: sellPrice ? Number(sellPrice) : undefined })
+        .then((res) => {
+          setLivePreview(res);
+          const fCosts: (number | null)[] = new Array(ingredientRows.length).fill(null);
+          const pCosts: (number | null)[] = new Array(packagingRows.length).fill(null);
+          foodIdx.forEach((origIdx, i) => { fCosts[origIdx] = res.item_costs[i]; });
+          packagingIdx.forEach((origIdx, i) => { pCosts[origIdx] = res.item_costs[foodIdx.length + i]; });
+          setIngredientCosts(fCosts);
+          setPackagingCosts(pCosts);
+        })
         .catch(() => {});
     }, 400);
     return () => clearTimeout(handle);
@@ -339,9 +399,17 @@ export default function ProductsPage() {
     if (!open || !hasSizes) return;
     const timers = sizeRows.map((size, idx) =>
       setTimeout(() => {
-        const combined = combineIngredients(size.ingredients, size.packaging);
-        post<CostPreview>('/products/cost-preview', { ingredients: combined, sell_price: size.sell_price ? Number(size.sell_price) : undefined })
-          .then((res) => setSizePreviews((prev) => ({ ...prev, [idx]: res })))
+        const { payload, foodIdx, packagingIdx } = buildPreviewIngredients(size.ingredients, size.packaging);
+        post<CostPreview>('/products/cost-preview', { ingredients: payload, sell_price: size.sell_price ? Number(size.sell_price) : undefined })
+          .then((res) => {
+            setSizePreviews((prev) => ({ ...prev, [idx]: res }));
+            const fCosts: (number | null)[] = new Array(size.ingredients.length).fill(null);
+            const pCosts: (number | null)[] = new Array(size.packaging.length).fill(null);
+            foodIdx.forEach((origIdx, i) => { fCosts[origIdx] = res.item_costs[i]; });
+            packagingIdx.forEach((origIdx, i) => { pCosts[origIdx] = res.item_costs[foodIdx.length + i]; });
+            setSizeIngredientCosts((prev) => ({ ...prev, [idx]: fCosts }));
+            setSizePackagingCosts((prev) => ({ ...prev, [idx]: pCosts }));
+          })
           .catch(() => {});
       }, 400)
     );
@@ -351,22 +419,41 @@ export default function ProductsPage() {
 
   const materialName = (m: RawMaterial) => (lang === 'en' && m.name_en ? m.name_en : m.name);
 
+  // materials: pre-filtered by category (ingredient-only or packaging-only — never
+  // both, so a cup can't accidentally get picked as a recipe ingredient and a corn
+  // batch can't get picked as packaging). showUnit hides the unit selector for
+  // packaging rows, since packaging is always counted by piece. costs is a per-row
+  // live cost readout aligned to `rows` by index (null until the debounced preview
+  // resolves), sourced from /products/cost-preview's item_costs.
   function renderIngredientEditor(
     rows: IngredientRow[],
     onAdd: () => void,
     onUpdate: (i: number, patch: Partial<IngredientRow>) => void,
-    onRemove: (i: number) => void
+    onRemove: (i: number) => void,
+    materials: RawMaterial[],
+    showUnit: boolean,
+    costs: (number | null)[],
+    emptyHint: string
   ) {
     return (
       <>
+        {rows.length > 0 && (
+          <div className="form-row" style={{ marginBottom: 4, fontSize: 11, fontWeight: 700, color: 'var(--stone-500)' }}>
+            <div style={{ flex: 2 }}>{t.products.colMaterial}</div>
+            <div style={{ flex: 1 }}>{t.products.colQty}</div>
+            {showUnit && <div style={{ flex: 1 }}>{t.products.colUnit}</div>}
+            <div style={{ flex: 1 }}>{t.products.colCost}</div>
+            <div style={{ width: 30 }} />
+          </div>
+        )}
         {rows.map((row, i) => (
           <div key={i} className="form-row" style={{ marginBottom: 8 }}>
             <div className="field" style={{ flex: 2 }}>
               <select value={row.raw_material_id} onChange={(e) => onUpdate(i, { raw_material_id: e.target.value })}>
                 <option value="">{t.products.selectRawMaterial}</option>
-                {rawMaterials.map((m) => (
+                {materials.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {materialName(m)} {m.category ? `(${m.category})` : ''}
+                    {materialName(m)}
                   </option>
                 ))}
               </select>
@@ -374,20 +461,32 @@ export default function ProductsPage() {
             <div className="field">
               <input type="number" step="0.001" placeholder="qty" value={row.usage_qty} onChange={(e) => onUpdate(i, { usage_qty: e.target.value })} />
             </div>
-            <div className="field">
-              <select value={row.usage_unit} onChange={(e) => onUpdate(i, { usage_unit: e.target.value })}>
-                {UNITS.map((u) => (
-                  <option key={u} value={u}>
-                    {u}
-                  </option>
-                ))}
-              </select>
+            {showUnit && (
+              <div className="field">
+                <select value={row.usage_unit} onChange={(e) => onUpdate(i, { usage_unit: e.target.value })}>
+                  {UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="field" style={{ justifyContent: 'center' }}>
+              <span className="muted" style={{ fontSize: 12, fontWeight: 700 }}>
+                {costs[i] != null ? `${costs[i]!.toFixed(3)} KD` : '—'}
+              </span>
             </div>
-            <button className="icon-btn" type="button" onClick={() => onRemove(i)} style={{ alignSelf: 'center' }}>
-              ×
+            <button className="icon-btn" type="button" onClick={() => onRemove(i)} style={{ alignSelf: 'center' }} title={t.common.delete}>
+              <IconTrash />
             </button>
           </div>
         ))}
+        {rows.length === 0 && materials.length === 0 && (
+          <p className="muted" style={{ fontSize: 12 }}>
+            {emptyHint}
+          </p>
+        )}
         <button className="btn btn-secondary btn-sm" type="button" onClick={onAdd}>
           <IconPlus /> {t.products.addIngredient}
         </button>
@@ -592,15 +691,22 @@ export default function ProductsPage() {
               </div>
               <div className="field">
                 <label>{t.products.category}</label>
-                <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                <select value={categorySelect} onChange={(e) => setCategorySelect(e.target.value)}>
                   <option value="">{t.products.selectCategory}</option>
                   {PRODUCT_CATEGORY_VALUES.map((c) => (
                     <option key={c} value={c}>
                       {PRODUCT_CATEGORY_LABELS[c]}
                     </option>
                   ))}
+                  <option value={CATEGORY_OTHER}>{t.products.categoryOther}</option>
                 </select>
               </div>
+              {categorySelect === CATEGORY_OTHER && (
+                <div className="field">
+                  <label>{t.products.categoryCustomPlaceholder}</label>
+                  <input value={categoryCustom} onChange={(e) => setCategoryCustom(e.target.value)} placeholder={t.products.categoryCustomPlaceholder} />
+                </div>
+              )}
               {!hasSizes && (
                 <div className="field">
                   <label>{t.products.sellPrice} (KD)</label>
@@ -621,17 +727,30 @@ export default function ProductsPage() {
                 <div className="section-title-row">
                   <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.ingredientsOnly}</span>
                 </div>
-                {renderIngredientEditor(ingredientRows, addIngredientRow, updateIngredientRow, removeIngredientRow)}
-                {ingredientRows.length === 0 && rawMaterials.length === 0 && (
-                  <p className="muted" style={{ fontSize: 12 }}>
-                    {t.products.addRawMaterialFirst}
-                  </p>
+                {renderIngredientEditor(
+                  ingredientRows,
+                  addIngredientRow,
+                  updateIngredientRow,
+                  removeIngredientRow,
+                  ingredientMaterials,
+                  true,
+                  ingredientCosts,
+                  t.products.noIngredientMaterials
                 )}
 
                 <div className="section-title-row" style={{ marginTop: 16 }}>
                   <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.packagingTitle}</span>
                 </div>
-                {renderIngredientEditor(packagingRows, addPackagingRow, updatePackagingRow, removePackagingRow)}
+                {renderIngredientEditor(
+                  packagingRows,
+                  addPackagingRow,
+                  updatePackagingRow,
+                  removePackagingRow,
+                  packagingMaterials,
+                  false,
+                  packagingCosts,
+                  t.products.noPackagingMaterials
+                )}
 
                 {renderLiveStats(livePreview)}
               </>
@@ -666,8 +785,8 @@ export default function ProductsPage() {
                             onChange={(e) => updateSizeRow(sizeIdx, { sell_price: e.target.value })}
                           />
                         </div>
-                        <button className="icon-btn" type="button" onClick={() => removeSizeRow(sizeIdx)} style={{ alignSelf: 'center' }}>
-                          ×
+                        <button className="icon-btn" type="button" onClick={() => removeSizeRow(sizeIdx)} style={{ alignSelf: 'center' }} title={t.common.delete}>
+                          <IconTrash />
                         </button>
                       </div>
                       <div className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 6 }}>
@@ -677,7 +796,11 @@ export default function ProductsPage() {
                         size.ingredients,
                         () => addSizeIngredient(sizeIdx),
                         (i, patch) => updateSizeIngredient(sizeIdx, i, patch),
-                        (i) => removeSizeIngredient(sizeIdx, i)
+                        (i) => removeSizeIngredient(sizeIdx, i),
+                        ingredientMaterials,
+                        true,
+                        sizeIngredientCosts[sizeIdx] ?? [],
+                        t.products.noIngredientMaterials
                       )}
 
                       <div className="muted" style={{ fontSize: 12, marginTop: 12, marginBottom: 6 }}>
@@ -687,7 +810,11 @@ export default function ProductsPage() {
                         size.packaging,
                         () => addSizePackaging(sizeIdx),
                         (i, patch) => updateSizePackaging(sizeIdx, i, patch),
-                        (i) => removeSizePackaging(sizeIdx, i)
+                        (i) => removeSizePackaging(sizeIdx, i),
+                        packagingMaterials,
+                        false,
+                        sizePackagingCosts[sizeIdx] ?? [],
+                        t.products.noPackagingMaterials
                       )}
 
                       {renderLiveStats(sizePreviews[sizeIdx] ?? null)}

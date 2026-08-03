@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { get, patch, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash } from '../components/Icon';
 
 interface FixedCostItem {
   label: string;
@@ -122,7 +122,7 @@ export default function SettingsPage() {
                   />
                 </div>
                 <button className="icon-btn" type="button" onClick={() => removeItem(i)} style={{ alignSelf: 'center' }}>
-                  ×
+                  <IconTrash />
                 </button>
               </div>
             ))}

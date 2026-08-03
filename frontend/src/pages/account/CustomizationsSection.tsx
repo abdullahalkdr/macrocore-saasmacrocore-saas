@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, put, del, ApiError } from '../../api/client';
 import { useT } from '../../i18n';
+import { IconTrash } from '../../components/Icon';
 
 interface Template {
   id: string;
@@ -174,7 +175,7 @@ export default function CustomizationsSection() {
                   <strong>{f.name}</strong> — {typeLabel[f.field_type] || f.field_type} · {appliesLabel[f.applies_to] || f.applies_to}
                 </span>
                 <button className="icon-btn" onClick={() => handleDeleteField(f.id)}>
-                  ×
+                  <IconTrash />
                 </button>
               </div>
             ))
