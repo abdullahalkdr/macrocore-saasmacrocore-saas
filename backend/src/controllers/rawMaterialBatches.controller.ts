@@ -112,25 +112,61 @@ export const getById = asyncHandler(async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/raw-material-batches/:id
- * Update a batch (primarily expiry_date). Cannot modify qty_*, price, or location after creation
- * (moving inventory between locations goes through POST /api/stock-transfers instead).
+ * Corrects data-entry mistakes on a batch: purchase_date, expiry_date, qty_purchased,
+ * qty_remaining, purchase_price — any subset. raw_material_id, location_id, and unit
+ * stay locked after creation: moving stock between locations goes through POST
+ * /api/stock-transfers (which keeps FIFO/location totals consistent), and unit is
+ * always derived from the material's package_unit (see MIGRATION_027) so it can't
+ * drift out of sync with how the rest of the app reads this material's stock.
  */
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { expiry_date } = req.body ?? {};
+  const { purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price } = req.body ?? {};
 
-  if (typeof expiry_date !== 'string') throw new AppError(400, 'expiry_date is required (DATE format: YYYY-MM-DD)');
-
-  const result = await pool.query(
-    `UPDATE raw_material_batches
-     SET expiry_date = $1, updated_at = NOW()
-     WHERE id = $2 AND company_id = $3
-     RETURNING id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, updated_at`,
-    [expiry_date, id, companyId]
+  const existing = await pool.query(
+    `SELECT qty_purchased, qty_remaining FROM raw_material_batches WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
   );
+  if (!existing.rows[0]) throw new AppError(404, 'Batch not found');
 
-  if (!result.rows[0]) throw new AppError(404, 'Batch not found');
+  if (purchase_date !== undefined && typeof purchase_date !== 'string') {
+    throw new AppError(400, 'purchase_date must be a DATE string (YYYY-MM-DD)');
+  }
+  if (qty_purchased !== undefined && (typeof qty_purchased !== 'number' || qty_purchased <= 0)) {
+    throw new AppError(400, 'qty_purchased must be a positive number');
+  }
+  if (qty_remaining !== undefined && (typeof qty_remaining !== 'number' || qty_remaining < 0)) {
+    throw new AppError(400, 'qty_remaining must be a non-negative number');
+  }
+  if (purchase_price !== undefined && (typeof purchase_price !== 'number' || purchase_price < 0)) {
+    throw new AppError(400, 'purchase_price must be a non-negative number');
+  }
+
+  const effectivePurchased = qty_purchased ?? Number(existing.rows[0].qty_purchased);
+  const effectiveRemaining = qty_remaining ?? Number(existing.rows[0].qty_remaining);
+  if (effectiveRemaining > effectivePurchased) {
+    throw new AppError(400, 'qty_remaining cannot exceed qty_purchased');
+  }
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  if (purchase_date !== undefined) { sets.push(`purchase_date = $${i++}`); values.push(purchase_date); }
+  if (expiry_date !== undefined) { sets.push(`expiry_date = $${i++}`); values.push(expiry_date || null); }
+  if (qty_purchased !== undefined) { sets.push(`qty_purchased = $${i++}`); values.push(qty_purchased); }
+  if (qty_remaining !== undefined) { sets.push(`qty_remaining = $${i++}`); values.push(qty_remaining); }
+  if (purchase_price !== undefined) { sets.push(`purchase_price = $${i++}`); values.push(purchase_price); }
+  if (sets.length === 0) throw new AppError(400, 'Nothing to update');
+  sets.push(`updated_at = NOW()`);
+
+  values.push(id, companyId);
+  const result = await pool.query(
+    `UPDATE raw_material_batches SET ${sets.join(', ')}
+     WHERE id = $${i++} AND company_id = $${i++}
+     RETURNING id, raw_material_id, location_id, purchase_date, expiry_date, qty_purchased, qty_remaining, purchase_price, unit, updated_at`,
+    values
+  );
 
   const batch = result.rows[0];
   await logAudit({ companyId, userId: req.auth!.userId, action: 'batch_updated', entityType: 'raw_material_batches', entityId: batch.id, req });

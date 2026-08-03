@@ -1,10 +1,10 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { get, patch, post, ApiError } from '../api/client';
+import { get, patch, post, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash } from '../components/Icon';
 
 interface RawMaterial {
   id: string;
@@ -53,6 +53,7 @@ export default function RawMaterialBatchesPage() {
   const [purchaseDate, setPurchaseDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [qtyPurchased, setQtyPurchased] = useState('');
+  const [qtyRemaining, setQtyRemaining] = useState('');
   const [purchasePrice, setPurchasePrice] = useState('');
 
   const [error, setError] = useState<string | null>(null);
@@ -89,9 +90,15 @@ export default function RawMaterialBatchesPage() {
     setLoading(true);
     try {
       if (editingId) {
-        // Update expiry_date only
+        // Note: qty_remaining=0 (and price=0) are valid, deliberate values (e.g.
+        // zeroing a batch out before deleting it) — check for '' specifically, not
+        // falsiness, or a typed 0 would silently be dropped from the request.
         await patch(`/raw-material-batches/${editingId}`, {
+          purchase_date: purchaseDate || undefined,
           expiry_date: expiryDate || undefined,
+          qty_purchased: qtyPurchased !== '' ? Number(qtyPurchased) : undefined,
+          qty_remaining: qtyRemaining !== '' ? Number(qtyRemaining) : undefined,
+          purchase_price: purchasePrice !== '' ? Number(purchasePrice) : undefined,
         });
       } else {
         // Create new batch
@@ -120,6 +127,7 @@ export default function RawMaterialBatchesPage() {
     setPurchaseDate('');
     setExpiryDate('');
     setQtyPurchased('');
+    setQtyRemaining('');
     setPurchasePrice('');
     setEditingId(null);
   }
@@ -131,8 +139,26 @@ export default function RawMaterialBatchesPage() {
     setPurchaseDate(batch.purchase_date);
     setExpiryDate(batch.expiry_date || '');
     setQtyPurchased(String(batch.qty_purchased));
+    setQtyRemaining(String(batch.qty_remaining));
     setPurchasePrice(String(batch.purchase_price));
     setOpen(true);
+  }
+
+  async function handleDelete(batch: BatchWithMaterial) {
+    if (!confirm(t.rawMaterialBatches.deleteConfirm)) return;
+    setError(null);
+    try {
+      await del(`/raw-material-batches/${batch.id}`);
+      load();
+    } catch (err) {
+      // The backend's only 400 on this endpoint is "still has remaining quantity" —
+      // show the localized, actionable version instead of the raw English message.
+      if (err instanceof ApiError && err.status === 400) {
+        setError(t.rawMaterialBatches.deleteBlockedRemaining);
+      } else {
+        setError(err instanceof ApiError ? err.message : t.rawMaterialBatches.deleteFailed);
+      }
+    }
   }
 
   function getExpiryStatus(batch: BatchWithMaterial): 'expired' | 'expiring' | 'safe' {
@@ -214,8 +240,11 @@ export default function RawMaterialBatchesPage() {
                           {getExpiryStatus(b) === 'expiring' && t.rawMaterialBatches.statusExpiring}
                         </span>
                       </td>
-                      <td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         <button className="btn btn-sm" onClick={() => openEditModal(b)}>{t.rawMaterialBatches.edit}</button>
+                        <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(b)}>
+                          <IconTrash />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -257,8 +286,11 @@ export default function RawMaterialBatchesPage() {
                   <td className="num">{Number(b.qty_remaining).toFixed(3)}</td>
                   <td>{b.unit}</td>
                   <td className="num">{Number(b.purchase_price).toFixed(3)}</td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-sm" onClick={() => openEditModal(b)}>{t.rawMaterialBatches.edit}</button>
+                    <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(b)}>
+                      <IconTrash />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -315,45 +347,43 @@ export default function RawMaterialBatchesPage() {
                     ))}
                   </select>
                 </div>
-
-                <div className="field">
-                  <label>{t.rawMaterialBatches.purchaseDate} *</label>
-                  <input
-                    type="date"
-                    value={purchaseDate}
-                    onChange={(e) => setPurchaseDate(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="field">
-                  <label>
-                    {t.rawMaterialBatches.qtyPurchased} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
-                  </label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={qtyPurchased}
-                    onChange={(e) => setQtyPurchased(e.target.value)}
-                    required
-                  />
-                  {selectedMaterialUnit && <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.rawMaterialBatches.unitHint(selectedMaterialUnit)}</p>}
-                </div>
-
-                <div className="field">
-                  <label>
-                    {t.rawMaterialBatches.purchasePrice} * {selectedMaterialUnit && `(${t.rawMaterialBatches.perUnit(selectedMaterialUnit)})`}
-                  </label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={purchasePrice}
-                    onChange={(e) => setPurchasePrice(e.target.value)}
-                    required
-                  />
-                </div>
               </>
             )}
+
+            {editingId && (
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <p className="muted" style={{ fontSize: 12 }}>{t.rawMaterialBatches.editHint}</p>
+              </div>
+            )}
+
+            <div className="field">
+              <label>{t.rawMaterialBatches.purchaseDate} *</label>
+              <input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} required />
+            </div>
+
+            <div className="field">
+              <label>
+                {t.rawMaterialBatches.qtyPurchased} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
+              </label>
+              <input type="number" step="0.001" value={qtyPurchased} onChange={(e) => setQtyPurchased(e.target.value)} required />
+              {selectedMaterialUnit && <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.rawMaterialBatches.unitHint(selectedMaterialUnit)}</p>}
+            </div>
+
+            {editingId && (
+              <div className="field">
+                <label>
+                  {t.rawMaterialBatches.qtyRemaining} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
+                </label>
+                <input type="number" step="0.001" value={qtyRemaining} onChange={(e) => setQtyRemaining(e.target.value)} required />
+              </div>
+            )}
+
+            <div className="field">
+              <label>
+                {t.rawMaterialBatches.purchasePrice} * {selectedMaterialUnit && `(${t.rawMaterialBatches.perUnit(selectedMaterialUnit)})`}
+              </label>
+              <input type="number" step="0.001" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} required />
+            </div>
 
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>{t.rawMaterialBatches.expiryDateOptional}</label>

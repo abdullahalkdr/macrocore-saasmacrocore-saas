@@ -503,6 +503,10 @@ const en = {
     unit: 'Unit',
     unitHint: (unit: string) => `Enter the quantity in ${unit} — matches how this material's stock is tracked everywhere else.`,
     perUnit: (unit: string) => `per ${unit}`,
+    editHint: "Material and location are locked after creation — move stock with Stock Transfers instead. Everything else here can be corrected.",
+    deleteConfirm: 'Delete this batch? This cannot be undone.',
+    deleteFailed: 'Failed to delete batch',
+    deleteBlockedRemaining: 'This batch still has remaining quantity — set "Qty remaining" to 0 first, then delete.',
   },
   stockTransfers: {
     title: 'Stock Transfer',
@@ -1675,6 +1679,10 @@ const ar: typeof en = {
     unit: 'الوحدة',
     unitHint: (unit: string) => `أدخل الكمية بوحدة ${unit} — نفس وحدة تتبع مخزون هذي المادة بكل مكان ثاني بالنظام.`,
     perUnit: (unit: string) => `لكل ${unit}`,
+    editHint: 'المادة والموقع مقفلة بعد الإنشاء — لنقل المخزون استخدم صفحة تحويل المخزون. أي شي ثاني هنا تقدر تصححه.',
+    deleteConfirm: 'حذف هذي الدفعة؟ هذا الإجراء ما يترجع.',
+    deleteFailed: 'فشل حذف الدفعة',
+    deleteBlockedRemaining: 'هذي الدفعة لسا فيها كمية متبقية — خلّ "الكمية المتبقية" صفر أول ثم احذف.',
   },
   stockTransfers: {
     title: 'تحويل المخزون',
