@@ -38,7 +38,11 @@ import PermissionsPage from './pages/PermissionsPage';
 import CustomersPage from './pages/CustomersPage';
 import SalesQuotesPage from './pages/SalesQuotesPage';
 import SalesInvoicesPage from './pages/SalesInvoicesPage';
-import SalesComingSoonPage from './pages/SalesComingSoonPage';
+import CustomerReceiptsPage from './pages/CustomerReceiptsPage';
+import RecurringInvoicesPage from './pages/RecurringInvoicesPage';
+import CreditNotesPage from './pages/CreditNotesPage';
+import CashInvoicesPage from './pages/CashInvoicesPage';
+import SalesSettingsPage from './pages/SalesSettingsPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import RequireRole from './components/RequireRole';
@@ -188,11 +192,46 @@ export default function App() {
                 </RequireRole>
               }
             />
-            <Route path="/customer-receipts" element={<SalesComingSoonPage variant="customerReceipts" />} />
-            <Route path="/recurring-invoices" element={<SalesComingSoonPage variant="recurringInvoices" />} />
-            <Route path="/credit-notes" element={<SalesComingSoonPage variant="creditNotes" />} />
-            <Route path="/cash-invoices" element={<SalesComingSoonPage variant="cashInvoices" />} />
-            <Route path="/sales-settings" element={<SalesComingSoonPage variant="salesSettings" />} />
+            <Route
+              path="/customer-receipts"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <CustomerReceiptsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/recurring-invoices"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <RecurringInvoicesPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/credit-notes"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <CreditNotesPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/cash-invoices"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <CashInvoicesPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/sales-settings"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <SalesSettingsPage />
+                </RequireRole>
+              }
+            />
             <Route path="/waste" element={<WasteRecordsPage />} />
             <Route
               path="/payroll"

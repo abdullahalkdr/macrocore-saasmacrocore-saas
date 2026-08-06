@@ -26,9 +26,10 @@ function computeTotals(items: ItemInput[]) {
   return { subtotal, total: subtotal };
 }
 
-async function nextNumber(companyId: string): Promise<string> {
-  const r = await pool.query('SELECT COUNT(*)::int AS n FROM sales_invoices WHERE company_id = $1', [companyId]);
-  return `INV-${String(100 + r.rows[0].n).padStart(6, '0')}`;
+async function nextNumber(companyId: string, type: 'invoice' | 'cash'): Promise<string> {
+  const r = await pool.query('SELECT COUNT(*)::int AS n FROM sales_invoices WHERE company_id = $1 AND type = $2', [companyId, type]);
+  const prefix = type === 'cash' ? 'CINV' : 'INV';
+  return `${prefix}-${String(100 + r.rows[0].n).padStart(6, '0')}`;
 }
 
 async function fetchItems(invoiceId: string) {
@@ -40,16 +41,20 @@ async function fetchItems(invoiceId: string) {
 }
 
 const LIST_SELECT = `
-  i.id, i.number, i.customer_id, c.name AS customer_name, i.issue_date, i.due_date, i.status,
+  i.id, i.number, i.type, i.customer_id, c.name AS customer_name, i.issue_date, i.due_date, i.status,
   i.notes, i.subtotal, i.total, i.amount_paid, i.created_at
 `;
 
+// type defaults to 'invoice' so the regular Sales Invoices page never shows cash
+// invoices mixed in — the Cash Invoices page passes ?type=cash explicitly instead.
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { status } = req.query;
+  const { status, type } = req.query;
 
   const params: unknown[] = [companyId];
   let where = 'i.company_id = $1';
+  params.push(type === 'cash' ? 'cash' : 'invoice');
+  where += ` AND i.type = $${params.length}`;
   if (typeof status === 'string' && status) {
     params.push(status);
     where += ` AND i.status = $${params.length}`;
@@ -80,34 +85,42 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { customer_id, issue_date, due_date, notes, items } = req.body ?? {};
+  const { customer_id, issue_date, due_date, notes, items, type } = req.body ?? {};
 
   const itemList = validateItems(items);
   const { subtotal, total } = computeTotals(itemList);
+  const docType: 'invoice' | 'cash' = type === 'cash' ? 'cash' : 'invoice';
+  // A cash invoice is money already collected at the moment of writing it — it skips
+  // the draft/sent workflow real invoices go through and is paid in full immediately
+  // (see the Cash Invoices page: no due date, no "mark as sent" step).
+  const isCash = docType === 'cash';
 
   if (customer_id) {
     const c = await pool.query('SELECT id FROM customers WHERE id = $1 AND company_id = $2', [customer_id, companyId]);
     if (c.rows.length === 0) throw new AppError(400, 'customer_id not found');
   }
 
-  const number = await nextNumber(companyId);
+  const number = await nextNumber(companyId, docType);
 
   const client = await pool.connect();
   let invoiceId: string;
   try {
     await client.query('BEGIN');
     const r = await client.query(
-      `INSERT INTO sales_invoices (company_id, number, customer_id, issue_date, due_date, notes, subtotal, total, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      `INSERT INTO sales_invoices (company_id, number, type, customer_id, issue_date, due_date, notes, subtotal, total, status, amount_paid, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
       [
         companyId,
         number,
+        docType,
         customer_id ?? null,
         issue_date || new Date().toISOString().slice(0, 10),
-        due_date || null,
+        isCash ? null : due_date || null,
         notes ?? null,
         subtotal,
         total,
+        isCash ? 'paid' : 'draft',
+        isCash ? total : 0,
         req.auth!.userId,
       ]
     );

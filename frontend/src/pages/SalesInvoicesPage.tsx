@@ -42,6 +42,7 @@ export default function SalesInvoicesPage() {
   const t = useT();
   const [items, setItems] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [defaultNotes, setDefaultNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -64,6 +65,7 @@ export default function SalesInvoicesPage() {
   useEffect(() => {
     load();
     get<{ customers: Customer[] }>('/customers').then((r) => setCustomers(r.customers)).catch(() => {});
+    get<{ default_sales_notes: string | null }>('/company/me').then((r) => setDefaultNotes(r.default_sales_notes || '')).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -71,7 +73,7 @@ export default function SalesInvoicesPage() {
     setCustomerId('');
     setIssueDate(new Date().toISOString().slice(0, 10));
     setDueDate('');
-    setNotes('');
+    setNotes(defaultNotes);
     setRows([emptyRow()]);
     setNumber('');
     setEditingStatus('draft');

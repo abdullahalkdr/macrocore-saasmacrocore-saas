@@ -35,6 +35,9 @@ import permissionsRoutes from './routes/permissions.routes';
 import customersRoutes from './routes/customers.routes';
 import salesQuotesRoutes from './routes/salesQuotes.routes';
 import salesInvoicesRoutes from './routes/salesInvoices.routes';
+import customerReceiptsRoutes from './routes/customerReceipts.routes';
+import recurringInvoicesRoutes from './routes/recurringInvoices.routes';
+import creditNotesRoutes from './routes/creditNotes.routes';
 import notificationsRoutes from './routes/notifications.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
@@ -111,6 +114,9 @@ app.use('/api/customers', ...silver('Customer / loyalty tracking'), customersRou
 // /api/customers since they're the same product tier (Silver+).
 app.use('/api/sales-quotes', ...silver('Sales quotes'), salesQuotesRoutes);
 app.use('/api/sales-invoices', ...silver('Sales invoices'), salesInvoicesRoutes);
+app.use('/api/customer-receipts', ...silver('Customer receipts'), customerReceiptsRoutes);
+app.use('/api/recurring-invoices', ...silver('Recurring invoices'), recurringInvoicesRoutes);
+app.use('/api/credit-notes', ...silver('Credit notes'), creditNotesRoutes);
 app.use('/api/notifications', ...guarded, notificationsRoutes);
 
 app.use(notFoundHandler);

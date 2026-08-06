@@ -1,4 +1,4 @@
-import { ComponentType, useEffect, useState } from 'react';
+import { ComponentType, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
@@ -190,13 +190,24 @@ export default function Layout() {
     }))
     .filter((group) => group.items.length > 0);
 
-  // Accordion state for the "المبيعات" group — starts expanded if the current page is
-  // already one of its children (e.g. a refresh on /customers or /sales-invoices),
-  // otherwise starts collapsed like the Wafeq reference.
+  // Flyout state for the "المبيعات" group — a separate floating panel beside the
+  // sidebar (per Abdullah's Wafeq reference), not an inline accordion that pushes the
+  // rest of the list down. Starts closed; clicking the parent toggles the panel, and
+  // clicking outside it or picking an item closes it again.
   const location = useLocation();
   const salesGroup = visibleGroups.find((g) => g.accordion);
   const salesChildPaths = salesGroup?.items.map((i) => i.to) ?? [];
-  const [salesExpanded, setSalesExpanded] = useState(() => salesChildPaths.includes(location.pathname));
+  const [salesExpanded, setSalesExpanded] = useState(false);
+  const salesFlyoutRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!salesExpanded) return;
+    function onOutside(e: MouseEvent) {
+      if (salesFlyoutRef.current && !salesFlyoutRef.current.contains(e.target as Node)) setSalesExpanded(false);
+    }
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [salesExpanded]);
+  const salesParentActive = salesExpanded || salesChildPaths.includes(location.pathname);
 
   function renderNavItem(l: NavItem) {
     const minPlan = 'minPlan' in l ? l.minPlan : undefined;
@@ -289,16 +300,34 @@ export default function Layout() {
               </div>
             )}
             {group.accordion ? (
-              <nav>
-                <button type="button" className="nav-accordion-head" onClick={() => setSalesExpanded((v) => !v)} style={{ padding: '10px 12px' }}>
+              <div className="nav-flyout-wrap" ref={salesFlyoutRef}>
+                <button
+                  type="button"
+                  className={`nav-accordion-head${salesParentActive ? ' open' : ''}`}
+                  onClick={() => setSalesExpanded((v) => !v)}
+                >
                   {group.parentIcon ? <group.parentIcon /> : null}
                   <span style={{ flex: 1 }}>{group.parentLabel}</span>
-                  <span className={`nav-accordion-chevron${salesExpanded ? ' open' : ''}`}>
+                  <span className="nav-accordion-chevron">
                     <IconChevronRight />
                   </span>
                 </button>
-                {salesExpanded && <div className="nav-accordion-children">{group.items.map((l) => renderNavItem(l))}</div>}
-              </nav>
+                {salesExpanded && (
+                  <div className="nav-flyout">
+                    <div className="nav-flyout-header">
+                      <span className="back">
+                        <IconChevronRight size={12} />
+                      </span>
+                      {group.parentLabel}
+                    </div>
+                    <nav onClick={() => setSalesExpanded(false)}>
+                      {group.items.slice(0, -1).map((l) => renderNavItem(l))}
+                      <div className="nav-flyout-divider" />
+                      {renderNavItem(group.items[group.items.length - 1])}
+                    </nav>
+                  </div>
+                )}
+              </div>
             ) : (
               <nav>{group.items.map((l) => renderNavItem(l))}</nav>
             )}

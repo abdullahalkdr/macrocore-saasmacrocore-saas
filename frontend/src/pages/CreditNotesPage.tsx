@@ -10,19 +10,26 @@ interface Customer {
   id: string;
   name: string;
 }
-interface QuoteItem {
+interface InvoiceOption {
+  id: string;
+  number: string;
+  customer_id: string | null;
+}
+interface CreditNoteItem {
   id: string;
   description: string;
   qty: number;
   unit_price: number;
 }
-interface Quote {
+interface CreditNote {
   id: string;
   number: string;
   customer_id: string | null;
   customer_name: string | null;
+  source_invoice_id: string | null;
+  source_invoice_number: string | null;
   issue_date: string;
-  status: 'draft' | 'sent' | 'accepted' | 'declined';
+  status: 'draft' | 'issued';
   notes: string | null;
   total: number;
 }
@@ -36,38 +43,42 @@ function emptyRow(): ItemRow {
   return { description: '', qty: '1', unitPrice: '' };
 }
 
-export default function SalesQuotesPage() {
+export default function CreditNotesPage() {
   const t = useT();
-  const [items, setItems] = useState<Quote[]>([]);
+  const [items, setItems] = useState<CreditNote[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceOption[]>([]);
   const [defaultNotes, setDefaultNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingStatus, setEditingStatus] = useState<Quote['status']>('draft');
+  const [editingStatus, setEditingStatus] = useState<CreditNote['status']>('draft');
   const [customerId, setCustomerId] = useState('');
+  const [sourceInvoiceId, setSourceInvoiceId] = useState('');
   const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState<ItemRow[]>([emptyRow()]);
   const [number, setNumber] = useState('');
 
   function load() {
-    get<{ quotes: Quote[] }>('/sales-quotes')
-      .then((r) => setItems(r.quotes))
-      .catch((err) => setError(err instanceof ApiError ? err.message : t.salesQuotes.loadFailed));
+    get<{ credit_notes: CreditNote[] }>('/credit-notes')
+      .then((r) => setItems(r.credit_notes))
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.creditNotes.loadFailed));
   }
 
   useEffect(() => {
     load();
     get<{ customers: Customer[] }>('/customers').then((r) => setCustomers(r.customers)).catch(() => {});
+    get<{ invoices: InvoiceOption[] }>('/sales-invoices').then((r) => setInvoices(r.invoices)).catch(() => {});
     get<{ default_sales_notes: string | null }>('/company/me').then((r) => setDefaultNotes(r.default_sales_notes || '')).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function resetForm() {
     setCustomerId('');
+    setSourceInvoiceId('');
     setIssueDate(new Date().toISOString().slice(0, 10));
     setNotes(defaultNotes);
     setRows([emptyRow()]);
@@ -81,16 +92,17 @@ export default function SalesQuotesPage() {
     setOpen(true);
   }
 
-  async function openEdit(q: Quote) {
+  async function openEdit(n: CreditNote) {
     setError(null);
     try {
-      const r = await get<{ quote: Quote; items: QuoteItem[] }>(`/sales-quotes/${q.id}`);
-      setEditingId(q.id);
-      setEditingStatus(r.quote.status);
-      setCustomerId(r.quote.customer_id || '');
-      setIssueDate(r.quote.issue_date ? r.quote.issue_date.slice(0, 10) : '');
-      setNotes(r.quote.notes || '');
-      setNumber(r.quote.number);
+      const r = await get<{ credit_note: CreditNote; items: CreditNoteItem[] }>(`/credit-notes/${n.id}`);
+      setEditingId(n.id);
+      setEditingStatus(r.credit_note.status);
+      setCustomerId(r.credit_note.customer_id || '');
+      setSourceInvoiceId(r.credit_note.source_invoice_id || '');
+      setIssueDate(r.credit_note.issue_date.slice(0, 10));
+      setNotes(r.credit_note.notes || '');
+      setNumber(r.credit_note.number);
       setRows(
         r.items.length > 0
           ? r.items.map((it) => ({ description: it.description, qty: String(it.qty), unitPrice: String(it.unit_price) }))
@@ -98,7 +110,7 @@ export default function SalesQuotesPage() {
       );
       setOpen(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.salesQuotes.loadFailed);
+      setError(err instanceof ApiError ? err.message : t.creditNotes.loadFailed);
     }
   }
 
@@ -121,63 +133,66 @@ export default function SalesQuotesPage() {
       .filter((r) => r.description.trim() && Number(r.qty) > 0)
       .map((r) => ({ description: r.description.trim(), qty: Number(r.qty), unit_price: Number(r.unitPrice) || 0 }));
     if (cleanItems.length === 0) {
-      setError(t.salesQuotes.needItem);
+      setError(t.creditNotes.needItem);
       return;
     }
     setLoading(true);
     try {
-      const payload = { customer_id: customerId || undefined, issue_date: issueDate || undefined, notes: notes || undefined, items: cleanItems };
+      const payload = {
+        customer_id: customerId || undefined,
+        source_invoice_id: sourceInvoiceId || undefined,
+        issue_date: issueDate || undefined,
+        notes: notes || undefined,
+        items: cleanItems,
+      };
       if (editingId) {
-        await patch(`/sales-quotes/${editingId}`, payload);
+        await patch(`/credit-notes/${editingId}`, payload);
       } else {
-        await post('/sales-quotes', payload);
+        await post('/credit-notes', payload);
       }
       setOpen(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : editingId ? t.salesQuotes.updateFailed : t.salesQuotes.saveFailed);
+      setError(err instanceof ApiError ? err.message : editingId ? t.creditNotes.updateFailed : t.creditNotes.saveFailed);
     } finally {
       setLoading(false);
     }
   }
 
-  async function markSent(q: Quote) {
+  async function markIssued(n: CreditNote) {
     setError(null);
     try {
-      await patch(`/sales-quotes/${q.id}`, { status: 'sent' });
+      await patch(`/credit-notes/${n.id}`, { status: 'issued' });
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.salesQuotes.updateFailed);
+      setError(err instanceof ApiError ? err.message : t.creditNotes.updateFailed);
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(t.salesQuotes.deleteConfirm)) return;
+    if (!confirm(t.creditNotes.deleteConfirm)) return;
     setError(null);
     try {
-      await del(`/sales-quotes/${id}`);
+      await del(`/credit-notes/${id}`);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.salesQuotes.deleteFailed);
+      setError(err instanceof ApiError ? err.message : t.creditNotes.deleteFailed);
     }
-  }
-
-  function statusLabel(s: Quote['status']) {
-    return t.salesQuotes.status[s];
   }
 
   const previewItems = rows.map((r) => ({ description: r.description, qty: Number(r.qty) || 0, unitPrice: Number(r.unitPrice) || 0 }));
   const customerName = customers.find((c) => c.id === customerId)?.name || '';
+  const invoiceOptions = invoices.filter((inv) => !customerId || inv.customer_id === customerId);
 
   return (
     <div>
-      <PageHeader title={t.salesQuotes.title} subtitle={t.salesQuotes.subtitle} />
+      <PageHeader title={t.creditNotes.title} subtitle={t.creditNotes.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
       <div className="section-title-row">
-        <span className="muted">{t.salesQuotes.count(items.length)}</span>
+        <span className="muted">{t.creditNotes.count(items.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={openCreate}>
-          <IconPlus /> {t.salesQuotes.newItem}
+          <IconPlus /> {t.creditNotes.newItem}
         </button>
       </div>
 
@@ -186,36 +201,36 @@ export default function SalesQuotesPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>{t.salesQuotes.number}</th>
-                <th>{t.salesQuotes.customer}</th>
-                <th>{t.salesQuotes.issueDate}</th>
-                <th>{t.salesQuotes.status.label}</th>
-                <th>{t.salesQuotes.total}</th>
+                <th>{t.creditNotes.number}</th>
+                <th>{t.creditNotes.customer}</th>
+                <th>{t.creditNotes.sourceInvoice}</th>
+                <th>{t.creditNotes.issueDate}</th>
+                <th>{t.creditNotes.status.label}</th>
+                <th>{t.creditNotes.total}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {items.map((q) => (
-                <tr key={q.id}>
-                  <td style={{ fontWeight: 700 }}>{q.number}</td>
-                  <td>{q.customer_name || '—'}</td>
-                  <td className="num">{q.issue_date ? q.issue_date.slice(0, 10) : '—'}</td>
+              {items.map((n) => (
+                <tr key={n.id}>
+                  <td style={{ fontWeight: 700 }}>{n.number}</td>
+                  <td>{n.customer_name || '—'}</td>
+                  <td>{n.source_invoice_number || '—'}</td>
+                  <td className="num">{n.issue_date.slice(0, 10)}</td>
                   <td>
-                    <span className={`badge ${q.status === 'draft' ? 'closed' : q.status === 'accepted' ? 'open' : q.status === 'declined' ? 'cancelled' : 'trial'}`}>
-                      {statusLabel(q.status)}
-                    </span>
+                    <span className={`badge ${n.status === 'draft' ? 'closed' : 'open'}`}>{t.creditNotes.status[n.status]}</span>
                   </td>
-                  <td className="num">{q.total.toFixed(3)} KD</td>
+                  <td className="num">{n.total.toFixed(3)} KD</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="icon-btn" title={t.salesQuotes.editItem} onClick={() => openEdit(q)}>
+                    <button className="icon-btn" title={t.creditNotes.editItem} onClick={() => openEdit(n)}>
                       <IconEdit />
                     </button>
-                    {q.status === 'draft' && (
+                    {n.status === 'draft' && (
                       <>
-                        <button className="btn btn-secondary btn-sm" onClick={() => markSent(q)}>
-                          {t.salesQuotes.markSent}
+                        <button className="btn btn-secondary btn-sm" onClick={() => markIssued(n)}>
+                          {t.creditNotes.markIssued}
                         </button>
-                        <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(q.id)}>
+                        <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(n.id)}>
                           <IconTrash />
                         </button>
                       </>
@@ -225,8 +240,8 @@ export default function SalesQuotesPage() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
-                    <div className="empty-state">{t.salesQuotes.empty}</div>
+                  <td colSpan={7}>
+                    <div className="empty-state">{t.creditNotes.empty}</div>
                   </td>
                 </tr>
               )}
@@ -237,23 +252,23 @@ export default function SalesQuotesPage() {
 
       {open && (
         <FullScreenDoc
-          title={editingId ? `${t.salesQuotes.editItem} — ${number}` : t.salesQuotes.newItem}
+          title={editingId ? `${t.creditNotes.editItem} — ${number}` : t.creditNotes.newItem}
           onClose={() => setOpen(false)}
           actions={
             !isLocked ? (
-              <button className="btn btn-primary btn-sm" type="submit" form="quote-form" disabled={loading}>
+              <button className="btn btn-primary btn-sm" type="submit" form="credit-note-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
             ) : undefined
           }
         >
           <div className="doc-split">
-            <form id="quote-form" onSubmit={handleSubmit}>
-              {isLocked && <div className="error-banner">{t.salesQuotes.lockedNotice}</div>}
+            <form id="credit-note-form" onSubmit={handleSubmit}>
+              {isLocked && <div className="error-banner">{t.creditNotes.lockedNotice}</div>}
               <div className="field">
-                <label>{t.salesQuotes.customer}</label>
-                <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={isLocked}>
-                  <option value="">{t.salesQuotes.selectCustomer}</option>
+                <label>{t.creditNotes.customer}</label>
+                <select value={customerId} onChange={(e) => { setCustomerId(e.target.value); setSourceInvoiceId(''); }} disabled={isLocked}>
+                  <option value="">{t.creditNotes.selectCustomer}</option>
                   {customers.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -262,38 +277,36 @@ export default function SalesQuotesPage() {
                 </select>
               </div>
               <div className="field">
-                <label>{t.salesQuotes.issueDate}</label>
+                <label>{t.creditNotes.sourceInvoice}</label>
+                <select value={sourceInvoiceId} onChange={(e) => setSourceInvoiceId(e.target.value)} disabled={isLocked}>
+                  <option value="">{t.creditNotes.noSourceInvoice}</option>
+                  {invoiceOptions.map((inv) => (
+                    <option key={inv.id} value={inv.id}>
+                      {inv.number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>{t.creditNotes.issueDate}</label>
                 <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} disabled={isLocked} />
               </div>
               <div className="field">
-                <label>{t.salesQuotes.notes}</label>
+                <label>{t.creditNotes.notes}</label>
                 <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} disabled={isLocked} />
               </div>
 
               <div className="field">
-                <label>{t.salesQuotes.items}</label>
+                <label>{t.creditNotes.items}</label>
                 {rows.map((row, i) => (
                   <div key={i} className="doc-item-row">
-                    <input
-                      placeholder={t.salesQuotes.itemDescription}
-                      value={row.description}
-                      onChange={(e) => updateRow(i, { description: e.target.value })}
-                      disabled={isLocked}
-                    />
+                    <input placeholder={t.creditNotes.itemDescription} value={row.description} onChange={(e) => updateRow(i, { description: e.target.value })} disabled={isLocked} />
+                    <input type="number" min="0" step="0.001" placeholder={t.creditNotes.qty} value={row.qty} onChange={(e) => updateRow(i, { qty: e.target.value })} disabled={isLocked} />
                     <input
                       type="number"
                       min="0"
                       step="0.001"
-                      placeholder={t.salesQuotes.qty}
-                      value={row.qty}
-                      onChange={(e) => updateRow(i, { qty: e.target.value })}
-                      disabled={isLocked}
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.001"
-                      placeholder={t.salesQuotes.unitPrice}
+                      placeholder={t.creditNotes.unitPrice}
                       value={row.unitPrice}
                       onChange={(e) => updateRow(i, { unitPrice: e.target.value })}
                       disabled={isLocked}
@@ -307,15 +320,15 @@ export default function SalesQuotesPage() {
                 ))}
                 {!isLocked && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={addRow}>
-                    <IconPlus /> {t.salesQuotes.addItem}
+                    <IconPlus /> {t.creditNotes.addItem}
                   </button>
                 )}
               </div>
             </form>
 
             <DocumentPreview
-              docTypeLabel={t.salesQuotes.docLabel}
-              number={number || t.salesQuotes.numberPending}
+              docTypeLabel={t.creditNotes.docLabel}
+              number={number || t.creditNotes.numberPending}
               date={issueDate}
               customerName={customerName}
               items={previewItems}

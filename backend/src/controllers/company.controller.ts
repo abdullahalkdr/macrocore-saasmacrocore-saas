@@ -12,7 +12,7 @@ const COMPANY_SELECT_FIELDS = `
   industry, employee_count_range, country, street, building_number, district, city, postal_code,
   commercial_registration_number, fiscal_year_end_month,
   contact_email, contact_phone, logo_base64, stamp_base64,
-  inventory_enabled, delivery_notifications_enabled, two_factor_required
+  inventory_enabled, delivery_notifications_enabled, two_factor_required, default_sales_notes
 `;
 
 export const getMe = asyncHandler(async (req: Request, res: Response) => {
@@ -38,6 +38,7 @@ const STRING_FIELDS = [
   'contact_email',
   'contact_phone',
   'industry',
+  'default_sales_notes',
 ] as const;
 
 const BOOL_FIELDS = ['inventory_enabled', 'delivery_notifications_enabled', 'two_factor_required'] as const;

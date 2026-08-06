@@ -368,11 +368,38 @@ table.data-table th { font-size: 11px; }
 .doc-item-row { display: grid; grid-template-columns: 1fr 70px 90px 32px; gap: 8px; margin-bottom: 6px; align-items: center; }
 @media (max-width: 640px) { .doc-item-row { grid-template-columns: 1fr; } }
 
-/* ---------- Sidebar accordion (Sales section) ---------- */
+/* ---------- Sidebar flyout submenu (Sales section) ----------
+   Matches the Wafeq reference: clicking "المبيعات" doesn't push the sidebar list down —
+   it pops a separate light panel out beside the sidebar (outside the dark rail), with
+   the parent item highlighted while open. */
+.nav-flyout-wrap { position: relative; }
 .nav-accordion-head {
   display: flex; align-items: center; gap: 10px; width: 100%;
-  background: none; border: none; color: inherit; cursor: pointer; padding: 0; font: inherit; text-align: start;
+  background: none; border: none; color: inherit; cursor: pointer; padding: 9px 12px; font: inherit; text-align: start;
+  border-radius: 9px; font-size: 13px; font-weight: 600;
 }
-.nav-accordion-chevron { margin-inline-start: auto; transition: transform .15s; opacity: .7; }
-.nav-accordion-chevron.open { transform: rotate(90deg); }
-.nav-accordion-children { padding-inline-start: 14px; }
+.nav-accordion-head.open { background: var(--amber-500); color: var(--stone-900); }
+.nav-accordion-head:hover:not(.open) { background: var(--stone-800); color: #fff; }
+.nav-accordion-chevron { margin-inline-start: auto; opacity: .8; display: inline-flex; }
+
+.nav-flyout {
+  position: absolute; top: 0; inset-inline-end: calc(100% + 8px);
+  width: 230px; z-index: 60;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.22);
+  padding: 6px;
+}
+.nav-flyout-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px 6px; font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: .02em;
+}
+.nav-flyout-header .back { transform: scaleX(-1); }
+.nav-flyout nav { display: flex; flex-direction: column; gap: 1px; }
+.nav-flyout nav a, .nav-flyout nav button {
+  color: var(--text); text-decoration: none; padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 10px;
+}
+.nav-flyout nav a:hover, .nav-flyout nav button:hover { background: var(--surface-alt); }
+.nav-flyout nav a.active { background: var(--amber-50); color: var(--amber-700); }
+.nav-flyout-divider { border-top: 1px solid var(--border); margin: 5px 6px; }
