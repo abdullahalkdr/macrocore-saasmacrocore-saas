@@ -5,6 +5,9 @@ import { useThemeStore } from './store/themeStore';
 import { useAuthStore } from './store/authStore';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import PricingPage from './pages/PricingPage';
 import SubscriptionExpiredPage from './pages/SubscriptionExpiredPage';
 import PlatformAdminPage from './pages/PlatformAdminPage';
@@ -78,6 +81,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="/platform-admin" element={<PlatformAdminPage />} />

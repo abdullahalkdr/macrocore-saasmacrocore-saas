@@ -4,7 +4,7 @@ import { useAuthStore } from '../store/authStore';
 import { useLangStore, isRTL } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
-import { get } from '../api/client';
+import { get, post } from '../api/client';
 import { planLevelOf, PLAN_TIER_NAME } from '../planLevels';
 import { useUpgradeModalStore } from '../store/upgradeModalStore';
 import Avatar from './Avatar';
@@ -65,6 +65,23 @@ export default function Layout() {
   // hamburger button in a small top bar (see styles.css's 860px media query), closes
   // itself on navigation or on tapping the backdrop.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Unverified-email reminder — non-blocking on purpose (login itself never checks
+  // email_verified, see auth.controller.ts's login()): blocking a real customer out
+  // over a missed verification email is worse for signup conversion than a dismissible
+  // banner. Dismiss is per-session only (not persisted) — it comes back on next login
+  // until the account is actually verified, so it can't be permanently ignored.
+  const [verifyBannerDismissed, setVerifyBannerDismissed] = useState(false);
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle');
+  async function handleResendVerification() {
+    setResendState('sending');
+    try {
+      await post('/auth/resend-verification', {});
+      setResendState('sent');
+    } catch {
+      setResendState('idle');
+    }
+  }
 
   // `company.plan` in authStore is a snapshot from whenever this browser session last
   // logged in — it never updates on its own. If Abdullah changes a tenant's plan from
@@ -419,6 +436,27 @@ export default function Layout() {
         </div>
       </div>
       <div className="main">
+        {user && user.email_verified === false && !verifyBannerDismissed && (
+          <div className="error-banner" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ flex: 1 }}>{t.auth.verifyBannerText}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleResendVerification}
+              disabled={resendState !== 'idle'}
+            >
+              {resendState === 'sent' ? t.auth.verifyBannerSent : resendState === 'sending' ? t.common.loading : t.auth.verifyBannerResend}
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setVerifyBannerDismissed(true)}
+              title={t.common.close}
+            >
+              <IconClose size={16} />
+            </button>
+          </div>
+        )}
         <Outlet />
       </div>
     </div>

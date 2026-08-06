@@ -38,3 +38,23 @@ export function verifyGoogleSignupToken(token: string): GoogleSignupPayload {
   if (decoded.type !== 'google_signup') throw new Error('Not a Google signup token');
   return decoded;
 }
+
+// Email verification link token — carries only a userId (nothing sensitive, so a plain
+// signed JWT is fine here, unlike password reset below which needs server-side
+// invalidation and so uses a stored opaque token instead). 1 day expiry: verifying an
+// email isn't time-sensitive the way a password reset is, and "resend verification" is
+// always available if it lapses.
+export interface EmailVerifyPayload {
+  type: 'email_verify';
+  userId: string;
+}
+
+export function signEmailVerificationToken(userId: string): string {
+  return jwt.sign({ userId, type: 'email_verify' }, env.JWT_SECRET, { expiresIn: '1d' });
+}
+
+export function verifyEmailVerificationToken(token: string): EmailVerifyPayload {
+  const decoded = jwt.verify(token, env.JWT_SECRET) as EmailVerifyPayload;
+  if (decoded.type !== 'email_verify') throw new Error('Not an email verification token');
+  return decoded;
+}

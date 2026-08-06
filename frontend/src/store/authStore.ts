@@ -7,6 +7,7 @@ export interface AuthUser {
   full_name: string | null;
   role: string;
   company_id: string;
+  email_verified?: boolean;
 }
 
 export interface AuthCompany {
@@ -21,6 +22,7 @@ interface AuthState {
   user: AuthUser | null;
   company: AuthCompany | null;
   setAuth: (token: string, user: AuthUser, company?: AuthCompany | null) => void;
+  updateUser: (patch: Partial<AuthUser>) => void;
   logout: () => void;
 }
 
@@ -31,6 +33,10 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       company: null,
       setAuth: (token, user, company) => set({ token, user, company: company ?? null }),
+      // Local-only patch (e.g. flipping email_verified to true right after the user
+      // completes verification) — doesn't touch the server, just keeps the cached user
+      // object in sync so the UI doesn't need a re-login to reflect it.
+      updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : {})),
       logout: () => set({ token: null, user: null, company: null }),
     }),
     { name: 'macrocore-auth' }

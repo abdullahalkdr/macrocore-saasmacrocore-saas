@@ -3,12 +3,20 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { pool } from '../db/pool';
 import { hashPassword, comparePassword } from '../utils/password';
-import { signToken, verifyToken, signGoogleSignupToken, verifyGoogleSignupToken } from '../utils/jwt';
+import {
+  signToken,
+  verifyToken,
+  signGoogleSignupToken,
+  verifyGoogleSignupToken,
+  signEmailVerificationToken,
+  verifyEmailVerificationToken,
+} from '../utils/jwt';
 import { isValidEmail, isValidPassword } from '../utils/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
+import { sendEmail, verificationEmailHtml, passwordResetEmailHtml } from '../utils/email';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID || undefined);
@@ -111,9 +119,12 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     company = companyResult.rows[0];
 
     const passwordHash = googleSub ? null : await hashPassword(password);
+    // Google already verified this mailbox (see googleStart's `payload.email_verified`
+    // check) — a Google signup is verified immediately. A password signup starts
+    // unverified; the confirmation email goes out right after this transaction commits.
     const userResult = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role, google_id, auth_provider)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin', $9, $10)
+      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role, google_id, auth_provider, email_verified_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin', $9, $10, $11)
        RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id`,
       [
         company.id,
@@ -126,6 +137,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         typeof phone === 'string' ? phone.trim() : null,
         googleSub,
         googleSub ? 'google' : 'password',
+        googleSub ? new Date() : null,
       ]
     );
     user = userResult.rows[0];
@@ -153,11 +165,23 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
 
   await logAudit({ companyId: company.id, userId: user.id, action: 'user_registered', entityType: 'users', entityId: user.id, req });
 
+  // Best-effort, non-blocking: sendEmail() never throws (see utils/email.ts), so a
+  // slow/down email provider never breaks registration itself — worst case the user
+  // hits "resend verification" from the banner once logged in.
+  if (!googleSub) {
+    const emailVerifyToken = signEmailVerificationToken(user.id);
+    void sendEmail({
+      to: normalizedEmail,
+      subject: 'فعّل بريدك الإلكتروني — macrocore',
+      html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`),
+    });
+  }
+
   const token = signToken({ userId: user.id, companyId: company.id, role: user.role });
 
   res.status(200).json({
     success: true,
-    user,
+    user: { ...user, email_verified: !!googleSub },
     company,
     token,
     invited_users: invitedUsers,
@@ -191,7 +215,7 @@ export const googleStart = asyncHandler(async (req: Request, res: Response) => {
   const googleSub = payload.sub;
 
   const result = await pool.query(
-    `SELECT u.id, u.email, u.full_name, u.role, u.status, u.company_id, u.google_id,
+    `SELECT u.id, u.email, u.full_name, u.role, u.status, u.company_id, u.google_id, u.email_verified_at,
             c.plan, c.trial_end_date
      FROM users u
      JOIN companies c ON c.id = u.company_id
@@ -208,6 +232,13 @@ export const googleStart = asyncHandler(async (req: Request, res: Response) => {
         [googleSub, row.id]
       );
     }
+    // Google just re-proved they own this mailbox — if the account was still sitting
+    // unverified (e.g. they signed up with a password and never clicked the email link,
+    // then later used "Continue with Google" instead), treat it as verified now too.
+    if (!row.email_verified_at) {
+      await pool.query(`UPDATE users SET email_verified_at = NOW() WHERE id = $1`, [row.id]);
+      row.email_verified_at = new Date();
+    }
     await logAudit({ companyId: row.company_id, userId: row.id, action: 'login_success', entityType: 'users', entityId: row.id, req });
 
     const token = signToken({ userId: row.id, companyId: row.company_id, role: row.role });
@@ -220,7 +251,7 @@ export const googleStart = asyncHandler(async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       exists: true,
-      user: { id: row.id, email: row.email, full_name: row.full_name, role: row.role, company_id: row.company_id },
+      user: { id: row.id, email: row.email, full_name: row.full_name, role: row.role, company_id: row.company_id, email_verified: true },
       token,
       trial_days_remaining: trialDaysRemaining,
     });
@@ -252,7 +283,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await pool.query(
-    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.status, u.company_id,
+    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.status, u.company_id, u.email_verified_at,
             c.plan, c.trial_end_date
      FROM users u
      JOIN companies c ON c.id = u.company_id
@@ -283,7 +314,14 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
 
   res.status(200).json({
     success: true,
-    user: { id: row.id, email: row.email, full_name: row.full_name, role: row.role, company_id: row.company_id },
+    user: {
+      id: row.id,
+      email: row.email,
+      full_name: row.full_name,
+      role: row.role,
+      company_id: row.company_id,
+      email_verified: !!row.email_verified_at,
+    },
     token,
     trial_days_remaining: trialDaysRemaining,
   });
@@ -336,4 +374,110 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
   await logAudit({ companyId: req.auth!.companyId, userId, action: 'password_changed', entityType: 'users', entityId: userId, req });
 
   res.status(200).json({ success: true, message: 'Password updated' });
+});
+
+// Public — clicked from the emailed link. Deliberately does NOT require a session
+// (someone might click it in a different browser than the one they signed up in).
+export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
+  const { token } = req.body ?? {};
+  if (typeof token !== 'string' || !token) throw new AppError(400, 'token is required');
+
+  let payload;
+  try {
+    payload = verifyEmailVerificationToken(token);
+  } catch {
+    throw new AppError(400, 'Verification link is invalid or expired');
+  }
+
+  const result = await pool.query(
+    `UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = $1 RETURNING id, company_id, email_verified_at`,
+    [payload.userId]
+  );
+  const row = result.rows[0];
+  if (!row) throw new AppError(404, 'Account not found');
+
+  await logAudit({ companyId: row.company_id, userId: row.id, action: 'email_verified', entityType: 'users', entityId: row.id, req });
+
+  res.status(200).json({ success: true, message: 'Email verified' });
+});
+
+// Session-authenticated — the "إعادة إرسال" button shown on the unverified-email banner.
+// Rate-limited by the same authLimiter as every other /auth/* route.
+export const resendVerification = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth!.userId;
+  const result = await pool.query('SELECT email, email_verified_at FROM users WHERE id = $1', [userId]);
+  const row = result.rows[0];
+  if (!row) throw new AppError(404, 'User not found');
+  if (row.email_verified_at) {
+    res.status(200).json({ success: true, message: 'Already verified' });
+    return;
+  }
+
+  const emailVerifyToken = signEmailVerificationToken(userId);
+  await sendEmail({
+    to: row.email,
+    subject: 'فعّل بريدك الإلكتروني — macrocore',
+    html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`),
+  });
+
+  res.status(200).json({ success: true, message: 'Verification email sent' });
+});
+
+// Public. Always returns the same generic success message whether or not the email
+// exists — a distinct "not found" response here is a classic account-enumeration leak
+// (lets an attacker mass-check which emails have accounts on your platform).
+export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body ?? {};
+  if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
+
+  const result = await pool.query('SELECT id, auth_provider FROM users WHERE email = $1', [email.toLowerCase()]);
+  const row = result.rows[0];
+
+  // Google-only accounts have no password to reset — still respond generically (same
+  // reasoning as above), the email itself can explain there's nothing to do here if we
+  // wanted to, but keeping it silent is simplest and leaks nothing either way.
+  if (row && row.auth_provider !== 'google') {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await pool.query(
+      `UPDATE users SET password_reset_token_hash = $1, password_reset_expires_at = NOW() + INTERVAL '30 minutes' WHERE id = $2`,
+      [tokenHash, row.id]
+    );
+    await sendEmail({
+      to: email.toLowerCase(),
+      subject: 'إعادة تعيين كلمة المرور — macrocore',
+      html: passwordResetEmailHtml(`${env.FRONTEND_URL}/reset-password?token=${rawToken}`),
+    });
+  }
+
+  res.status(200).json({ success: true, message: 'If that email exists, a reset link has been sent' });
+});
+
+// Public. Looks the raw token up by its hash (never store/compare the raw token itself)
+// and checks it hasn't expired — one-shot by design, the columns are cleared on use so
+// the same link can't be replayed.
+export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  const { token, new_password } = req.body ?? {};
+  if (typeof token !== 'string' || !token) throw new AppError(400, 'token is required');
+  if (!isValidPassword(new_password)) {
+    throw new AppError(400, 'Password must be at least 8 characters and include a letter and a number');
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const result = await pool.query(
+    `SELECT id, company_id FROM users WHERE password_reset_token_hash = $1 AND password_reset_expires_at > NOW()`,
+    [tokenHash]
+  );
+  const row = result.rows[0];
+  if (!row) throw new AppError(400, 'Reset link is invalid or expired');
+
+  const newHash = await hashPassword(new_password);
+  await pool.query(
+    `UPDATE users SET password_hash = $1, password_reset_token_hash = NULL, password_reset_expires_at = NULL, updated_at = NOW() WHERE id = $2`,
+    [newHash, row.id]
+  );
+
+  await logAudit({ companyId: row.company_id, userId: row.id, action: 'password_reset', entityType: 'users', entityId: row.id, req });
+
+  res.status(200).json({ success: true, message: 'Password updated — you can log in now' });
 });

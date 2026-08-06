@@ -113,7 +113,12 @@ export default function LoginPage() {
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
           </div>
           <div className="field">
-            <label>{t.auth.password}</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <label style={{ marginBottom: 0 }}>{t.auth.password}</label>
+              <Link to="/forgot-password" style={{ fontSize: 12, color: 'var(--amber-600)', fontWeight: 700 }}>
+                {t.auth.forgotPasswordLink}
+              </Link>
+            </div>
             <div style={{ position: 'relative' }}>
               <input
                 type={showPassword ? 'text' : 'password'}

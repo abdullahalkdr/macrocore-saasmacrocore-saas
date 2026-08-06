@@ -18,4 +18,11 @@ export const env = {
   // Optional on purpose (not required()) — a missing key disables /auth/google with a
   // clear 500 instead of crashing the whole server on boot before it's configured.
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
+
+  // Optional on purpose, same reasoning — missing RESEND_API_KEY just makes
+  // utils/email.ts log to the console instead of sending, so local dev never needs a
+  // real email provider configured.
+  RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+  EMAIL_FROM: process.env.EMAIL_FROM || 'macrocore <hello@macrocore.io>',
+  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
 };
