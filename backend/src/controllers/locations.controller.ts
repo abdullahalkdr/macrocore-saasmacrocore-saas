@@ -4,6 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { isForeignKeyViolation } from '../utils/dbErrors';
+import { planLevelOf, BRONZE_LOCATION_LIMIT } from '../config/planFeatures';
 
 const LOCATION_TYPES = ['kiosk', 'warehouse'];
 
@@ -23,6 +24,22 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   if (typeof name !== 'string' || name.trim().length < 1) throw new AppError(400, 'name is required');
   if (type !== undefined && !LOCATION_TYPES.includes(type)) {
     throw new AppError(400, `type must be one of ${LOCATION_TYPES.join(', ')}`);
+  }
+
+  // "Multiple locations" is a Silver+ feature (docs/macrocore-خارطة-طريق.md) — Bronze
+  // is priced for a single kiosk/branch. This is a quantity cap rather than a route
+  // gate: every plan, Bronze included, still needs to create its one location to open
+  // a shift at all (see shifts.controller.ts open()).
+  const companyResult = await pool.query(`SELECT plan FROM companies WHERE id = $1`, [companyId]);
+  if (planLevelOf(companyResult.rows[0]?.plan) < 2) {
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS n FROM locations WHERE company_id = $1`, [companyId]);
+    if (countResult.rows[0].n >= BRONZE_LOCATION_LIMIT) {
+      throw new AppError(
+        403,
+        `The Bronze plan includes ${BRONZE_LOCATION_LIMIT} location — upgrade to Silver or higher to add more.`,
+        'PLAN_UPGRADE_REQUIRED'
+      );
+    }
   }
 
   const result = await pool.query(

@@ -5,6 +5,7 @@ import { useLangStore } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
 import { get } from '../api/client';
+import { planLevelOf } from '../planLevels';
 import Avatar from './Avatar';
 import NotificationsBell from './NotificationsBell';
 import {
@@ -56,9 +57,9 @@ export default function Layout() {
       label: t.nav.groupDailyOps,
       items: [
         { to: '/shift', label: t.nav.shift, icon: IconSales },
-        { to: '/customers', label: t.nav.customers, icon: IconEmployee },
+        { to: '/customers', label: t.nav.customers, icon: IconEmployee, minPlan: 2 },
         { to: '/expenses', label: t.nav.expenses, icon: IconExpense },
-        { to: '/waste', label: t.nav.waste, icon: IconTrash },
+        { to: '/waste', label: t.nav.waste, icon: IconTrash, minPlan: 2 },
       ],
     },
     {
@@ -68,39 +69,39 @@ export default function Layout() {
     {
       label: t.nav.groupWarehouses,
       items: [
-        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true },
+        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true, minPlan: 2 },
         { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true },
-        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true },
-        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true },
+        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true, minPlan: 2 },
+        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true, minPlan: 2 },
         { to: '/locations', label: t.nav.locations, icon: IconBuilding, managerOnly: true },
-        { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true },
-        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true },
+        { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true, minPlan: 2 },
+        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true, minPlan: 2 },
       ],
     },
     {
       label: t.nav.groupHR,
       items: [
-        { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true },
-        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true },
-        { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance },
-        { to: '/attendance', label: t.nav.attendance, icon: IconAttendance },
-        { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance },
+        { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true, minPlan: 2 },
+        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true, minPlan: 3 },
+        { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
+        { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },
+        { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
       ],
     },
     {
       label: t.nav.groupReportsDocs,
       items: [
         { to: '/reports', label: t.nav.reports, icon: IconReports },
-        { to: '/official-documents', label: t.nav.officialDocuments, icon: IconReports, managerOnly: true },
-        { to: '/company-files', label: t.nav.companyFiles, icon: IconReports, managerOnly: true },
-        { to: '/audit-log', label: t.nav.auditLog, icon: IconReports, managerOnly: true },
+        { to: '/official-documents', label: t.nav.officialDocuments, icon: IconReports, managerOnly: true, minPlan: 2 },
+        { to: '/company-files', label: t.nav.companyFiles, icon: IconReports, managerOnly: true, minPlan: 2 },
+        { to: '/audit-log', label: t.nav.auditLog, icon: IconReports, managerOnly: true, minPlan: 3 },
       ],
     },
     {
       label: t.nav.groupSettings,
       items: [
         { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
-        { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true },
+        { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true, minPlan: 3 },
         { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
         { to: '/support', label: t.nav.support, icon: IconSettings },
       ],
@@ -114,11 +115,15 @@ export default function Layout() {
 
   const isManager = user?.role === 'admin' || user?.role === 'manager';
   const isAdmin = user?.role === 'admin';
+  const companyPlanLevel = planLevelOf(company?.plan);
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
       items: group.items.filter(
-        (i) => (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin)
+        (i) =>
+          (!('managerOnly' in i) || !i.managerOnly || isManager) &&
+          (!('adminOnly' in i) || !i.adminOnly || isAdmin) &&
+          (!('minPlan' in i) || !i.minPlan || companyPlanLevel >= i.minPlan)
       ),
     }))
     .filter((group) => group.items.length > 0);
