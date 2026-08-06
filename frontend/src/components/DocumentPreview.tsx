@@ -5,6 +5,7 @@ export interface PreviewItem {
   description: string;
   qty: number;
   unitPrice: number;
+  discountPct?: number;
 }
 
 interface DocumentPreviewProps {
@@ -15,16 +16,37 @@ interface DocumentPreviewProps {
   customerName: string;
   items: PreviewItem[];
   notes?: string;
+  statusLabel?: string;
+  statusVariant?: 'draft' | 'paid';
+  showDiscountColumn?: boolean;
 }
 
-// Shared "paper" preview used by both the quote and invoice editors — a live read-only
-// rendering of the document being built, matching the split-pane layout in the Wafeq
-// reference screenshots (form on one side, a preview that updates as you type on the
-// other). No tax/VAT line — Kuwait has no VAT, so subtotal and total are always equal.
-export default function DocumentPreview({ docTypeLabel, number, date, dueDate, customerName, items, notes }: DocumentPreviewProps) {
+function lineTotal(it: PreviewItem) {
+  return (it.qty || 0) * (it.unitPrice || 0) * (1 - (it.discountPct || 0) / 100);
+}
+
+// Shared "paper" preview used by the quote/invoice/credit-note/cash-invoice editors — a
+// live read-only rendering of the document being built, matching the split-pane layout
+// in the Wafeq reference (form on one side, a preview that updates as you type on the
+// other — here the preview sits on the left, the form on the right, per Abdullah's
+// "المعاينة تكون على اليسار" request). No tax/VAT line — Kuwait has no VAT.
+export default function DocumentPreview({
+  docTypeLabel,
+  number,
+  date,
+  dueDate,
+  customerName,
+  items,
+  notes,
+  statusLabel,
+  statusVariant,
+  showDiscountColumn,
+}: DocumentPreviewProps) {
   const company = useAuthStore((s) => s.company);
   const t = useT();
-  const total = items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+  const subtotal = items.reduce((sum, it) => sum + (it.qty || 0) * (it.unitPrice || 0), 0);
+  const total = items.reduce((sum, it) => sum + lineTotal(it), 0);
+  const hasDiscount = showDiscountColumn ?? items.some((it) => (it.discountPct || 0) > 0);
 
   return (
     <div className="doc-paper">
@@ -38,6 +60,7 @@ export default function DocumentPreview({ docTypeLabel, number, date, dueDate, c
           <div className="doc-paper-meta">{number || '—'}</div>
           <div className="doc-paper-meta">{date || '—'}</div>
           {dueDate && <div className="doc-paper-meta">{t.salesDocs.due}: {dueDate}</div>}
+          {statusLabel && <span className={`badge ${statusVariant || 'draft'}`} style={{ marginTop: 6, display: 'inline-block' }}>{statusLabel}</span>}
         </div>
       </div>
 
@@ -50,13 +73,14 @@ export default function DocumentPreview({ docTypeLabel, number, date, dueDate, c
             <th>{t.salesDocs.description}</th>
             <th className="num">{t.salesDocs.qty}</th>
             <th className="num">{t.salesDocs.unitPrice}</th>
+            {hasDiscount && <th className="num">{t.salesDocs.discount}</th>}
             <th className="num">{t.salesDocs.lineTotal}</th>
           </tr>
         </thead>
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={4}>
+              <td colSpan={hasDiscount ? 5 : 4}>
                 <div className="empty-state">{t.salesDocs.noItemsYet}</div>
               </td>
             </tr>
@@ -66,13 +90,20 @@ export default function DocumentPreview({ docTypeLabel, number, date, dueDate, c
               <td>{it.description || '—'}</td>
               <td className="num">{it.qty || 0}</td>
               <td className="num">{(it.unitPrice || 0).toFixed(3)}</td>
-              <td className="num">{((it.qty || 0) * (it.unitPrice || 0)).toFixed(3)}</td>
+              {hasDiscount && <td className="num">{it.discountPct ? `${it.discountPct}%` : '—'}</td>}
+              <td className="num">{lineTotal(it).toFixed(3)}</td>
             </tr>
           ))}
         </tbody>
       </table>
 
       <div className="doc-paper-totals">
+        {hasDiscount && (
+          <div className="row">
+            <span>{t.salesDocs.subtotal}</span>
+            <span>{subtotal.toFixed(3)} KD</span>
+          </div>
+        )}
         <div className="row total">
           <span>{t.salesDocs.total}</span>
           <span>{total.toFixed(3)} KD</span>

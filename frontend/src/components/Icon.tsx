@@ -133,3 +133,16 @@ export const IconChevronRight = ({ size = 14 }: IconProps) => (
     <path d="M9 18l6-6-6-6" />
   </svg>
 );
+
+export const IconPrinter = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z" />
+  </svg>
+);
+
+export const IconEyeOff = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-8-11-8a19.7 19.7 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a19.6 19.6 0 01-2.16 3.19M14.12 14.12a3 3 0 11-4.24-4.24" />
+    <path d="M1 1l22 22" />
+  </svg>
+);

@@ -229,6 +229,7 @@ tr:hover td { background: var(--surface-alt); }
 .badge.ordered { background: var(--amber-50); color: var(--amber-700); }
 .badge.received { background: var(--emerald-50); color: var(--emerald-700); }
 .badge.cancelled { background: var(--surface-alt); color: var(--muted); }
+.badge.paid { background: var(--emerald-50); color: var(--emerald-700); }
 
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .product-tile {
@@ -347,7 +348,13 @@ table.data-table th { font-size: 11px; }
 /* Split-pane editor: form fields + a live paper-style preview, side by side, matching
    the quote/invoice creation screenshots. In RTL the first grid child (form) lands on
    the right and the second (preview) on the left — same visual order as the reference. */
-.doc-split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 24px; align-items: start; }
+/* Form (wide, holds the fields) stays on the trailing side, preview "paper" (narrow,
+   fixed-ish width, like a real invoice sheet) stays on the leading/left side — matches
+   the Wafeq reference and Abdullah's "المعاينة تكون على اليسار" request. DOM order is
+   form-then-preview; only the column widths are swapped here, not the JSX order. */
+.doc-split { display: grid; grid-template-columns: 1fr minmax(320px, 420px); gap: 24px; align-items: start; }
+.doc-split.preview-hidden { grid-template-columns: 1fr; }
+.doc-split.preview-hidden .doc-paper { display: none; }
 @media (max-width: 960px) { .doc-split { grid-template-columns: 1fr; } }
 
 .doc-paper {
@@ -365,8 +372,14 @@ table.data-table th { font-size: 11px; }
 .doc-paper-totals .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
 .doc-paper-totals .row.total { font-weight: 800; font-size: 15px; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 8px; }
 
-.doc-item-row { display: grid; grid-template-columns: 1fr 70px 90px 32px; gap: 8px; margin-bottom: 6px; align-items: center; }
+.doc-item-row { display: grid; grid-template-columns: 1fr 70px 90px 70px 32px; gap: 8px; margin-bottom: 6px; align-items: center; }
 @media (max-width: 640px) { .doc-item-row { grid-template-columns: 1fr; } }
+
+/* Hover-reveal printer icon in list rows (Wafeq reference: printer icon only shows on
+   row hover) — the row itself gets a marker class so this doesn't leak to every table. */
+.print-btn { opacity: 0; transition: opacity 0.15s; }
+.row-hover-actions:hover .print-btn,
+tr:hover .print-btn { opacity: 1; }
 
 /* ---------- Sidebar flyout submenu (Sales section) ----------
    Matches the Wafeq reference: clicking "المبيعات" doesn't push the sidebar list down —

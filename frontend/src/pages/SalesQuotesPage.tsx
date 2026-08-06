@@ -1,10 +1,13 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useAuthStore } from '../store/authStore';
+import { useLangStore, isRTL } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import FullScreenDoc from '../components/FullScreenDoc';
 import DocumentPreview from '../components/DocumentPreview';
-import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
+import { IconPlus, IconEdit, IconTrash, IconEye, IconEyeOff, IconPrinter } from '../components/Icon';
+import { printDocument } from '../utils/printDocument';
 
 interface Customer {
   id: string;
@@ -15,6 +18,7 @@ interface QuoteItem {
   description: string;
   qty: number;
   unit_price: number;
+  discount_pct: number;
 }
 interface Quote {
   id: string;
@@ -30,14 +34,17 @@ interface ItemRow {
   description: string;
   qty: string;
   unitPrice: string;
+  discountPct: string;
 }
 
 function emptyRow(): ItemRow {
-  return { description: '', qty: '1', unitPrice: '' };
+  return { description: '', qty: '1', unitPrice: '', discountPct: '' };
 }
 
 export default function SalesQuotesPage() {
   const t = useT();
+  const company = useAuthStore((s) => s.company);
+  const lang = useLangStore((s) => s.lang);
   const [items, setItems] = useState<Quote[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [defaultNotes, setDefaultNotes] = useState('');
@@ -52,6 +59,7 @@ export default function SalesQuotesPage() {
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState<ItemRow[]>([emptyRow()]);
   const [number, setNumber] = useState('');
+  const [previewHidden, setPreviewHidden] = useState(false);
 
   function load() {
     get<{ quotes: Quote[] }>('/sales-quotes')
@@ -93,7 +101,7 @@ export default function SalesQuotesPage() {
       setNumber(r.quote.number);
       setRows(
         r.items.length > 0
-          ? r.items.map((it) => ({ description: it.description, qty: String(it.qty), unitPrice: String(it.unit_price) }))
+          ? r.items.map((it) => ({ description: it.description, qty: String(it.qty), unitPrice: String(it.unit_price), discountPct: it.discount_pct ? String(it.discount_pct) : '' }))
           : [emptyRow()]
       );
       setOpen(true);
@@ -119,7 +127,7 @@ export default function SalesQuotesPage() {
     setError(null);
     const cleanItems = rows
       .filter((r) => r.description.trim() && Number(r.qty) > 0)
-      .map((r) => ({ description: r.description.trim(), qty: Number(r.qty), unit_price: Number(r.unitPrice) || 0 }));
+      .map((r) => ({ description: r.description.trim(), qty: Number(r.qty), unit_price: Number(r.unitPrice) || 0, discount_pct: Number(r.discountPct) || 0 }));
     if (cleanItems.length === 0) {
       setError(t.salesQuotes.needItem);
       return;
@@ -166,8 +174,45 @@ export default function SalesQuotesPage() {
     return t.salesQuotes.status[s];
   }
 
-  const previewItems = rows.map((r) => ({ description: r.description, qty: Number(r.qty) || 0, unitPrice: Number(r.unitPrice) || 0 }));
+  const previewItems = rows.map((r) => ({ description: r.description, qty: Number(r.qty) || 0, unitPrice: Number(r.unitPrice) || 0, discountPct: Number(r.discountPct) || 0 }));
   const customerName = customers.find((c) => c.id === customerId)?.name || '';
+
+  function printQuote(q: Quote, qItems: QuoteItem[]) {
+    printDocument({
+      companyName: company?.name || 'macrocore',
+      docTypeLabel: t.salesQuotes.docLabel,
+      number: q.number,
+      date: q.issue_date ? q.issue_date.slice(0, 10) : '',
+      customerName: q.customer_name || '',
+      items: qItems.map((it) => ({ description: it.description, qty: it.qty, unitPrice: it.unit_price, discountPct: it.discount_pct })),
+      notes: q.notes,
+      statusLabel: statusLabel(q.status),
+      labels: {
+        billTo: t.salesDocs.billTo,
+        description: t.salesDocs.description,
+        qty: t.salesDocs.qty,
+        unitPrice: t.salesDocs.unitPrice,
+        discount: t.salesDocs.discount,
+        lineTotal: t.salesDocs.lineTotal,
+        subtotal: t.salesDocs.subtotal,
+        total: t.salesDocs.total,
+        notes: t.salesDocs.notes,
+        due: t.salesDocs.due,
+      },
+      dir: isRTL(lang) ? 'rtl' : 'ltr',
+      lang,
+    });
+  }
+
+  async function handlePrint(q: Quote) {
+    setError(null);
+    try {
+      const r = await get<{ quote: Quote; items: QuoteItem[] }>(`/sales-quotes/${q.id}`);
+      printQuote(r.quote, r.items);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.salesQuotes.loadFailed);
+    }
+  }
 
   return (
     <div>
@@ -206,7 +251,10 @@ export default function SalesQuotesPage() {
                     </span>
                   </td>
                   <td className="num">{q.total.toFixed(3)} KD</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
+                  <td className="row-hover-actions" style={{ whiteSpace: 'nowrap' }}>
+                    <button className="icon-btn print-btn" title={t.salesDocs.print} onClick={() => handlePrint(q)}>
+                      <IconPrinter />
+                    </button>
                     <button className="icon-btn" title={t.salesQuotes.editItem} onClick={() => openEdit(q)}>
                       <IconEdit />
                     </button>
@@ -240,14 +288,19 @@ export default function SalesQuotesPage() {
           title={editingId ? `${t.salesQuotes.editItem} — ${number}` : t.salesQuotes.newItem}
           onClose={() => setOpen(false)}
           actions={
-            !isLocked ? (
-              <button className="btn btn-primary btn-sm" type="submit" form="quote-form" disabled={loading}>
-                {loading ? t.common.loading : t.common.save}
+            <>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPreviewHidden((v) => !v)}>
+                {previewHidden ? <IconEye /> : <IconEyeOff />} {previewHidden ? t.salesDocs.showPreview : t.salesDocs.hidePreview}
               </button>
-            ) : undefined
+              {!isLocked && (
+                <button className="btn btn-primary btn-sm" type="submit" form="quote-form" disabled={loading}>
+                  {loading ? t.common.loading : t.common.save}
+                </button>
+              )}
+            </>
           }
         >
-          <div className="doc-split">
+          <div className={`doc-split${previewHidden ? ' preview-hidden' : ''}`}>
             <form id="quote-form" onSubmit={handleSubmit}>
               {isLocked && <div className="error-banner">{t.salesQuotes.lockedNotice}</div>}
               <div className="field">
@@ -298,6 +351,16 @@ export default function SalesQuotesPage() {
                       onChange={(e) => updateRow(i, { unitPrice: e.target.value })}
                       disabled={isLocked}
                     />
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      placeholder={t.salesDocs.discount}
+                      value={row.discountPct}
+                      onChange={(e) => updateRow(i, { discountPct: e.target.value })}
+                      disabled={isLocked}
+                    />
                     {!isLocked && (
                       <button type="button" className="icon-btn" title={t.common.delete} onClick={() => removeRow(i)}>
                         <IconTrash />
@@ -320,6 +383,8 @@ export default function SalesQuotesPage() {
               customerName={customerName}
               items={previewItems}
               notes={notes}
+              statusLabel={editingId ? statusLabel(editingStatus) : undefined}
+              statusVariant={editingStatus === 'accepted' ? 'paid' : 'draft'}
             />
           </div>
         </FullScreenDoc>

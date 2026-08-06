@@ -8,6 +8,7 @@ interface ItemInput {
   description: string;
   qty: number;
   unit_price: number;
+  discount_pct: number;
 }
 
 function validateItems(items: unknown): ItemInput[] {
@@ -16,14 +17,24 @@ function validateItems(items: unknown): ItemInput[] {
     if (typeof it?.description !== 'string' || !it.description.trim()) throw new AppError(400, 'each item needs a description');
     if (typeof it?.qty !== 'number' || it.qty <= 0) throw new AppError(400, 'each item needs a positive qty');
     if (typeof it?.unit_price !== 'number' || it.unit_price < 0) throw new AppError(400, 'each item needs a non-negative unit_price');
+    if (it.discount_pct !== undefined && (typeof it.discount_pct !== 'number' || it.discount_pct < 0 || it.discount_pct > 100)) {
+      throw new AppError(400, 'discount_pct must be between 0 and 100');
+    }
+    it.discount_pct = it.discount_pct ?? 0;
   }
   return items;
 }
 
+function lineTotal(it: ItemInput) {
+  return it.qty * it.unit_price * (1 - it.discount_pct / 100);
+}
+
 function computeTotals(items: ItemInput[]) {
+  // subtotal = gross (before discount), total = net (after each line's discount_pct).
+  // No tax anywhere in macrocore (Kuwait has no VAT) — nothing else adjusts total.
   const subtotal = items.reduce((sum, it) => sum + it.qty * it.unit_price, 0);
-  // No tax anywhere in macrocore (Kuwait has no VAT) — total always == subtotal.
-  return { subtotal, total: subtotal };
+  const total = items.reduce((sum, it) => sum + lineTotal(it), 0);
+  return { subtotal, total };
 }
 
 async function nextNumber(companyId: string, type: 'invoice' | 'cash'): Promise<string> {
@@ -34,7 +45,7 @@ async function nextNumber(companyId: string, type: 'invoice' | 'cash'): Promise<
 
 async function fetchItems(invoiceId: string) {
   const result = await pool.query(
-    `SELECT id, description, qty, unit_price, line_total FROM sales_invoice_items WHERE invoice_id = $1 ORDER BY sort_order`,
+    `SELECT id, description, qty, unit_price, discount_pct, line_total FROM sales_invoice_items WHERE invoice_id = $1 ORDER BY sort_order`,
     [invoiceId]
   );
   return result.rows;
@@ -85,15 +96,19 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { customer_id, issue_date, due_date, notes, items, type } = req.body ?? {};
+  const { customer_id, issue_date, due_date, notes, items, type, status } = req.body ?? {};
 
   const itemList = validateItems(items);
   const { subtotal, total } = computeTotals(itemList);
   const docType: 'invoice' | 'cash' = type === 'cash' ? 'cash' : 'invoice';
-  // A cash invoice is money already collected at the moment of writing it — it skips
-  // the draft/sent workflow real invoices go through and is paid in full immediately
-  // (see the Cash Invoices page: no due date, no "mark as sent" step).
+  // A cash invoice skips the sent/overdue steps a real invoice goes through, but per
+  // Abdullah's Wafeq reference it still has two buttons at creation: "حفظ كمسودة"
+  // (save as draft — nothing collected yet, e.g. writing it up before the customer
+  // pays) and "اعتماد" (confirm — money collected right now, marks it paid in full
+  // immediately). Regular invoices always start as draft regardless of what's sent
+  // here; only cash invoices honor an explicit draft request.
   const isCash = docType === 'cash';
+  const cashConfirmed = isCash && status !== 'draft';
 
   if (customer_id) {
     const c = await pool.query('SELECT id FROM customers WHERE id = $1 AND company_id = $2', [customer_id, companyId]);
@@ -119,8 +134,8 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
         notes ?? null,
         subtotal,
         total,
-        isCash ? 'paid' : 'draft',
-        isCash ? total : 0,
+        isCash ? (cashConfirmed ? 'paid' : 'draft') : 'draft',
+        isCash && cashConfirmed ? total : 0,
         req.auth!.userId,
       ]
     );
@@ -129,9 +144,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     for (let idx = 0; idx < itemList.length; idx++) {
       const it = itemList[idx];
       await client.query(
-        `INSERT INTO sales_invoice_items (invoice_id, description, qty, unit_price, line_total, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [invoiceId, it.description.trim(), it.qty, it.unit_price, it.qty * it.unit_price, idx]
+        `INSERT INTO sales_invoice_items (invoice_id, description, qty, unit_price, discount_pct, line_total, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [invoiceId, it.description.trim(), it.qty, it.unit_price, it.discount_pct, lineTotal(it), idx]
       );
     }
     await client.query('COMMIT');
@@ -155,16 +170,23 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { customer_id, issue_date, due_date, notes, items, status, amount_paid } = req.body ?? {};
 
-  const existing = await pool.query('SELECT status FROM sales_invoices WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const existing = await pool.query('SELECT status, type, total FROM sales_invoices WHERE id = $1 AND company_id = $2', [id, companyId]);
   if (!existing.rows[0]) throw new AppError(404, 'Invoice not found');
   const currentStatus = existing.rows[0].status;
+  const invoiceType = existing.rows[0].type as 'invoice' | 'cash';
+  const existingTotal = Number(existing.rows[0].total);
 
   if (status !== undefined) {
-    const allowed: Record<string, string[]> = {
-      draft: ['sent', 'cancelled'],
-      sent: ['paid', 'overdue', 'cancelled'],
-      overdue: ['paid', 'cancelled'],
-    };
+    // Cash invoices skip sent/overdue entirely — a draft cash invoice just needs
+    // "اعتماد" (confirm payment received) or cancellation.
+    const allowed: Record<string, string[]> =
+      invoiceType === 'cash'
+        ? { draft: ['paid', 'cancelled'] }
+        : {
+            draft: ['sent', 'cancelled'],
+            sent: ['paid', 'overdue', 'cancelled'],
+            overdue: ['paid', 'cancelled'],
+          };
     if (!allowed[currentStatus]?.includes(status)) {
       throw new AppError(400, `Cannot move a ${currentStatus} invoice to ${status}`);
     }
@@ -205,6 +227,10 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     if (amount_paid !== undefined) {
       if (typeof amount_paid !== 'number' || amount_paid < 0) throw new AppError(400, 'amount_paid must be a non-negative number');
       set('amount_paid', amount_paid);
+    } else if (status === 'paid' && invoiceType === 'cash') {
+      // "اعتماد" on a draft cash invoice confirms full payment — auto-fill amount_paid
+      // with the (possibly just-edited) total so the frontend doesn't have to send it.
+      set('amount_paid', total !== undefined ? total : existingTotal);
     }
     if (subtotal !== undefined) {
       set('subtotal', subtotal);
@@ -221,9 +247,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       for (let idx = 0; idx < itemList.length; idx++) {
         const it = itemList[idx];
         await client.query(
-          `INSERT INTO sales_invoice_items (invoice_id, description, qty, unit_price, line_total, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, it.description.trim(), it.qty, it.unit_price, it.qty * it.unit_price, idx]
+          `INSERT INTO sales_invoice_items (invoice_id, description, qty, unit_price, discount_pct, line_total, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, it.description.trim(), it.qty, it.unit_price, it.discount_pct, lineTotal(it), idx]
         );
       }
     }

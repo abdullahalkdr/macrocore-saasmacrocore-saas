@@ -8,6 +8,7 @@ interface ItemInput {
   description: string;
   qty: number;
   unit_price: number;
+  discount_pct: number;
 }
 
 function validateItems(items: unknown): ItemInput[] {
@@ -16,16 +17,24 @@ function validateItems(items: unknown): ItemInput[] {
     if (typeof it?.description !== 'string' || !it.description.trim()) throw new AppError(400, 'each item needs a description');
     if (typeof it?.qty !== 'number' || it.qty <= 0) throw new AppError(400, 'each item needs a positive qty');
     if (typeof it?.unit_price !== 'number' || it.unit_price < 0) throw new AppError(400, 'each item needs a non-negative unit_price');
+    if (it.discount_pct !== undefined && (typeof it.discount_pct !== 'number' || it.discount_pct < 0 || it.discount_pct > 100)) {
+      throw new AppError(400, 'discount_pct must be between 0 and 100');
+    }
+    it.discount_pct = it.discount_pct ?? 0;
   }
   return items;
 }
 
+function lineTotal(it: ItemInput) {
+  return it.qty * it.unit_price * (1 - it.discount_pct / 100);
+}
+
 function computeTotals(items: ItemInput[]) {
+  // subtotal = gross (before discount), total = net (after each line's discount_pct).
+  // No tax anywhere in macrocore (Kuwait has no VAT) — nothing else adjusts total.
   const subtotal = items.reduce((sum, it) => sum + it.qty * it.unit_price, 0);
-  // No tax anywhere in macrocore (Kuwait has no VAT) — total is always == subtotal.
-  // Kept as a separate column (rather than deriving it in every query) so a future
-  // discount/rounding feature has somewhere to land without a schema change.
-  return { subtotal, total: subtotal };
+  const total = items.reduce((sum, it) => sum + lineTotal(it), 0);
+  return { subtotal, total };
 }
 
 async function nextNumber(companyId: string): Promise<string> {
@@ -35,7 +44,7 @@ async function nextNumber(companyId: string): Promise<string> {
 
 async function fetchItems(quoteId: string) {
   const result = await pool.query(
-    `SELECT id, description, qty, unit_price, line_total FROM sales_quote_items WHERE quote_id = $1 ORDER BY sort_order`,
+    `SELECT id, description, qty, unit_price, discount_pct, line_total FROM sales_quote_items WHERE quote_id = $1 ORDER BY sort_order`,
     [quoteId]
   );
   return result.rows;
@@ -108,9 +117,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     for (let idx = 0; idx < itemList.length; idx++) {
       const it = itemList[idx];
       await client.query(
-        `INSERT INTO sales_quote_items (quote_id, description, qty, unit_price, line_total, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [quoteId, it.description.trim(), it.qty, it.unit_price, it.qty * it.unit_price, idx]
+        `INSERT INTO sales_quote_items (quote_id, description, qty, unit_price, discount_pct, line_total, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [quoteId, it.description.trim(), it.qty, it.unit_price, it.discount_pct, lineTotal(it), idx]
       );
     }
     await client.query('COMMIT');
@@ -189,9 +198,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       for (let idx = 0; idx < itemList.length; idx++) {
         const it = itemList[idx];
         await client.query(
-          `INSERT INTO sales_quote_items (quote_id, description, qty, unit_price, line_total, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, it.description.trim(), it.qty, it.unit_price, it.qty * it.unit_price, idx]
+          `INSERT INTO sales_quote_items (quote_id, description, qty, unit_price, discount_pct, line_total, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, it.description.trim(), it.qty, it.unit_price, it.discount_pct, lineTotal(it), idx]
         );
       }
     }
