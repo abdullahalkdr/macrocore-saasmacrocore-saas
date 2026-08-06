@@ -1,7 +1,7 @@
 import { ComponentType, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { useLangStore } from '../store/langStore';
+import { useLangStore, isRTL } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
 import { get } from '../api/client';
@@ -198,11 +198,38 @@ export default function Layout() {
   const salesGroup = visibleGroups.find((g) => g.accordion);
   const salesChildPaths = salesGroup?.items.map((i) => i.to) ?? [];
   const [salesExpanded, setSalesExpanded] = useState(false);
+  // top/left/right computed from the button's own on-screen position when opened (see
+  // toggleSalesFlyout) — needed because the panel is `position: fixed` (see styles.css
+  // for why absolute positioning didn't work here) and has no CSS-only anchor to the
+  // button anymore.
+  const [flyoutPos, setFlyoutPos] = useState<{ top: number; left?: number; right?: number }>({ top: 0 });
+  const salesButtonRef = useRef<HTMLButtonElement>(null);
   const salesFlyoutRef = useRef<HTMLDivElement>(null);
+
+  function toggleSalesFlyout() {
+    if (!salesExpanded && salesButtonRef.current) {
+      const rect = salesButtonRef.current.getBoundingClientRect();
+      const gap = 8;
+      setFlyoutPos(
+        isRTL(lang)
+          ? { top: rect.top, right: window.innerWidth - rect.left + gap }
+          : { top: rect.top, left: rect.right + gap }
+      );
+    }
+    setSalesExpanded((v) => !v);
+  }
+
   useEffect(() => {
     if (!salesExpanded) return;
     function onOutside(e: MouseEvent) {
-      if (salesFlyoutRef.current && !salesFlyoutRef.current.contains(e.target as Node)) setSalesExpanded(false);
+      if (
+        salesFlyoutRef.current &&
+        !salesFlyoutRef.current.contains(e.target as Node) &&
+        salesButtonRef.current &&
+        !salesButtonRef.current.contains(e.target as Node)
+      ) {
+        setSalesExpanded(false);
+      }
     }
     document.addEventListener('mousedown', onOutside);
     return () => document.removeEventListener('mousedown', onOutside);
@@ -300,11 +327,12 @@ export default function Layout() {
               </div>
             )}
             {group.accordion ? (
-              <div className="nav-flyout-wrap" ref={salesFlyoutRef}>
+              <div className="nav-flyout-wrap">
                 <button
+                  ref={salesButtonRef}
                   type="button"
                   className={`nav-accordion-head${salesParentActive ? ' open' : ''}`}
-                  onClick={() => setSalesExpanded((v) => !v)}
+                  onClick={toggleSalesFlyout}
                 >
                   {group.parentIcon ? <group.parentIcon /> : null}
                   <span style={{ flex: 1 }}>{group.parentLabel}</span>
@@ -313,7 +341,7 @@ export default function Layout() {
                   </span>
                 </button>
                 {salesExpanded && (
-                  <div className="nav-flyout">
+                  <div className="nav-flyout" ref={salesFlyoutRef} style={{ top: flyoutPos.top, left: flyoutPos.left, right: flyoutPos.right }}>
                     <div className="nav-flyout-header">
                       <span className="back">
                         <IconChevronRight size={12} />
