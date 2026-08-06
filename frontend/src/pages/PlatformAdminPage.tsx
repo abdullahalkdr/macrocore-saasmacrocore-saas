@@ -11,7 +11,7 @@ import { IconBuilding } from '../components/Icon';
 // updateCompany in backend/src/controllers/admin.controller.ts.
 const ADMIN_KEY_STORAGE = 'macrocore-admin-key';
 
-const PLAN_VALUES = ['trial', 'basic', 'pro', 'enterprise'];
+const PLAN_VALUES = ['trial', 'bronze', 'silver', 'gold', 'enterprise'];
 const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
 
 interface Company {

@@ -2,8 +2,10 @@ import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useLangStore, isRTL } from './store/langStore';
 import { useThemeStore } from './store/themeStore';
+import { useAuthStore } from './store/authStore';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import PricingPage from './pages/PricingPage';
 import SubscriptionExpiredPage from './pages/SubscriptionExpiredPage';
 import PlatformAdminPage from './pages/PlatformAdminPage';
 import DashboardPage from './pages/DashboardPage';
@@ -40,6 +42,16 @@ import RequireRole from './components/RequireRole';
 const MANAGER_ROLES = ['admin', 'manager'];
 const ADMIN_ROLES = ['admin'];
 
+// "/" used to always bounce to /dashboard (which then bounced anonymous visitors to
+// /login) — fine when this was an internal tool, wrong now that macrocore is sold
+// self-serve: a logged-out visitor hitting the bare domain should land on the pricing
+// page, not a login form with no context. Signed-in users still go straight to their
+// dashboard.
+function Home() {
+  const token = useAuthStore((s) => s.token);
+  return <Navigate to={token ? '/dashboard' : '/pricing'} replace />;
+}
+
 export default function App() {
   const lang = useLangStore((s) => s.lang);
   const theme = useThemeStore((s) => s.theme);
@@ -58,6 +70,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
         <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="/platform-admin" element={<PlatformAdminPage />} />
         <Route element={<ProtectedRoute />}>
@@ -206,8 +219,8 @@ export default function App() {
             <Route path="/account" element={<AccountSettingsPage />} />
           </Route>
         </Route>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Home />} />
+        <Route path="*" element={<Home />} />
       </Routes>
     </BrowserRouter>
   );

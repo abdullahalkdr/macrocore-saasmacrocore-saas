@@ -3,7 +3,9 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 
-const PLAN_VALUES = ['trial', 'basic', 'pro', 'enterprise'];
+// Matches the public pricing page (frontend/src/pages/PricingPage.tsx) — 'trial' is
+// what every signup starts on, not a purchasable tier.
+const PLAN_VALUES = ['trial', 'bronze', 'silver', 'gold', 'enterprise'];
 const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
 
 // Every tenant, for the platform-admin dashboard's companies table. No payment
