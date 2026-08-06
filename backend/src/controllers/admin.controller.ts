@@ -12,11 +12,21 @@ const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
 // gateway is wired up yet (see docs/MIGRATION_029_subscription_enforcement.sql), so
 // until one is chosen, this is also the only way to actually turn a signup into a
 // paying, unblocked account — updateCompany below does that manually.
+// Includes every user on each tenant (email/name/role/status) — without this, the
+// companies table is just anonymous rows ("cocolab", "My Kiosk") with no way to tell
+// who actually signed up or which login belongs to which row, which is exactly the
+// problem reported: no way to know whose account is whose before granting a plan.
 export const listCompanies = asyncHandler(async (_req: Request, res: Response) => {
   const result = await pool.query(
-    `SELECT id, name, industry, country, employee_count_range, plan, subscription_status,
-            trial_start_date, trial_end_date, created_at
-     FROM companies ORDER BY created_at DESC`
+    `SELECT c.id, c.name, c.industry, c.country, c.employee_count_range, c.plan, c.subscription_status,
+            c.trial_start_date, c.trial_end_date, c.created_at,
+            COALESCE(u.users, '[]'::json) AS users
+     FROM companies c
+     LEFT JOIN LATERAL (
+       SELECT json_agg(json_build_object('email', us.email, 'full_name', us.full_name, 'role', us.role, 'status', us.status) ORDER BY us.created_at ASC) AS users
+       FROM users us WHERE us.company_id = c.id
+     ) u ON true
+     ORDER BY c.created_at DESC`
   );
   res.status(200).json({ success: true, companies: result.rows });
 });

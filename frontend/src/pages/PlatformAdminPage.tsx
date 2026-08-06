@@ -14,6 +14,12 @@ const ADMIN_KEY_STORAGE = 'macrocore-admin-key';
 const PLAN_VALUES = ['trial', 'bronze', 'silver', 'gold', 'enterprise'];
 const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
 
+interface CompanyUser {
+  email: string;
+  full_name: string | null;
+  role: string;
+  status: string;
+}
 interface Company {
   id: string;
   name: string;
@@ -25,6 +31,7 @@ interface Company {
   trial_start_date: string | null;
   trial_end_date: string | null;
   created_at: string;
+  users: CompanyUser[];
 }
 interface Subscription {
   id: string;
@@ -240,6 +247,7 @@ export default function PlatformAdminPage() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Users</th>
                 <th>Industry</th>
                 <th>Country</th>
                 <th>Plan</th>
@@ -255,6 +263,15 @@ export default function PlatformAdminPage() {
                 return (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 700 }}>{c.name}</td>
+                    <td style={{ fontSize: 12, minWidth: 180 }}>
+                      {c.users.length === 0 && <span className="muted">—</span>}
+                      {c.users.map((u, i) => (
+                        <div key={i} style={{ whiteSpace: 'nowrap' }}>
+                          {u.email}
+                          <span className="muted"> ({u.role}{u.status !== 'active' ? `, ${u.status}` : ''})</span>
+                        </div>
+                      ))}
+                    </td>
                     <td>{c.industry || '—'}</td>
                     <td>{c.country || '—'}</td>
                     <td>
@@ -308,7 +325,7 @@ export default function PlatformAdminPage() {
               })}
               {companies.length === 0 && (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <div className="empty-state">No companies yet.</div>
                   </td>
                 </tr>
