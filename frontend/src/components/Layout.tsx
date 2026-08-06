@@ -38,6 +38,20 @@ export default function Layout() {
   const isManagerRole = user?.role === 'admin' || user?.role === 'manager';
   const [pendingRequests, setPendingRequests] = useState(0);
 
+  // `company.plan` in authStore is a snapshot from whenever this browser session last
+  // logged in — it never updates on its own. If Abdullah changes a tenant's plan from
+  // /platform-admin while that tenant's browser tab is already open, the sidebar would
+  // keep showing the OLD plan's lock state until the user manually logs out and back
+  // in. Fetching the live value here (company.controller.ts getMe isn't plan-gated —
+  // see app.ts) means the sidebar reflects reality within one page load/refresh
+  // instead of requiring a re-login.
+  const [livePlan, setLivePlan] = useState<string | null>(company?.plan ?? null);
+  useEffect(() => {
+    get<{ plan: string }>('/company/me')
+      .then((r) => setLivePlan(r.plan))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!isManagerRole) return;
     function loadPending() {
@@ -116,7 +130,7 @@ export default function Layout() {
 
   const isManager = user?.role === 'admin' || user?.role === 'manager';
   const isAdmin = user?.role === 'admin';
-  const companyPlanLevel = planLevelOf(company?.plan);
+  const companyPlanLevel = planLevelOf(livePlan ?? company?.plan);
   const openUpgradeModal = useUpgradeModalStore((s) => s.openModal);
   // Role gating still hides the item outright (an employee was never going to see
   // Payroll regardless of plan). Plan gating is different on purpose, matching the
@@ -149,19 +163,23 @@ export default function Layout() {
               {group.items.map((l) => {
                 const minPlan = 'minPlan' in l ? l.minPlan : undefined;
                 const locked = !!minPlan && companyPlanLevel < minPlan;
-                const badge = minPlan ? (
+                // Only ever badge a LOCKED item — once the plan covers it, the item
+                // looks exactly like any other nav link. A permanent "this is a Silver
+                // feature" tag even after upgrading is exactly what read as "nothing
+                // changed" when Abdullah tested this.
+                const badge = locked ? (
                   <span
                     style={{
                       fontSize: 9,
                       fontWeight: 800,
                       padding: '2px 6px',
                       borderRadius: 999,
-                      background: locked ? 'var(--amber-500)' : 'var(--stone-700)',
+                      background: 'var(--amber-500)',
                       color: '#fff',
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {PLAN_TIER_NAME[minPlan] ?? ''}
+                    {PLAN_TIER_NAME[minPlan!] ?? ''}
                   </span>
                 ) : null;
 
