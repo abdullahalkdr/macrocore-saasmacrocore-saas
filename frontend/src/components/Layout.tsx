@@ -5,7 +5,8 @@ import { useLangStore } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
 import { get } from '../api/client';
-import { planLevelOf } from '../planLevels';
+import { planLevelOf, PLAN_TIER_NAME } from '../planLevels';
+import { useUpgradeModalStore } from '../store/upgradeModalStore';
 import Avatar from './Avatar';
 import NotificationsBell from './NotificationsBell';
 import {
@@ -116,14 +117,18 @@ export default function Layout() {
   const isManager = user?.role === 'admin' || user?.role === 'manager';
   const isAdmin = user?.role === 'admin';
   const companyPlanLevel = planLevelOf(company?.plan);
+  const openUpgradeModal = useUpgradeModalStore((s) => s.openModal);
+  // Role gating still hides the item outright (an employee was never going to see
+  // Payroll regardless of plan). Plan gating is different on purpose, matching the
+  // Wafeq reference the user pointed to: the item stays visible with a tier badge, and
+  // clicking it opens the upgrade modal instead of navigating — showing what's
+  // missing sells the upgrade far better than hiding it ever could. The backend
+  // (requirePlanLevel) is the real enforcement either way; this is UX only.
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
       items: group.items.filter(
-        (i) =>
-          (!('managerOnly' in i) || !i.managerOnly || isManager) &&
-          (!('adminOnly' in i) || !i.adminOnly || isAdmin) &&
-          (!('minPlan' in i) || !i.minPlan || companyPlanLevel >= i.minPlan)
+        (i) => (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin)
       ),
     }))
     .filter((group) => group.items.length > 0);
@@ -141,37 +146,83 @@ export default function Layout() {
               {group.label}
             </div>
             <nav>
-              {group.items.map((l) => (
-                <NavLink
-                  key={l.to}
-                  to={l.to}
-                  className={({ isActive }) => (isActive ? 'active' : '')}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10 }}
-                >
-                  <l.icon />
-                  <span style={{ flex: 1 }}>{l.label}</span>
-                  {l.to === '/leave-requests' && pendingRequests > 0 && (
-                    <span
+              {group.items.map((l) => {
+                const minPlan = 'minPlan' in l ? l.minPlan : undefined;
+                const locked = !!minPlan && companyPlanLevel < minPlan;
+                const badge = minPlan ? (
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 800,
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      background: locked ? 'var(--amber-500)' : 'var(--stone-700)',
+                      color: '#fff',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {PLAN_TIER_NAME[minPlan] ?? ''}
+                  </span>
+                ) : null;
+
+                if (locked) {
+                  return (
+                    <button
+                      key={l.to}
+                      type="button"
+                      onClick={() => openUpgradeModal(t.pricing.blockedBannerDefault)}
                       style={{
-                        minWidth: 18,
-                        height: 18,
-                        padding: '0 5px',
-                        borderRadius: 999,
-                        background: '#dc2626',
-                        color: '#fff',
-                        fontSize: 11,
-                        fontWeight: 800,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        lineHeight: 1,
+                        gap: 10,
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        opacity: 0.7,
+                        textAlign: 'start',
                       }}
                     >
-                      {pendingRequests}
-                    </span>
-                  )}
-                </NavLink>
-              ))}
+                      <l.icon />
+                      <span style={{ flex: 1 }}>{l.label}</span>
+                      {badge}
+                    </button>
+                  );
+                }
+
+                return (
+                  <NavLink
+                    key={l.to}
+                    to={l.to}
+                    className={({ isActive }) => (isActive ? 'active' : '')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10 }}
+                  >
+                    <l.icon />
+                    <span style={{ flex: 1 }}>{l.label}</span>
+                    {badge}
+                    {l.to === '/leave-requests' && pendingRequests > 0 && (
+                      <span
+                        style={{
+                          minWidth: 18,
+                          height: 18,
+                          padding: '0 5px',
+                          borderRadius: 999,
+                          background: '#dc2626',
+                          color: '#fff',
+                          fontSize: 11,
+                          fontWeight: 800,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {pendingRequests}
+                      </span>
+                    )}
+                  </NavLink>
+                );
+              })}
             </nav>
           </div>
         ))}

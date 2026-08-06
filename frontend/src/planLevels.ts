@@ -13,3 +13,10 @@ export const PLAN_LEVEL: Record<string, number> = {
 export function planLevelOf(plan: string | undefined | null): number {
   return PLAN_LEVEL[plan ?? ''] ?? 0;
 }
+
+// Display name for a nav-item's minPlan value — used for the locked-item badge/tooltip
+// (see components/Layout.tsx). Only the two levels actually used as a gate need a name.
+export const PLAN_TIER_NAME: Record<number, string> = {
+  2: 'Silver',
+  3: 'Gold',
+};

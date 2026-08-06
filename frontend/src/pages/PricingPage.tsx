@@ -3,48 +3,13 @@ import { Link } from 'react-router-dom';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import { IconBuilding } from '../components/Icon';
+import { PLANS, ADDONS, SALES_EMAIL } from '../pricingData';
 
 // Public marketing page — no auth required (see App.tsx: "/" routes here for
-// logged-out visitors). Pricing numbers below are Abdullah's own figures (USD is the
-// real billing currency; KD is shown as an approximate secondary line only — see
-// pricing.currencyNote). Nothing here is wired to real billing yet (no payment
+// logged-out visitors). Pricing numbers come from pricingData.ts (shared with the
+// in-app UpgradeModal). Nothing here is wired to real billing yet (no payment
 // gateway chosen), so every CTA just leads to the free-trial signup wizard
 // (/register) — picking a card doesn't provision anything different yet.
-const SALES_EMAIL = 'abdullahkhaled37@gmail.com';
-
-interface Plan {
-  key: string;
-  name: string;
-  monthlyUsd: number | null;
-  annualMonthlyUsd: number | null;
-  monthlyKd: number | null;
-  annualKd: number | null;
-  featured?: boolean;
-  contactSales?: boolean;
-}
-
-// DOM order is cheapest → most expensive. The page is rendered dir="rtl" (see
-// App.tsx), which visually reverses this to Enterprise (left) ... Bronze (right) —
-// matching the reference layout without needing separate mobile/desktop ordering.
-const PLANS: Plan[] = [
-  { key: 'bronze', name: 'Bronze', monthlyUsd: 32, annualMonthlyUsd: 26, monthlyKd: 9.9, annualKd: 8.0 },
-  { key: 'silver', name: 'Silver', monthlyUsd: 39, annualMonthlyUsd: 32, monthlyKd: 12.0, annualKd: 9.9, featured: true },
-  { key: 'gold', name: 'Gold', monthlyUsd: 67, annualMonthlyUsd: 55, monthlyKd: 20.75, annualKd: 17.0 },
-  { key: 'enterprise', name: 'Enterprise', monthlyUsd: null, annualMonthlyUsd: null, monthlyKd: null, annualKd: null, contactSales: true },
-];
-
-interface Addon {
-  key: string;
-  monthlyUsd: number;
-  monthlyKd: number;
-  annualUsd: number;
-  annualKd: number;
-}
-const ADDONS: Addon[] = [
-  { key: 'revenue', monthlyUsd: 39, monthlyKd: 12.08, annualUsd: 390, annualKd: 120.8 },
-  { key: 'custom', monthlyUsd: 29, monthlyKd: 8.98, annualUsd: 290, annualKd: 89.8 },
-  { key: 'branch', monthlyUsd: 9, monthlyKd: 2.79, annualUsd: 90, annualKd: 27.9 },
-];
 
 export default function PricingPage() {
   const t = useT();

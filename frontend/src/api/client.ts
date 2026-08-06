@@ -68,6 +68,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         window.location.href = '/subscription-expired';
       }
     }
+    // 403 + PLAN_UPGRADE_REQUIRED (see backend/src/middleware/requirePlan.ts) — a
+    // feature that exists but isn't in this company's tier. Pop the same upgrade
+    // modal everywhere instead of every one of the ~20 gated pages needing its own
+    // "please upgrade" handling — dynamic import avoids a require-cycle with the
+    // store pulling in this same client module elsewhere.
+    if (res.status === 403 && code === 'PLAN_UPGRADE_REQUIRED') {
+      import('../store/upgradeModalStore').then(({ useUpgradeModalStore }) => {
+        useUpgradeModalStore.getState().openModal(message);
+      });
+    }
     throw new ApiError(res.status, message, code);
   }
   return data as T;

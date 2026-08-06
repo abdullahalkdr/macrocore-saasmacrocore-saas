@@ -8,6 +8,7 @@ import RegisterPage from './pages/RegisterPage';
 import PricingPage from './pages/PricingPage';
 import SubscriptionExpiredPage from './pages/SubscriptionExpiredPage';
 import PlatformAdminPage from './pages/PlatformAdminPage';
+import UpgradeModal from './components/UpgradeModal';
 import DashboardPage from './pages/DashboardPage';
 import ProductsPage from './pages/ProductsPage';
 import EmployeesPage from './pages/EmployeesPage';
@@ -222,6 +223,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="*" element={<Home />} />
       </Routes>
+      <UpgradeModal />
     </BrowserRouter>
   );
 }

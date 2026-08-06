@@ -29,6 +29,9 @@ const en = {
     addonCustomDesc: 'Customize your invoices and documents with advanced templates.',
     addonBranchTitle: 'Extra branch',
     addonBranchDesc: "Add branches beyond what's included in your current plan.",
+    upgradeModalTitle: 'Upgrade your plan',
+    blockedBannerDefault: 'This feature is not available on your current plan.',
+    ctaUpgradeContact: 'Contact us to upgrade',
   },
   subscriptionExpired: {
     title: 'Subscription inactive',
@@ -1233,6 +1236,9 @@ const ar: typeof en = {
     addonCustomDesc: 'خصص فواتيرك ومستنداتك باستخدام القوالب المتقدمة.',
     addonBranchTitle: 'فرع إضافي',
     addonBranchDesc: 'أضف فروعاً جديدة لشركتك فوق المتاح في باقتك الحالية.',
+    upgradeModalTitle: 'ترقية باقتك',
+    blockedBannerDefault: 'هذه الميزة غير متوفرة في باقتك الحالية.',
+    ctaUpgradeContact: 'تواصل معنا للترقية',
   },
   subscriptionExpired: {
     title: 'الاشتراك غير مفعّل',
