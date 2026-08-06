@@ -33,6 +33,8 @@ import suppliersRoutes from './routes/suppliers.routes';
 import purchaseOrdersRoutes from './routes/purchaseOrders.routes';
 import permissionsRoutes from './routes/permissions.routes';
 import customersRoutes from './routes/customers.routes';
+import salesQuotesRoutes from './routes/salesQuotes.routes';
+import salesInvoicesRoutes from './routes/salesInvoices.routes';
 import notificationsRoutes from './routes/notifications.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
@@ -104,6 +106,11 @@ app.use('/api/suppliers', ...silver('Suppliers'), suppliersRoutes);
 app.use('/api/purchase-orders', ...silver('Purchase orders'), purchaseOrdersRoutes);
 app.use('/api/permissions', ...gold('Granular permissions'), permissionsRoutes);
 app.use('/api/customers', ...silver('Customer / loyalty tracking'), customersRoutes);
+// New B2B sales suite ("المبيعات" — quotes/invoices, separate from POS/shift sales;
+// see the sales_quotes/sales_invoices migration comments). Gated the same as
+// /api/customers since they're the same product tier (Silver+).
+app.use('/api/sales-quotes', ...silver('Sales quotes'), salesQuotesRoutes);
+app.use('/api/sales-invoices', ...silver('Sales invoices'), salesInvoicesRoutes);
 app.use('/api/notifications', ...guarded, notificationsRoutes);
 
 app.use(notFoundHandler);

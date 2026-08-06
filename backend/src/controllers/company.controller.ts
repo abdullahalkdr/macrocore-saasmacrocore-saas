@@ -10,7 +10,7 @@ const COMPANY_SELECT_FIELDS = `
   default_jahez_commission_pct, default_vthru_commission_pct,
   official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes,
   industry, employee_count_range, country, street, building_number, district, city, postal_code,
-  commercial_registration_number, tax_registration_number, fiscal_year_end_month,
+  commercial_registration_number, fiscal_year_end_month,
   contact_email, contact_phone, logo_base64, stamp_base64,
   inventory_enabled, delivery_notifications_enabled, two_factor_required
 `;
@@ -35,7 +35,6 @@ const STRING_FIELDS = [
   'city',
   'postal_code',
   'commercial_registration_number',
-  'tax_registration_number',
   'contact_email',
   'contact_phone',
   'industry',

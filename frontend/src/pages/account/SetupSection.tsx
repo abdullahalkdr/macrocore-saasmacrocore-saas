@@ -8,7 +8,6 @@ export default function SetupSection() {
   const placeholders = [
     { title: t.account.sections.costCentersTitle, desc: t.account.sections.costCentersDesc, icon: '🏷️' },
     { title: t.account.sections.projectsTitle, desc: t.account.sections.projectsDesc, icon: '📁' },
-    { title: t.account.sections.taxTitle, desc: t.account.sections.taxDesc, icon: '%' },
     { title: t.account.sections.periodStatusTitle, desc: t.account.sections.periodStatusDesc, icon: '🔒' },
   ];
 

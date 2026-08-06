@@ -15,7 +15,6 @@ interface CompanyMe {
   city: string | null;
   postal_code: string | null;
   commercial_registration_number: string | null;
-  tax_registration_number: string | null;
   fiscal_year_end_month: number | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -112,7 +111,6 @@ export default function CompanySection() {
         country: form.country || 'KW',
         postal_code: form.postal_code ?? '',
         commercial_registration_number: form.commercial_registration_number ?? '',
-        tax_registration_number: form.tax_registration_number ?? '',
         fiscal_year_end_month: form.fiscal_year_end_month || 12,
         industry: form.industry ?? '',
         contact_email: form.contact_email ?? '',
@@ -240,10 +238,6 @@ export default function CompanySection() {
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="field">
-                <label>{t.account.company.taxNumber}</label>
-                <input value={form.tax_registration_number || ''} onChange={(e) => setForm({ ...form, tax_registration_number: e.target.value })} disabled={!editing} />
               </div>
               <div className="field">
                 <label>{t.account.company.contactEmail}</label>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { ComponentType, useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
@@ -22,7 +22,25 @@ import {
   IconSettings,
   IconAttendance,
   IconLogout,
+  IconChevronRight,
 } from './Icon';
+
+type IconType = ComponentType<{ size?: number }>;
+interface NavItem {
+  to: string;
+  label: string;
+  icon: IconType;
+  minPlan?: number;
+  managerOnly?: boolean;
+  adminOnly?: boolean;
+}
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+  accordion?: boolean;
+  parentLabel?: string;
+  parentIcon?: IconType;
+}
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -66,15 +84,40 @@ export default function Layout() {
 
   // Grouped like CornLab's activeNavStructure(): a labelled section per work area
   // instead of one flat list.
-  const navGroups = [
+  //
+  // "المبيعات" (Sales) below is special: it's an accordion, not a flat item list — per
+  // Abdullah's Wafeq reference, clicking the parent expands/collapses its 8 sub-items
+  // (Customers, Quotes, Sales Invoices, Customer Receipts, Recurring Invoices, Credit
+  // Notes, Cash Invoices, Sales Settings) in place, rather than hiding them behind a
+  // whole separate icon-rail+flyout navigation paradigm (which would look inconsistent
+  // with every other section of this sidebar staying as plain expanded text lists).
+  // Deliberately separate from `shift` (POS/cash-register selling) — see app.ts's
+  // comment on why POS sales and this new B2B invoicing suite are two independent
+  // systems, not one.
+  const navGroups: NavGroup[] = [
     { label: t.nav.groupGeneral, items: [{ to: '/dashboard', label: t.nav.dashboard, icon: IconDashboard }] },
     {
       label: t.nav.groupDailyOps,
       items: [
         { to: '/shift', label: t.nav.shift, icon: IconSales },
-        { to: '/customers', label: t.nav.customers, icon: IconEmployee, minPlan: 2 },
         { to: '/expenses', label: t.nav.expenses, icon: IconExpense },
         { to: '/waste', label: t.nav.waste, icon: IconTrash, minPlan: 2 },
+      ],
+    },
+    {
+      label: '',
+      accordion: true,
+      parentLabel: t.nav.groupSales,
+      parentIcon: IconSales,
+      items: [
+        { to: '/customers', label: t.nav.customers, icon: IconEmployee, minPlan: 2 },
+        { to: '/quotes', label: t.nav.quotes, icon: IconReports, minPlan: 2 },
+        { to: '/sales-invoices', label: t.nav.salesInvoices, icon: IconSales, minPlan: 2 },
+        { to: '/customer-receipts', label: t.nav.customerReceipts, icon: IconReports, minPlan: 2 },
+        { to: '/recurring-invoices', label: t.nav.recurringInvoices, icon: IconReports, minPlan: 2 },
+        { to: '/credit-notes', label: t.nav.creditNotes, icon: IconReports, minPlan: 2 },
+        { to: '/cash-invoices', label: t.nav.cashInvoices, icon: IconReports, minPlan: 2 },
+        { to: '/sales-settings', label: t.nav.salesSettings, icon: IconSettings },
       ],
     },
     {
@@ -147,6 +190,90 @@ export default function Layout() {
     }))
     .filter((group) => group.items.length > 0);
 
+  // Accordion state for the "المبيعات" group — starts expanded if the current page is
+  // already one of its children (e.g. a refresh on /customers or /sales-invoices),
+  // otherwise starts collapsed like the Wafeq reference.
+  const location = useLocation();
+  const salesGroup = visibleGroups.find((g) => g.accordion);
+  const salesChildPaths = salesGroup?.items.map((i) => i.to) ?? [];
+  const [salesExpanded, setSalesExpanded] = useState(() => salesChildPaths.includes(location.pathname));
+
+  function renderNavItem(l: NavItem) {
+    const minPlan = 'minPlan' in l ? l.minPlan : undefined;
+    const locked = !!minPlan && companyPlanLevel < minPlan;
+    // Only ever badge a LOCKED item — once the plan covers it, the item looks exactly
+    // like any other nav link. A permanent "this is a Silver feature" tag even after
+    // upgrading is exactly what read as "nothing changed" when Abdullah tested this.
+    const badge = locked ? (
+      <span
+        style={{
+          fontSize: 9,
+          fontWeight: 800,
+          padding: '2px 6px',
+          borderRadius: 999,
+          background: 'var(--amber-500)',
+          color: '#fff',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {PLAN_TIER_NAME[minPlan!] ?? ''}
+      </span>
+    ) : null;
+
+    if (locked) {
+      return (
+        <button
+          key={l.to}
+          type="button"
+          onClick={() => openUpgradeModal(t.pricing.blockedBannerDefault)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            width: '100%',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            opacity: 0.7,
+            textAlign: 'start',
+          }}
+        >
+          <l.icon />
+          <span style={{ flex: 1 }}>{l.label}</span>
+          {badge}
+        </button>
+      );
+    }
+
+    return (
+      <NavLink key={l.to} to={l.to} className={({ isActive }) => (isActive ? 'active' : '')} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <l.icon />
+        <span style={{ flex: 1 }}>{l.label}</span>
+        {badge}
+        {l.to === '/leave-requests' && pendingRequests > 0 && (
+          <span
+            style={{
+              minWidth: 18,
+              height: 18,
+              padding: '0 5px',
+              borderRadius: 999,
+              background: '#dc2626',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+            }}
+          >
+            {pendingRequests}
+          </span>
+        )}
+      </NavLink>
+    );
+  }
+
   return (
     <div className="app-shell">
       <div className="sidebar">
@@ -154,94 +281,27 @@ export default function Layout() {
           <h1>{company?.name || 'macrocore'}</h1>
           <NotificationsBell />
         </div>
-        {visibleGroups.map((group) => (
-          <div key={group.label} style={{ padding: '10px 10px 4px' }}>
-            <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>
-              {group.label}
-            </div>
-            <nav>
-              {group.items.map((l) => {
-                const minPlan = 'minPlan' in l ? l.minPlan : undefined;
-                const locked = !!minPlan && companyPlanLevel < minPlan;
-                // Only ever badge a LOCKED item — once the plan covers it, the item
-                // looks exactly like any other nav link. A permanent "this is a Silver
-                // feature" tag even after upgrading is exactly what read as "nothing
-                // changed" when Abdullah tested this.
-                const badge = locked ? (
-                  <span
-                    style={{
-                      fontSize: 9,
-                      fontWeight: 800,
-                      padding: '2px 6px',
-                      borderRadius: 999,
-                      background: 'var(--amber-500)',
-                      color: '#fff',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {PLAN_TIER_NAME[minPlan!] ?? ''}
+        {visibleGroups.map((group, gi) => (
+          <div key={group.accordion ? 'sales-accordion' : group.label || gi} style={{ padding: '10px 10px 4px' }}>
+            {!group.accordion && group.label && (
+              <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>
+                {group.label}
+              </div>
+            )}
+            {group.accordion ? (
+              <nav>
+                <button type="button" className="nav-accordion-head" onClick={() => setSalesExpanded((v) => !v)} style={{ padding: '10px 12px' }}>
+                  {group.parentIcon ? <group.parentIcon /> : null}
+                  <span style={{ flex: 1 }}>{group.parentLabel}</span>
+                  <span className={`nav-accordion-chevron${salesExpanded ? ' open' : ''}`}>
+                    <IconChevronRight />
                   </span>
-                ) : null;
-
-                if (locked) {
-                  return (
-                    <button
-                      key={l.to}
-                      type="button"
-                      onClick={() => openUpgradeModal(t.pricing.blockedBannerDefault)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        width: '100%',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        opacity: 0.7,
-                        textAlign: 'start',
-                      }}
-                    >
-                      <l.icon />
-                      <span style={{ flex: 1 }}>{l.label}</span>
-                      {badge}
-                    </button>
-                  );
-                }
-
-                return (
-                  <NavLink
-                    key={l.to}
-                    to={l.to}
-                    className={({ isActive }) => (isActive ? 'active' : '')}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10 }}
-                  >
-                    <l.icon />
-                    <span style={{ flex: 1 }}>{l.label}</span>
-                    {badge}
-                    {l.to === '/leave-requests' && pendingRequests > 0 && (
-                      <span
-                        style={{
-                          minWidth: 18,
-                          height: 18,
-                          padding: '0 5px',
-                          borderRadius: 999,
-                          background: '#dc2626',
-                          color: '#fff',
-                          fontSize: 11,
-                          fontWeight: 800,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          lineHeight: 1,
-                        }}
-                      >
-                        {pendingRequests}
-                      </span>
-                    )}
-                  </NavLink>
-                );
-              })}
-            </nav>
+                </button>
+                {salesExpanded && <div className="nav-accordion-children">{group.items.map((l) => renderNavItem(l))}</div>}
+              </nav>
+            ) : (
+              <nav>{group.items.map((l) => renderNavItem(l))}</nav>
+            )}
           </div>
         ))}
         <div style={{ marginTop: 'auto', padding: '10px 12px', display: 'flex', gap: 6 }}>

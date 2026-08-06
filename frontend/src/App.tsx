@@ -36,6 +36,9 @@ import SuppliersPage from './pages/SuppliersPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import PermissionsPage from './pages/PermissionsPage';
 import CustomersPage from './pages/CustomersPage';
+import SalesQuotesPage from './pages/SalesQuotesPage';
+import SalesInvoicesPage from './pages/SalesInvoicesPage';
+import SalesComingSoonPage from './pages/SalesComingSoonPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import RequireRole from './components/RequireRole';
@@ -169,6 +172,27 @@ export default function App() {
             />
             <Route path="/expenses" element={<ExpensesPage />} />
             <Route path="/customers" element={<CustomersPage />} />
+            <Route
+              path="/quotes"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <SalesQuotesPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/sales-invoices"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <SalesInvoicesPage />
+                </RequireRole>
+              }
+            />
+            <Route path="/customer-receipts" element={<SalesComingSoonPage variant="customerReceipts" />} />
+            <Route path="/recurring-invoices" element={<SalesComingSoonPage variant="recurringInvoices" />} />
+            <Route path="/credit-notes" element={<SalesComingSoonPage variant="creditNotes" />} />
+            <Route path="/cash-invoices" element={<SalesComingSoonPage variant="cashInvoices" />} />
+            <Route path="/sales-settings" element={<SalesComingSoonPage variant="salesSettings" />} />
             <Route path="/waste" element={<WasteRecordsPage />} />
             <Route
               path="/payroll"

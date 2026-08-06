@@ -321,3 +321,58 @@ table.data-table th { font-size: 11px; }
   color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer;
 }
 .tab-btn.active { color: var(--amber-600); border-bottom-color: var(--amber-500); }
+
+/* ---------- Full-screen document popup (Wafeq-style quotes/invoices/contacts) ----------
+   Unlike .modal-box (capped at 520px, centered), this takes the entire viewport — used
+   for anything that reads as a "document" (a customer record, a quote, an invoice) per
+   Abdullah's request: full-screen popup with a single X at the page corner to cancel. */
+.doc-overlay {
+  position: fixed; inset: 0; background: var(--surface);
+  z-index: 300; overflow-y: auto;
+}
+.doc-header {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.doc-header h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.doc-header .doc-actions { display: flex; gap: 8px; align-items: center; }
+.doc-close {
+  background: var(--surface-alt); border: none; color: var(--text); cursor: pointer;
+  width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center;
+}
+.doc-close:hover { background: var(--red-50); color: var(--red-600); }
+.doc-body { padding: 24px; max-width: 1180px; margin: 0 auto; }
+
+/* Split-pane editor: form fields + a live paper-style preview, side by side, matching
+   the quote/invoice creation screenshots. In RTL the first grid child (form) lands on
+   the right and the second (preview) on the left — same visual order as the reference. */
+.doc-split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 24px; align-items: start; }
+@media (max-width: 960px) { .doc-split { grid-template-columns: 1fr; } }
+
+.doc-paper {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06); padding: 32px; min-height: 500px;
+}
+.doc-paper-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+.doc-paper-head .doc-company { font-weight: 800; font-size: 15px; }
+.doc-paper-head .doc-company .muted { font-weight: 400; }
+.doc-paper-title { font-size: 20px; font-weight: 800; margin: 0 0 4px; }
+.doc-paper-meta { font-size: 12px; color: var(--muted); }
+.doc-paper table { margin-top: 18px; }
+.doc-paper th { font-size: 11px; text-transform: none; }
+.doc-paper-totals { margin-top: 14px; margin-inline-start: auto; max-width: 260px; }
+.doc-paper-totals .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+.doc-paper-totals .row.total { font-weight: 800; font-size: 15px; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 8px; }
+
+.doc-item-row { display: grid; grid-template-columns: 1fr 70px 90px 32px; gap: 8px; margin-bottom: 6px; align-items: center; }
+@media (max-width: 640px) { .doc-item-row { grid-template-columns: 1fr; } }
+
+/* ---------- Sidebar accordion (Sales section) ---------- */
+.nav-accordion-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: none; border: none; color: inherit; cursor: pointer; padding: 0; font: inherit; text-align: start;
+}
+.nav-accordion-chevron { margin-inline-start: auto; transition: transform .15s; opacity: .7; }
+.nav-accordion-chevron.open { transform: rotate(90deg); }
+.nav-accordion-children { padding-inline-start: 14px; }
