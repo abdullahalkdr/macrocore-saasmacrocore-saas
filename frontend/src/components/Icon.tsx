@@ -134,6 +134,12 @@ export const IconChevronRight = ({ size = 14 }: IconProps) => (
   </svg>
 );
 
+export const IconMenu = ({ size = 20 }: IconProps) => (
+  <svg {...base(size)} strokeLinecap="round">
+    <path d="M3 6h18M3 12h18M3 18h18" />
+  </svg>
+);
+
 export const IconPrinter = ({ size = 14 }: IconProps) => (
   <svg {...base(size)}>
     <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z" />

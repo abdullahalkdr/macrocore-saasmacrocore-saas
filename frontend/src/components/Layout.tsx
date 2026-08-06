@@ -23,6 +23,8 @@ import {
   IconAttendance,
   IconLogout,
   IconChevronRight,
+  IconMenu,
+  IconClose,
 } from './Icon';
 
 type IconType = ComponentType<{ size?: number }>;
@@ -55,6 +57,14 @@ export default function Layout() {
 
   const isManagerRole = user?.role === 'admin' || user?.role === 'manager';
   const [pendingRequests, setPendingRequests] = useState(0);
+
+  // Off-canvas sidebar for phones/narrow windows — below 860px the sidebar used to
+  // just stack above the page content in full (every nav item, full height), which on
+  // a phone-sized viewport meant the sidebar alone filled the entire screen and the
+  // actual page was scrolled miles below it. Now it's a hidden drawer toggled by a
+  // hamburger button in a small top bar (see styles.css's 860px media query), closes
+  // itself on navigation or on tapping the backdrop.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // `company.plan` in authStore is a snapshot from whenever this browser session last
   // logged in — it never updates on its own. If Abdullah changes a tenant's plan from
@@ -195,6 +205,10 @@ export default function Layout() {
   // rest of the list down. Starts closed; clicking the parent toggles the panel, and
   // clicking outside it or picking an item closes it again.
   const location = useLocation();
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
   const salesGroup = visibleGroups.find((g) => g.accordion);
   const salesChildPaths = salesGroup?.items.map((i) => i.to) ?? [];
   const [salesExpanded, setSalesExpanded] = useState(false);
@@ -314,7 +328,18 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <div className="sidebar">
+      <div className="mobile-topbar">
+        <button type="button" className="mobile-menu-btn" onClick={() => setMobileNavOpen(true)} title={t.common.menu}>
+          <IconMenu />
+        </button>
+        <h1>{company?.name || 'macrocore'}</h1>
+        <NotificationsBell />
+      </div>
+      {mobileNavOpen && <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} />}
+      <div className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}>
+        <button type="button" className="mobile-close-btn" onClick={() => setMobileNavOpen(false)} title={t.common.close}>
+          <IconClose size={18} />
+        </button>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <h1>{company?.name || 'macrocore'}</h1>
           <NotificationsBell />

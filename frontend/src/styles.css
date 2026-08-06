@@ -246,9 +246,65 @@ tr:hover td { background: var(--surface-alt); }
 .product-tile .name { font-weight: 700; font-size: 14px; }
 .product-tile .qty { color: var(--muted); font-size: 12px; margin-top: 4px; }
 
+/* Mobile top bar + off-canvas sidebar toggle button — hidden entirely on desktop,
+   shown only under the 860px breakpoint below. Declared outside the media query so
+   the element always exists in the DOM (React renders it unconditionally); the media
+   query is what actually makes it visible/positions the drawer. */
+.mobile-topbar { display: none; }
+.mobile-close-btn { display: none; }
+.sidebar-backdrop { display: none; }
+
 @media (max-width: 860px) {
   .app-shell { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; position: relative; }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 250;
+    background: var(--stone-900);
+    color: #fff;
+    padding: 12px 16px;
+  }
+  .mobile-topbar h1 { margin: 0; font-size: 15px; font-weight: 800; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-menu-btn { background: none; border: none; color: #fff; padding: 4px; cursor: pointer; display: flex; flex-shrink: 0; }
+
+  /* Sidebar becomes a fixed-position drawer, off-screen by default. inset-inline-start
+     (not left/transform) so it slides in from the correct edge automatically in both
+     Arabic (RTL) and English (LTR) without any direction-specific override. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    inset-inline-start: -300px;
+    height: 100vh;
+    width: 260px;
+    max-width: 82vw;
+    z-index: 300;
+    transition: inset-inline-start 0.25s ease;
+  }
+  .sidebar.mobile-open { inset-inline-start: 0; }
+
+  .mobile-close-btn {
+    display: flex;
+    align-self: flex-end;
+    background: none;
+    border: none;
+    color: var(--stone-400);
+    padding: 14px 14px 0;
+    cursor: pointer;
+  }
+  .mobile-close-btn:hover { color: #fff; }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 290;
+  }
+
   .main { padding: 16px; }
 }
 
@@ -422,3 +478,12 @@ tr:hover .print-btn { opacity: 1; }
 .nav-flyout nav a:hover, .nav-flyout nav button:hover { background: var(--surface-alt); }
 .nav-flyout nav a.active { background: var(--amber-50); color: var(--amber-700); }
 .nav-flyout-divider { border-top: 1px solid var(--border); margin: 5px 6px; }
+
+/* On a narrow phone the drawer itself can eat most of the width, so the flyout's
+   normal "beside the button" position (computed in Layout.tsx from the button's own
+   coordinates) can land partly off-screen. Pin it to a comfortable full-ish width
+   instead — !important is deliberate here, overriding the inline left/right/top the
+   JS sets for the desktop/tablet case. */
+@media (max-width: 480px) {
+  .nav-flyout { left: 12px !important; right: 12px !important; width: auto !important; }
+}
