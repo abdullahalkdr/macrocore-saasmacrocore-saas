@@ -95,9 +95,16 @@ export default function AttendancePage() {
     return <Tag color="red">{t.attendance.statusAbsent}</Tag>;
   }
 
+  // clock_in/clock_out come back as real UTC instants; every macrocore company
+  // operates in Kuwait (UTC+3), so shift by that fixed offset before formatting —
+  // otherwise this showed the UTC hour, 3 hours behind the actual Kuwait wall-clock
+  // time the clock-in/out happened at. Matches the same constant used server-side in
+  // backend/src/utils/attendance.ts's computeLateMinutes.
+  const KUWAIT_UTC_OFFSET_MINUTES = 3 * 60;
   function timeOnly(iso: string | null) {
     if (!iso) return '—';
-    return new Date(iso).toISOString().slice(11, 16);
+    const shifted = new Date(new Date(iso).getTime() + KUWAIT_UTC_OFFSET_MINUTES * 60000);
+    return shifted.toISOString().slice(11, 16);
   }
 
   return (
