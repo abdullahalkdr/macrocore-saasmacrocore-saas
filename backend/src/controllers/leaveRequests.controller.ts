@@ -196,15 +196,25 @@ export const calendar = asyncHandler(async (req: Request, res: Response) => {
   const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
   const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
 
+  const params: unknown[] = [companyId, monthStart, nextMonth];
+  let where = "lr.company_id = $1 AND lr.status = 'approved' AND lr.start_date < $3 AND COALESCE(lr.end_date, lr.start_date) >= $2";
+
+  // Product decision (confirmed with the user): the annual calendar is private per
+  // employee, not a shared company-wide "who's off" view — same ownership scope as
+  // create()/list() above (audit finding #2).
+  if (req.auth!.role === 'employee') {
+    const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
+    params.push(ownEmployeeId);
+    where += ` AND lr.employee_id = $${params.length}`;
+  }
+
   const result = await pool.query(
     `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.type, lr.start_date, lr.end_date, lr.start_time, lr.end_time
      FROM leave_requests lr
      JOIN employees e ON e.id = lr.employee_id
-     WHERE lr.company_id = $1 AND lr.status = 'approved'
-       AND lr.start_date < $3
-       AND COALESCE(lr.end_date, lr.start_date) >= $2
+     WHERE ${where}
      ORDER BY lr.start_date ASC`,
-    [companyId, monthStart, nextMonth]
+    params
   );
   res.status(200).json({ success: true, year, month, leave_requests: result.rows });
 });
