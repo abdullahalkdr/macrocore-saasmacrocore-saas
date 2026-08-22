@@ -26,6 +26,9 @@ import LocationsPage from './pages/LocationsPage';
 import ExpensesPage from './pages/ExpensesPage';
 import WasteRecordsPage from './pages/WasteRecordsPage';
 import PayrollPage from './pages/PayrollPage';
+import HRDashboardPage from './pages/HRDashboardPage';
+import PerformancePage from './pages/PerformancePage';
+import SLAManagementPage from './pages/SLAManagementPage';
 import SupportTicketsPage from './pages/SupportTicketsPage';
 import SettingsPage from './pages/SettingsPage';
 import AccountSettingsPage from './pages/account/AccountSettingsPage';
@@ -244,6 +247,30 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <PayrollPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/hr-dashboard"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <HRDashboardPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/performance"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <PerformancePage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/sla-management"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <SLAManagementPage />
                 </RequireRole>
               }
             />

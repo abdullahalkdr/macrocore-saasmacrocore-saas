@@ -171,6 +171,8 @@ export default function Layout() {
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
+        { to: '/hr-dashboard', label: t.nav.hrDashboard, icon: IconReports, managerOnly: true, minPlan: 3 },
+        { to: '/performance', label: t.nav.performance, icon: IconEmployee, managerOnly: true, minPlan: 3 },
       ],
     },
     {
@@ -189,6 +191,7 @@ export default function Layout() {
         { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true, minPlan: 3 },
         { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
         { to: '/support', label: t.nav.support, icon: IconSettings },
+        { to: '/sla-management', label: t.nav.slaManagement, icon: IconSettings, managerOnly: true, minPlan: 3 },
       ],
     },
   ];

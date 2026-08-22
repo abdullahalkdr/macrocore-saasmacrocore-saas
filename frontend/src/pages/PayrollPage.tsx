@@ -2,6 +2,7 @@ import { FormEvent, Fragment, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
+import { planLevelOf } from '../planLevels';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
@@ -37,12 +38,27 @@ interface Employee {
 // doesn't affect how their pay is actually calculated — that stays salary_monthly as-is).
 const STANDARD_HOURS_PER_MONTH = 208;
 
+// GOLD_PLAN_LEVEL mirrors app.ts's gold(...) bracket (see planLevels.ts) — this page's
+// own data (GET /payroll) is already gated there, so in practice this page never
+// renders real data below Gold. Kept as an explicit guard anyway before calling the
+// performance-scores endpoint (also Gold-gated) so a stray call never pops the
+// upgrade modal from inside an unrelated flow — see fetchSystemAdjustmentIds below.
+const GOLD_PLAN_LEVEL = 3;
+
 interface Adjustment {
+  id?: string;
   type: 'bonus' | 'deduction';
   label: string;
   amount: string; // kept as string while editing in the form
+  // True when this row originated from performanceScores.controller.ts's
+  // finalizeScore() (a performance bonus posted straight to payroll_adjustments) —
+  // see the "Payroll Overwrite Fix" note on handleSubmit below. Locked rows can't be
+  // edited or removed from this form; they can only disappear if the performance
+  // score itself is retracted on the Performance page.
+  locked?: boolean;
 }
 interface AdjustmentDetail {
+  id?: string;
   type: 'bonus' | 'deduction';
   label: string;
   amount: number;
@@ -55,11 +71,32 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Cross-references this employee's performance_scores against this payroll record's
+// adjustment rows (both already fetched separately — no new backend endpoint needed):
+// performance_scores.payroll_adjustment_id points at the exact payroll_adjustments.id
+// row finalizeScore() created, so any adjustment id appearing there is system-generated
+// and must never be silently dropped by this form's "adjustments fully replaces the
+// list" PATCH semantics (see payroll.controller.ts's update()).
+async function fetchSystemAdjustmentIds(employeeId: string): Promise<Set<string>> {
+  try {
+    const r = await get<{ scores: { payroll_adjustment_id: string | null }[] }>(
+      `/performance-scores?employee_id=${employeeId}`
+    );
+    return new Set(r.scores.map((s) => s.payroll_adjustment_id).filter((id): id is string => !!id));
+  } catch {
+    // Performance module may not be set up yet (no scores at all) or the request can
+    // race a plan change — either way, fail open to "no known system rows" rather
+    // than blocking the payroll form on an unrelated module's availability.
+    return new Set();
+  }
+}
+
 export default function PayrollPage() {
   const t = useT();
   const company = useAuthStore((s) => s.company);
   const user = useAuthStore((s) => s.user);
   const isManager = user?.role === 'admin' || user?.role === 'manager';
+  const companyPlanLevel = planLevelOf(company?.plan);
   const [items, setItems] = useState<PayrollRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [open, setOpen] = useState(false);
@@ -168,11 +205,13 @@ export default function PayrollPage() {
   function addAdjustment() {
     setAdjustments((a) => [...a, { type: 'bonus', label: '', amount: '' }]);
   }
-  function updateAdjustment(i: number, patch: Partial<Adjustment>) {
-    setAdjustments((a) => a.map((adj, idx) => (idx === i ? { ...adj, ...patch } : adj)));
+  function updateAdjustment(i: number, p: Partial<Adjustment>) {
+    // Locked (system-generated) rows are read-only in this form — see the Adjustment
+    // interface's `locked` field comment.
+    setAdjustments((a) => a.map((adj, idx) => (idx === i && !adj.locked ? { ...adj, ...p } : adj)));
   }
   function removeAdjustment(i: number) {
-    setAdjustments((a) => a.filter((_, idx) => idx !== i));
+    setAdjustments((a) => (a[i]?.locked ? a : a.filter((_, idx) => idx !== i)));
   }
 
   function openCreate() {
@@ -201,8 +240,19 @@ export default function PayrollPage() {
     setAdjustments([]);
     setOpen(true);
     try {
-      const detail = await get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${p.id}`);
-      setAdjustments(detail.adjustments.map((a) => ({ type: a.type, label: a.label, amount: String(a.amount) })));
+      const [detail, systemIds] = await Promise.all([
+        get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${p.id}`),
+        companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(p.employee_id) : Promise.resolve(new Set<string>()),
+      ]);
+      setAdjustments(
+        detail.adjustments.map((a) => ({
+          id: a.id,
+          type: a.type,
+          label: a.label,
+          amount: String(a.amount),
+          locked: !!a.id && systemIds.has(a.id),
+        }))
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.payroll.loadFailed);
     }
@@ -213,7 +263,35 @@ export default function PayrollPage() {
     setError(null);
     setLoading(true);
     try {
-      const validAdjustments = adjustments
+      let currentAdjustments = adjustments;
+
+      // Payroll Overwrite Fix (critical): payroll.controller.ts's update() fully
+      // replaces this record's adjustments with whatever array this form submits. If
+      // a manager opens this modal, and while it sits open a performance bonus gets
+      // posted server-side (performanceScores.controller.ts's finalizeScore, from the
+      // Performance page), the `adjustments` state here is now stale — it was fetched
+      // before that bonus existed. Submitting it as-is would silently delete the new
+      // bonus row the instant this save goes through.
+      //
+      // Fix: re-fetch this payroll record's adjustments AND the employee's
+      // performance-linked adjustment ids right before building the save payload, and
+      // force-include every system-generated row from that fresh read — regardless of
+      // what's in the possibly-stale local form state. Never rely on the array the
+      // user has been looking at alone.
+      if (editingId) {
+        const [detail, systemIds] = await Promise.all([
+          get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${editingId}`),
+          companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(employeeId) : Promise.resolve(new Set<string>()),
+        ]);
+        const freshSystemRows: Adjustment[] = detail.adjustments
+          .filter((a) => !!a.id && systemIds.has(a.id as string))
+          .map((a) => ({ id: a.id, type: a.type, label: a.label, amount: String(a.amount), locked: true }));
+        const freshSystemIds = new Set(freshSystemRows.map((r) => r.id));
+        const userEditedRows = currentAdjustments.filter((a) => !a.locked && !(a.id && freshSystemIds.has(a.id)));
+        currentAdjustments = [...freshSystemRows, ...userEditedRows];
+      }
+
+      const validAdjustments = currentAdjustments
         .filter((a) => a.label.trim() && a.amount)
         .map((a) => ({ type: a.type, label: a.label.trim(), amount: Number(a.amount) }));
 
@@ -492,34 +570,56 @@ export default function PayrollPage() {
             </button>
           </div>
           {adjustments.map((a, i) => (
-            <div key={i} className="form-row" style={{ marginBottom: 8 }}>
-              <div className="field" style={{ width: 110 }}>
-                <select value={a.type} onChange={(e) => updateAdjustment(i, { type: e.target.value as 'bonus' | 'deduction' })}>
-                  <option value="bonus">{t.payroll.itemBonus}</option>
-                  <option value="deduction">{t.payroll.itemDeduction}</option>
-                </select>
-              </div>
-              <div className="field" style={{ flex: 2 }}>
-                <input
-                  placeholder={t.payroll.itemLabelPlaceholder}
-                  value={a.label}
-                  onChange={(e) => updateAdjustment(i, { label: e.target.value })}
-                />
-              </div>
-              <div className="field" style={{ width: 100 }}>
-                <input
-                  type="number"
-                  step="0.001"
-                  placeholder="KD"
-                  value={a.amount}
-                  onChange={(e) => updateAdjustment(i, { amount: e.target.value })}
-                />
-              </div>
-              <button className="icon-btn" type="button" onClick={() => removeAdjustment(i)} style={{ alignSelf: 'center' }}>
-                <IconTrash />
-              </button>
+            <div key={a.id ?? i} className="form-row" style={{ marginBottom: 8, alignItems: 'center' }}>
+              {a.locked ? (
+                <>
+                  <div className="field" style={{ width: 110 }}>
+                    <Tag color="amber">{t.payroll.systemGenerated}</Tag>
+                  </div>
+                  <div className="field" style={{ flex: 2 }}>
+                    <input value={a.label} disabled />
+                  </div>
+                  <div className="field" style={{ width: 100 }}>
+                    <input value={`${a.amount} KD`} disabled />
+                  </div>
+                  <span style={{ width: 32 }} />
+                </>
+              ) : (
+                <>
+                  <div className="field" style={{ width: 110 }}>
+                    <select value={a.type} onChange={(e) => updateAdjustment(i, { type: e.target.value as 'bonus' | 'deduction' })}>
+                      <option value="bonus">{t.payroll.itemBonus}</option>
+                      <option value="deduction">{t.payroll.itemDeduction}</option>
+                    </select>
+                  </div>
+                  <div className="field" style={{ flex: 2 }}>
+                    <input
+                      placeholder={t.payroll.itemLabelPlaceholder}
+                      value={a.label}
+                      onChange={(e) => updateAdjustment(i, { label: e.target.value })}
+                    />
+                  </div>
+                  <div className="field" style={{ width: 100 }}>
+                    <input
+                      type="number"
+                      step="0.001"
+                      placeholder="KD"
+                      value={a.amount}
+                      onChange={(e) => updateAdjustment(i, { amount: e.target.value })}
+                    />
+                  </div>
+                  <button className="icon-btn" type="button" onClick={() => removeAdjustment(i)} style={{ alignSelf: 'center' }}>
+                    <IconTrash />
+                  </button>
+                </>
+              )}
             </div>
           ))}
+          {adjustments.some((a) => a.locked) && (
+            <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 8 }}>
+              {t.payroll.systemGeneratedNote}
+            </p>
+          )}
 
           <div className="hr" />
           <div className="field">
