@@ -59,6 +59,7 @@ const en = {
     darkMode: 'Switch to dark mode',
     lightMode: 'Switch to light mode',
     auto: 'Auto',
+    unsavedChangesConfirm: 'You have unsaved changes. Discard them?',
   },
   nav: {
     groupGeneral: 'General',
@@ -1523,6 +1524,7 @@ const ar: typeof en = {
     darkMode: 'تفعيل الوضع الغامق',
     lightMode: 'تفعيل الوضع الفاتح',
     auto: 'تلقائي',
+    unsavedChangesConfirm: 'عندك تعديلات ما تم حفظها. تبي تلغيها؟',
   },
   nav: {
     groupGeneral: 'عام',
