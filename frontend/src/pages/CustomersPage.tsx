@@ -371,16 +371,16 @@ export default function CustomersPage() {
         <Modal
           title={`${t.customers.adjustPoints} — ${pointsTarget.name}`}
           onClose={() => setPointsTarget(null)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="points-form" disabled={pointsLoading}>
                 {pointsLoading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setPointsTarget(null)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="points-form" onSubmit={submitPoints} className="field-grid">
             <div className="field" style={{ gridColumn: '1 / -1' }}>

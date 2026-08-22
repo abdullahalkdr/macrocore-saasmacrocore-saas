@@ -167,23 +167,16 @@ export default function WasteRecordsPage() {
             setOpen(false);
             setEditingId(null);
           }}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="waste-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setEditingId(null);
-                }}
-              >
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="waste-form" onSubmit={handleSubmit} className="field-grid">
             {editingId ? (

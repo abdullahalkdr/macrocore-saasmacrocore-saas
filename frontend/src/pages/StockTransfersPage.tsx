@@ -160,16 +160,16 @@ export default function StockTransfersPage() {
         <Modal
           title={t.stockTransfers.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="transfer-form" disabled={loading}>
                 {loading ? t.common.loading : t.stockTransfers.execute}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.stockTransfers.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="transfer-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

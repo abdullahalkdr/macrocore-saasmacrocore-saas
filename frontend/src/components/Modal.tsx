@@ -6,7 +6,10 @@ interface ModalProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
-  actions?: ReactNode;
+  // Plain ReactNode still works (Cancel button closes immediately, no confirm — same
+  // as before). Pass a function instead to receive requestClose and wire your own
+  // Cancel button through the same dirty-check the header X button uses.
+  actions?: ReactNode | ((requestClose: () => void) => ReactNode);
 }
 
 // Mirrors CornLab's openModal()/closeModal() pair, just as a component instead of
@@ -22,11 +25,10 @@ interface ModalProps {
 //    no per-page wiring needed, and it resets for free every time since each modal open
 //    mounts a fresh Modal instance (fresh useState).
 //
-// NOT covered here: a page's own Cancel button, rendered by the caller inside `actions`
-// (e.g. <button onClick={() => setEditUser(null)}>). Modal doesn't own that button, so
-// it can't intercept its click — those still close immediately without asking. Flagged
-// to the user as a separate, larger change (touches every page with a modal Cancel
-// button) rather than guessed at here.
+// A page's own Cancel button (rendered by the caller inside `actions`) is covered too,
+// but only if that page passes `actions` as a function and wires the Cancel button's
+// onClick to the `requestClose` it receives — see the ModalProps.actions comment above.
+// Every caller in this codebase has been updated to do that (see individual page diffs).
 export default function Modal({ title, onClose, children, actions }: ModalProps) {
   const t = useT();
   const [dirty, setDirty] = useState(false);
@@ -35,6 +37,8 @@ export default function Modal({ title, onClose, children, actions }: ModalProps)
     if (dirty && !window.confirm(t.common.unsavedChangesConfirm)) return;
     onClose();
   }
+
+  const resolvedActions = typeof actions === 'function' ? actions(requestClose) : actions;
 
   return (
     <div className="modal-overlay">
@@ -46,7 +50,7 @@ export default function Modal({ title, onClose, children, actions }: ModalProps)
           </button>
         </div>
         <div className="modal-body">{children}</div>
-        {actions && <div className="modal-actions">{actions}</div>}
+        {resolvedActions && <div className="modal-actions">{resolvedActions}</div>}
       </div>
     </div>
   );

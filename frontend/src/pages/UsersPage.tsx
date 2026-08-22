@@ -240,16 +240,16 @@ export default function UsersPage() {
         <Modal
           title={t.users.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="user-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="user-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
@@ -281,16 +281,16 @@ export default function UsersPage() {
         <Modal
           title={t.users.editItem}
           onClose={() => setEditUser(null)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="edit-user-form" disabled={editLoading}>
                 {editLoading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setEditUser(null)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="edit-user-form" onSubmit={handleEditSubmit} className="field-grid">
             <div className="field">
@@ -321,16 +321,16 @@ export default function UsersPage() {
         <Modal
           title={t.users.resetPasswordTitle(resetUser.email)}
           onClose={() => setResetUser(null)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="reset-password-form" disabled={resetLoading || newPassword.length < 6}>
                 {resetLoading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setResetUser(null)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="reset-password-form" onSubmit={handleResetSubmit} className="field-grid">
             <div className="field" style={{ gridColumn: '1 / -1' }}>

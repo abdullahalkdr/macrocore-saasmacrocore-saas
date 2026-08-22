@@ -152,16 +152,16 @@ export default function LocationsPage() {
         <Modal
           title={editingId ? t.locations.editItem : t.locations.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="location-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="location-form" onSubmit={handleSubmit}>
             <div className="field" style={{ marginBottom: 14 }}>

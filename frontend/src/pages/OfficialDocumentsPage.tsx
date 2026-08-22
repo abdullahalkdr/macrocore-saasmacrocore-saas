@@ -256,7 +256,7 @@ export default function OfficialDocumentsPage() {
         <Modal
           title={t.officialDocuments.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="doc-form" disabled={loading}>
                 {loading ? t.common.loading : t.officialDocuments.save}
@@ -264,11 +264,11 @@ export default function OfficialDocumentsPage() {
               <button className="btn btn-secondary" type="button" onClick={handlePrint}>
                 {t.officialDocuments.print}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.officialDocuments.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="doc-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

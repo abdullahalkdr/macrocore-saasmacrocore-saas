@@ -242,16 +242,16 @@ export default function InventoryOverviewPage() {
         <Modal
           title={t.inventory.adjustTitle}
           onClose={() => setAdjustTarget(null)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="adjust-form" disabled={adjustLoading || !adjustLocationId}>
                 {adjustLoading ? t.common.loading : t.inventory.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setAdjustTarget(null)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.inventory.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="adjust-form" onSubmit={handleAdjustSubmit} className="field-grid">
             <div className="field" style={{ gridColumn: '1 / -1' }}>

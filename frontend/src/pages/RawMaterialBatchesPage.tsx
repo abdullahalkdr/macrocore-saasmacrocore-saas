@@ -310,16 +310,16 @@ export default function RawMaterialBatchesPage() {
         <Modal
           title={editingId ? t.rawMaterialBatches.editItem : t.rawMaterialBatches.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="batch-form" disabled={loading}>
                 {loading ? t.common.loading : t.rawMaterialBatches.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.rawMaterialBatches.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="batch-form" onSubmit={handleSubmit} className="field-grid">
             {!editingId && (

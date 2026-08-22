@@ -302,16 +302,16 @@ export default function PurchaseOrdersPage() {
         <Modal
           title={editingId ? t.purchaseOrders.editItem : t.purchaseOrders.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="po-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="po-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
@@ -392,16 +392,16 @@ export default function PurchaseOrdersPage() {
         <Modal
           title={t.purchaseOrders.receive}
           onClose={() => setReceiveTarget(null)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="po-receive-form" disabled={loading}>
                 {loading ? t.common.loading : t.purchaseOrders.confirmReceive}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setReceiveTarget(null)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="po-receive-form" onSubmit={confirmReceive} className="field-grid">
             <div className="field" style={{ gridColumn: '1 / -1' }}>

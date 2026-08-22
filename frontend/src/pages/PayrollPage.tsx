@@ -418,23 +418,16 @@ export default function PayrollPage() {
             setOpen(false);
             setEditingId(null);
           }}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="payroll-form" disabled={loading}>
                 {loading ? t.common.loading : editingId ? t.common.save : t.payroll.generate}
               </button>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setEditingId(null);
-                }}
-              >
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="payroll-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

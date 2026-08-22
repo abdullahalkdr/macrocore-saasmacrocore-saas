@@ -393,16 +393,16 @@ export default function LeaveRequestsPage() {
         <Modal
           title={editingId ? t.leaveRequests.editItem : t.leaveRequests.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="leave-form" disabled={loading}>
                 {loading ? t.common.loading : editingId ? t.leaveRequests.saveEdit : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="leave-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

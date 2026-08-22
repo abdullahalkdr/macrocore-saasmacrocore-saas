@@ -155,16 +155,16 @@ export default function SuppliersPage() {
         <Modal
           title={editingId ? t.suppliers.editItem : t.suppliers.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="supplier-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="supplier-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

@@ -253,16 +253,16 @@ export default function RawMaterialsPage() {
         <Modal
           title={editingId ? t.rawMaterials.editItem : t.rawMaterials.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="raw-material-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="raw-material-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">

@@ -435,9 +435,9 @@ export default function ShiftPage() {
       <Modal
         title={title}
         onClose={() => setReconTarget(null)}
-        actions={
+        actions={(requestClose) => (
           readOnly ? (
-            <button className="btn btn-secondary" onClick={() => setReconTarget(null)}>
+            <button className="btn btn-secondary" onClick={requestClose}>
               {t.common.cancel}
             </button>
           ) : (
@@ -445,12 +445,12 @@ export default function ShiftPage() {
               <button className="btn btn-primary" onClick={submitRecon} disabled={reconLoading || !reconComplete}>
                 {reconLoading ? t.common.loading : reconTarget.mode === 'close' ? t.shift.saveClose : t.shift.saveEdit}
               </button>
-              <button className="btn btn-secondary" onClick={() => setReconTarget(null)}>
+              <button className="btn btn-secondary" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
           )
-        }
+        )}
       >
         {reconError && <div className="error-banner">{reconError}</div>}
         {!readOnly && !reconComplete && <div className="error-banner">{t.shift.reconciliationIncomplete}</div>}
@@ -612,16 +612,16 @@ export default function ShiftPage() {
         <Modal
           title={t.shift.startNew}
           onClose={() => setStartOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" onClick={openShift} disabled={startLoading || products.length === 0 || !locationId}>
                 {startLoading ? t.common.loading : t.shift.startAndHandoff}
               </button>
-              <button className="btn btn-secondary" onClick={() => setStartOpen(false)}>
+              <button className="btn btn-secondary" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           {locations.length === 0 && <div className="error-banner">{t.shift.noLocation}</div>}
           <div className="field-grid">

@@ -660,24 +660,16 @@ export default function ProductsPage() {
             setEditingId(null);
             resetForm();
           }}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="product-form" disabled={loading}>
                 {loading ? t.common.loading : t.common.save}
               </button>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setEditingId(null);
-                  resetForm();
-                }}
-              >
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="product-form" onSubmit={handleSubmit}>
             <div className="field-grid">

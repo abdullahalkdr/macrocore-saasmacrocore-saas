@@ -375,16 +375,16 @@ export default function ExpensesPage() {
         <Modal
           title={editingId ? t.expenses.editItem : t.expenses.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="expense-form" disabled={loading}>
                 {loading ? t.common.loading : editingId ? t.expenses.saveEdit : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="expense-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
@@ -449,16 +449,16 @@ export default function ExpensesPage() {
         <Modal
           title={t.expenses.manageCategoriesTitle}
           onClose={() => setManageOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="button" onClick={handleSaveCategories} disabled={categoriesLoading}>
                 {categoriesLoading ? t.common.loading : t.common.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setManageOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.common.cancel}
               </button>
             </>
-          }
+          )}
         >
           {categoriesError && <div className="error-banner">{categoriesError}</div>}
           {categoriesDraft.length === 0 && <div className="empty-state">{t.expenses.noCategories}</div>}

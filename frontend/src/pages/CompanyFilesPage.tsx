@@ -261,16 +261,16 @@ export default function CompanyFilesPage() {
         <Modal
           title={editingId ? t.companyFiles.editItem : t.companyFiles.newItem}
           onClose={() => setOpen(false)}
-          actions={
+          actions={(requestClose) => (
             <>
               <button className="btn btn-primary" type="submit" form="company-file-form" disabled={loading}>
                 {loading ? t.common.loading : t.companyFiles.save}
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => setOpen(false)}>
+              <button className="btn btn-secondary" type="button" onClick={requestClose}>
                 {t.companyFiles.cancel}
               </button>
             </>
-          }
+          )}
         >
           <form id="company-file-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
