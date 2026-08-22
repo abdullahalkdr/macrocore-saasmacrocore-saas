@@ -31,7 +31,7 @@ const TYPES_ALL = [...LEAVE_TYPES, 'permission'];
 // behalf (e.g. an HR-approved override for a leave longer than the normal cap).
 const LEAVE_DAY_BLOCK_THRESHOLD = 30; // strictly more than this many consecutive calendar days is blocked
 const LEAVE_MAX_DAYS_MESSAGE =
-  'الحد الأقصى للإجازات هو 26 يوم عمل متواصل. لأكثر من ذلك، تواصل مباشرة مع إدارة الموارد البشرية لإدخالها يدويًا في حال الموافقة.';
+  'الحد الأقصى للإجازات هو 30 يوم عمل متواصل. لأكثر من ذلك، تواصل مباشرة مع إدارة الموارد البشرية لإدخالها يدويًا في حال الموافقة.';
 const PERMISSION_MAX_HOURS = 3;
 const PERMISSION_MAX_HOURS_MESSAGE = 'الحد الأقصى للاستئذان هو 3 ساعات.';
 
