@@ -26,6 +26,15 @@ const NOTICE_RECEIVED_BY = ['in_person', 'other_employee', 'phone', 'relative', 
 // Accepted on update() only, where callers may still send either an old or new type.
 const TYPES_ALL = [...LEAVE_TYPES, 'permission'];
 
+// Business rules (product decision): only restrict plain 'employee' self-service
+// requests — admins/managers can still enter longer/manual exceptions on someone's
+// behalf (e.g. an HR-approved override for a leave longer than the normal cap).
+const LEAVE_DAY_BLOCK_THRESHOLD = 30; // strictly more than this many consecutive calendar days is blocked
+const LEAVE_MAX_DAYS_MESSAGE =
+  'الحد الأقصى للإجازات هو 26 يوم عمل متواصل. لأكثر من ذلك، تواصل مباشرة مع إدارة الموارد البشرية لإدخالها يدويًا في حال الموافقة.';
+const PERMISSION_MAX_HOURS = 3;
+const PERMISSION_MAX_HOURS_MESSAGE = 'الحد الأقصى للاستئذان هو 3 ساعات.';
+
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { start_date, end_date, start_time, end_time, reason, attachment_base64 } = req.body ?? {};
@@ -60,11 +69,28 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     if (typeof notice_received_by !== 'string' || !NOTICE_RECEIVED_BY.includes(notice_received_by)) {
       throw new AppError(400, `notice_received_by must be one of ${NOTICE_RECEIVED_BY.join(', ')}`);
     }
+    if (typeof start_time !== 'string' || !start_time) throw new AppError(400, 'start_time is required for an absence permission');
+    if (typeof end_time !== 'string' || !end_time) throw new AppError(400, 'end_time is required for an absence permission');
     finalPermissionReason = permission_reason;
     finalNoticeReceivedBy = notice_received_by;
   }
 
   if (typeof start_date !== 'string') throw new AppError(400, 'start_date is required (YYYY-MM-DD)');
+
+  // Employee self-service caps (see constants above) — admins/managers are exempt so
+  // they can still key in an HR-approved exception manually.
+  if (req.auth!.role === 'employee') {
+    if (category === 'leave' && typeof end_date === 'string' && end_date) {
+      const days = Math.round((new Date(end_date).getTime() - new Date(start_date).getTime()) / 86400000) + 1;
+      if (days > LEAVE_DAY_BLOCK_THRESHOLD) throw new AppError(400, LEAVE_MAX_DAYS_MESSAGE);
+    }
+    if (category === 'absence_permission' && typeof start_time === 'string' && typeof end_time === 'string') {
+      const [sh, sm] = start_time.split(':').map(Number);
+      const [eh, em] = end_time.split(':').map(Number);
+      const hours = (eh * 60 + em - (sh * 60 + sm)) / 60;
+      if (hours > PERMISSION_MAX_HOURS) throw new AppError(400, PERMISSION_MAX_HOURS_MESSAGE);
+    }
+  }
 
   try {
     const result = await pool.query(

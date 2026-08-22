@@ -959,6 +959,8 @@ const en = {
     deleteConfirm: 'Delete this request?',
     deleteFailed: 'Failed to delete request',
     viewAttachment: 'View',
+    leaveMaxDaysWarning: 'The maximum for leave is 26 consecutive work days. For more than that, contact HR directly to have it entered manually if approved.',
+    permissionMaxHoursWarning: 'The maximum for an absence permission is 3 hours.',
   },
   auditLog: {
     title: 'Activity Log',
@@ -2451,6 +2453,8 @@ const ar: typeof en = {
     deleteConfirm: 'متأكد تبي تحذف هذا الطلب؟',
     deleteFailed: 'فشل حذف الطلب',
     viewAttachment: 'عرض',
+    leaveMaxDaysWarning: 'الحد الأقصى للإجازات هو 26 يوم عمل متواصل. لأكثر من ذلك، تواصل مباشرة مع إدارة الموارد البشرية لإدخالها يدويًا في حال الموافقة.',
+    permissionMaxHoursWarning: 'الحد الأقصى للاستئذان هو 3 ساعات.',
   },
   auditLog: {
     title: 'سجل النشاط',

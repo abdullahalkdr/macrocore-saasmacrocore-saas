@@ -96,6 +96,7 @@ export default function LeaveRequestsPage() {
   const [attachment, setAttachment] = useState<string | null>(null);
   const [status, setStatus] = useState('pending');
   const [managerNote, setManagerNote] = useState('');
+  const [businessRuleWarning, setBusinessRuleWarning] = useState<string | null>(null);
 
   // Full-year calendar — all 12 months of calYear, not just the current month.
   const [calYear, setCalYear] = useState(new Date().getFullYear());
@@ -120,6 +121,34 @@ export default function LeaveRequestsPage() {
       setCalByMonth(byMonth);
     });
   }
+
+  // Business rule (product decision, employees only — admins/managers can still key
+  // in an HR-approved exception manually): live-check the day/hour caps as the user
+  // picks dates/times, instead of waiting for the submit round-trip.
+  useEffect(() => {
+    if (isManager) {
+      setBusinessRuleWarning(null);
+      return;
+    }
+    if (tab === 'leave') {
+      if (startDate && endDate) {
+        const days = Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1;
+        if (days > 30) {
+          setBusinessRuleWarning(t.leaveRequests.leaveMaxDaysWarning);
+          return;
+        }
+      }
+    } else if (startTime && endTime) {
+      const [sh, sm] = startTime.split(':').map(Number);
+      const [eh, em] = endTime.split(':').map(Number);
+      const hours = (eh * 60 + em - (sh * 60 + sm)) / 60;
+      if (hours > 3) {
+        setBusinessRuleWarning(t.leaveRequests.permissionMaxHoursWarning);
+        return;
+      }
+    }
+    setBusinessRuleWarning(null);
+  }, [tab, isManager, startDate, endDate, startTime, endTime, t]);
 
   useEffect(() => {
     // Only admin/manager ever see/use the employee picker below (the create form hides
@@ -185,6 +214,7 @@ export default function LeaveRequestsPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (businessRuleWarning) return;
     setError(null);
     setLoading(true);
     try {
@@ -524,7 +554,7 @@ export default function LeaveRequestsPage() {
           onClose={() => setOpen(false)}
           actions={(requestClose) => (
             <>
-              <button className="btn btn-primary" type="submit" form="leave-form" disabled={loading}>
+              <button className="btn btn-primary" type="submit" form="leave-form" disabled={loading || !!businessRuleWarning}>
                 {loading ? t.common.loading : editingId ? t.leaveRequests.saveEdit : t.common.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={requestClose}>
@@ -610,7 +640,7 @@ export default function LeaveRequestsPage() {
               <>
                 <div className="field">
                   <label>{t.leaveRequests.startTime}</label>
-                  <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+                  <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
                 </div>
                 <div className="field">
                   <label>{t.leaveRequests.startDate}</label>
@@ -618,9 +648,14 @@ export default function LeaveRequestsPage() {
                 </div>
                 <div className="field">
                   <label>{t.leaveRequests.endTime}</label>
-                  <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                  <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
                 </div>
               </>
+            )}
+            {businessRuleWarning && (
+              <div className="error-banner" style={{ gridColumn: '1 / -1', marginBottom: 0 }}>
+                {businessRuleWarning}
+              </div>
             )}
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>{t.leaveRequests.reason}</label>
