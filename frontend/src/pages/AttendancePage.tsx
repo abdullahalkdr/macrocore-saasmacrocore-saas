@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Tag from '../components/Tag';
 
@@ -23,6 +24,14 @@ interface AttendanceRecord {
 
 export default function AttendancePage() {
   const t = useT();
+  // Backend already forces employee_id server-side for role='employee' (attendance
+  // ownership fix) — the roster picker below is only meaningful for admin/manager
+  // clocking in someone else. Showing it to a plain employee let them "pick" a
+  // colleague, click Clock in, and watch it silently record THEIR OWN attendance
+  // instead — looked like a bug even though the backend was already safe. Hide it
+  // for employees and self-clock directly.
+  const currentUser = useAuthStore((s) => s.user);
+  const isEmployee = currentUser?.role === 'employee';
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -37,18 +46,24 @@ export default function AttendancePage() {
   }
 
   useEffect(() => {
-    get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
+    // Also skips exposing the full employee roster (names) to a plain employee, who
+    // has no use for it now that the picker is hidden for them.
+    if (!isEmployee) {
+      get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
+    }
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleClockIn() {
-    if (!selectedEmployee) return;
+    if (!isEmployee && !selectedEmployee) return;
     setError(null);
     setSuccess(null);
     setLoading(true);
     try {
-      await post('/attendance/clock-in', { employee_id: selectedEmployee });
+      // employee_id is omitted for a plain employee — the backend resolves it from
+      // their own account and ignores anything sent here anyway.
+      await post('/attendance/clock-in', isEmployee ? {} : { employee_id: selectedEmployee });
       setSuccess(t.attendance.clockIn);
       load();
     } catch (err) {
@@ -59,12 +74,12 @@ export default function AttendancePage() {
   }
 
   async function handleClockOut() {
-    if (!selectedEmployee) return;
+    if (!isEmployee && !selectedEmployee) return;
     setError(null);
     setSuccess(null);
     setLoading(true);
     try {
-      await post('/attendance/clock-out', { employee_id: selectedEmployee });
+      await post('/attendance/clock-out', isEmployee ? {} : { employee_id: selectedEmployee });
       setSuccess(t.attendance.clockOut);
       load();
     } catch (err) {
@@ -93,21 +108,23 @@ export default function AttendancePage() {
 
       <div className="card">
         <div className="form-row">
-          <div className="field" style={{ flex: 2 }}>
-            <label>{t.attendance.employee}</label>
-            <select value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)}>
-              <option value="">{t.attendance.selectEmployee}</option>
-              {employees.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="btn btn-primary" type="button" disabled={!selectedEmployee || loading} onClick={handleClockIn}>
+          {!isEmployee && (
+            <div className="field" style={{ flex: 2 }}>
+              <label>{t.attendance.employee}</label>
+              <select value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)}>
+                <option value="">{t.attendance.selectEmployee}</option>
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <button className="btn btn-primary" type="button" disabled={(!isEmployee && !selectedEmployee) || loading} onClick={handleClockIn}>
             {t.attendance.clockIn}
           </button>
-          <button className="btn btn-secondary" type="button" disabled={!selectedEmployee || loading} onClick={handleClockOut}>
+          <button className="btn btn-secondary" type="button" disabled={(!isEmployee && !selectedEmployee) || loading} onClick={handleClockOut}>
             {t.attendance.clockOut}
           </button>
         </div>
