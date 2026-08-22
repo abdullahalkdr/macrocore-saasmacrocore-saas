@@ -159,6 +159,11 @@ export interface OkrTemplateKeyResult {
   title_en: string;
   metric_type: 'number' | 'percentage' | 'currency' | 'boolean';
   unit: string;
+  // Baseline the KR starts from — distinct from target_value, since progress
+  // can't be measured correctly by assuming every metric starts at 0 (e.g.
+  // raising CSAT from 75% to 90%). Templates default to 0; the admin edits
+  // it to the company's real current baseline after picking a category.
+  start_value: number;
 }
 
 export interface OkrCategoryTemplate {
@@ -180,18 +185,21 @@ export const OKR_CATEGORY_TEMPLATES: Record<OkrCategoryKey, OkrCategoryTemplate>
         title_en: 'Achieve KD [X] in Monthly Recurring Revenue',
         metric_type: 'currency',
         unit: 'KD',
+        start_value: 0,
       },
       {
         title: 'استقطاب [X] عميل جديد',
         title_en: 'Acquire [X] new customers',
         metric_type: 'number',
         unit: '',
+        start_value: 0,
       },
       {
         title: 'رفع معدل تجديد العملاء إلى [X]%',
         title_en: 'Improve customer renewal rate to [X]%',
         metric_type: 'percentage',
         unit: '%',
+        start_value: 0,
       },
     ],
   },
@@ -204,18 +212,21 @@ export const OKR_CATEGORY_TEMPLATES: Record<OkrCategoryKey, OkrCategoryTemplate>
         title_en: 'Improve CSAT score to [X]%',
         metric_type: 'percentage',
         unit: '%',
+        start_value: 0,
       },
       {
         title: 'تقليل معدل تسرب العملاء إلى [X]%',
         title_en: 'Reduce customer churn rate to [X]%',
         metric_type: 'percentage',
         unit: '%',
+        start_value: 0,
       },
       {
         title: 'تقليل متوسط زمن الرد على تذاكر الدعم إلى [X] دقيقة',
         title_en: 'Reduce average support ticket response time to [X] minutes',
         metric_type: 'number',
         unit: 'min',
+        start_value: 0,
       },
     ],
   },
@@ -228,18 +239,21 @@ export const OKR_CATEGORY_TEMPLATES: Record<OkrCategoryKey, OkrCategoryTemplate>
         title_en: 'Reduce core process cycle time to [X]',
         metric_type: 'number',
         unit: '',
+        start_value: 0,
       },
       {
         title: 'رفع نسبة الالتزام بمعايير الجودة إلى [X]%',
         title_en: 'Increase quality-standard compliance rate to [X]%',
         metric_type: 'percentage',
         unit: '%',
+        start_value: 0,
       },
       {
         title: 'تقليل التكاليف التشغيلية بمقدار [X] د.ك',
         title_en: 'Reduce operational costs by KD [X]',
         metric_type: 'currency',
         unit: 'KD',
+        start_value: 0,
       },
     ],
   },

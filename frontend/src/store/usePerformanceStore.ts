@@ -22,6 +22,7 @@ export interface KeyResult {
   title_en: string | null;
   metric_type: MetricType;
   unit: string | null;
+  start_value: number | null;
   target_value: number | null;
   current_value: number;
   weight: number;
@@ -141,7 +142,7 @@ interface PerformanceState {
   removeObjective: (id: string) => Promise<void>;
   createKeyResult: (
     objectiveId: string,
-    data: { title: string; title_en?: string; metric_type?: MetricType; unit?: string; target_value?: number; weight?: number }
+    data: { title: string; title_en?: string; metric_type?: MetricType; unit?: string; start_value?: number; target_value?: number; weight?: number }
   ) => Promise<void>;
   updateKeyResult: (id: string, patchData: Partial<KeyResult>) => Promise<void>;
   removeKeyResult: (id: string) => Promise<void>;

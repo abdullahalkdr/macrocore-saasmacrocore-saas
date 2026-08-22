@@ -87,10 +87,11 @@ interface KrDraft {
   title_en?: string;
   metric_type: MetricType;
   unit: string;
+  start_value: string;
   target_value: string;
   weight: string;
 }
-const EMPTY_KR_DRAFT: KrDraft = { title: '', title_en: '', metric_type: 'number', unit: '', target_value: '', weight: '1' };
+const EMPTY_KR_DRAFT: KrDraft = { title: '', title_en: '', metric_type: 'number', unit: '', start_value: '0', target_value: '', weight: '1' };
 
 function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setPageError: (e: string | null) => void }) {
   const t = useT();
@@ -158,6 +159,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
         title_en: kr.title_en,
         metric_type: kr.metric_type,
         unit: kr.unit,
+        start_value: String(kr.start_value ?? 0),
         target_value: '',
         weight: '1',
       }))
@@ -193,6 +195,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
           title_en: kr.title_en || undefined,
           metric_type: kr.metric_type,
           unit: kr.unit || undefined,
+          start_value: kr.start_value ? Number(kr.start_value) : undefined,
           target_value: kr.target_value ? Number(kr.target_value) : undefined,
           weight: kr.weight ? Number(kr.weight) : undefined,
         });
@@ -228,6 +231,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
         title: draft.title.trim(),
         metric_type: draft.metric_type,
         unit: draft.unit || undefined,
+        start_value: draft.start_value ? Number(draft.start_value) : undefined,
         target_value: draft.target_value ? Number(draft.target_value) : undefined,
         weight: draft.weight ? Number(draft.weight) : undefined,
       });
@@ -322,6 +326,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
                               <tr>
                                 <th>{t.performance.krTitle}</th>
                                 <th>{t.performance.krMetricType}</th>
+                                <th className="num">{t.performance.krStartValue}</th>
                                 <th className="num">{t.performance.krTarget}</th>
                                 <th className="num">{t.performance.krCurrent}</th>
                                 <th className="num">{t.performance.krWeight}</th>
@@ -339,6 +344,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
                                     {kr.metric_type === 'currency' && t.performance.metricCurrency}
                                     {kr.metric_type === 'boolean' && t.performance.metricBoolean}
                                   </td>
+                                  <td className="num">{kr.start_value ?? '—'}</td>
                                   <td className="num">{kr.target_value ?? '—'}</td>
                                   <td className="num">
                                     <input
@@ -385,6 +391,14 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
                           </div>
                           <div className="field" style={{ width: 90 }}>
                             <input placeholder={t.performance.krUnit} value={draftFor(o.id).unit} onChange={(e) => patchDraft(o.id, { unit: e.target.value })} />
+                          </div>
+                          <div className="field" style={{ width: 90 }}>
+                            <input
+                              type="number"
+                              placeholder={t.performance.krStartValue}
+                              value={draftFor(o.id).start_value}
+                              onChange={(e) => patchDraft(o.id, { start_value: e.target.value })}
+                            />
                           </div>
                           <div className="field" style={{ width: 90 }}>
                             <input
@@ -495,40 +509,46 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
             </button>
           </div>
           {newKrs.map((kr, i) => (
-            <div key={i} className="form-row" style={{ marginBottom: 8 }}>
-              <div className="field" style={{ flex: 2 }}>
-                <input placeholder={t.performance.krTitle} value={kr.title} onChange={(e) => updateNewKr(i, { title: e.target.value })} />
+            <div key={i} className="card" style={{ padding: 10, marginBottom: 8 }}>
+              {/* Row 1: Title + Metric Type — compact 2-row layout so 4-5 KRs
+                  don't force excessive scrolling in the modal. */}
+              <div className="form-row" style={{ marginBottom: 6 }}>
+                <div className="field" style={{ flex: 2, marginBottom: 0 }}>
+                  <input placeholder={t.performance.krTitle} value={kr.title} onChange={(e) => updateNewKr(i, { title: e.target.value })} />
+                </div>
+                <div className="field" style={{ width: 150, marginBottom: 0 }}>
+                  <select value={kr.metric_type} onChange={(e) => updateNewKr(i, { metric_type: e.target.value as MetricType })}>
+                    <option value="number">{t.performance.metricNumber}</option>
+                    <option value="percentage">{t.performance.metricPercentage}</option>
+                    <option value="currency">{t.performance.metricCurrency}</option>
+                    <option value="boolean">{t.performance.metricBoolean}</option>
+                  </select>
+                </div>
+                <button className="icon-btn" type="button" onClick={() => removeNewKr(i)} title={t.common.delete}>
+                  <IconTrash />
+                </button>
               </div>
-              <div className="field" style={{ width: 130 }}>
-                <select value={kr.metric_type} onChange={(e) => updateNewKr(i, { metric_type: e.target.value as MetricType })}>
-                  <option value="number">{t.performance.metricNumber}</option>
-                  <option value="percentage">{t.performance.metricPercentage}</option>
-                  <option value="currency">{t.performance.metricCurrency}</option>
-                  <option value="boolean">{t.performance.metricBoolean}</option>
-                </select>
+              {/* Row 2: Start Value (baseline) / Target Value / Unit / Weight —
+                  a KR's progress is meaningless without a baseline, since not
+                  every metric starts at 0 (e.g. CSAT going from 75% to 90%). */}
+              <div className="form-row">
+                <div className="field" style={{ width: 90, marginBottom: 0 }}>
+                  <label>{t.performance.krStartValue}</label>
+                  <input type="number" value={kr.start_value} onChange={(e) => updateNewKr(i, { start_value: e.target.value })} />
+                </div>
+                <div className="field" style={{ width: 90, marginBottom: 0 }}>
+                  <label>{t.performance.krTarget}</label>
+                  <input type="number" value={kr.target_value} onChange={(e) => updateNewKr(i, { target_value: e.target.value })} />
+                </div>
+                <div className="field" style={{ width: 80, marginBottom: 0 }}>
+                  <label>{t.performance.krUnit}</label>
+                  <input value={kr.unit} onChange={(e) => updateNewKr(i, { unit: e.target.value })} />
+                </div>
+                <div className="field" style={{ width: 70, marginBottom: 0 }}>
+                  <label>{t.performance.krWeight}</label>
+                  <input type="number" value={kr.weight} onChange={(e) => updateNewKr(i, { weight: e.target.value })} />
+                </div>
               </div>
-              <div className="field" style={{ width: 90 }}>
-                <input placeholder={t.performance.krUnit} value={kr.unit} onChange={(e) => updateNewKr(i, { unit: e.target.value })} />
-              </div>
-              <div className="field" style={{ width: 90 }}>
-                <input
-                  type="number"
-                  placeholder={t.performance.krTarget}
-                  value={kr.target_value}
-                  onChange={(e) => updateNewKr(i, { target_value: e.target.value })}
-                />
-              </div>
-              <div className="field" style={{ width: 70 }}>
-                <input
-                  type="number"
-                  placeholder={t.performance.krWeight}
-                  value={kr.weight}
-                  onChange={(e) => updateNewKr(i, { weight: e.target.value })}
-                />
-              </div>
-              <button className="icon-btn" type="button" onClick={() => removeNewKr(i)}>
-                <IconTrash />
-              </button>
             </div>
           ))}
           {newKrs.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{t.performance.noKeyResultsYetHint}</p>}

@@ -10,7 +10,7 @@ const KEY_RESULT_STATUSES = ['on_track', 'at_risk', 'off_track', 'done'];
 const METRIC_TYPES = ['number', 'percentage', 'currency', 'boolean'];
 
 const OBJECTIVE_FIELDS = `id, employee_id, title, title_en, description, period_start, period_end, status, progress_pct, created_by, created_at, updated_at`;
-const KEY_RESULT_FIELDS = `id, objective_id, title, title_en, metric_type, unit, target_value, current_value, weight, status, created_at, updated_at`;
+const KEY_RESULT_FIELDS = `id, objective_id, title, title_en, metric_type, unit, start_value, target_value, current_value, weight, status, created_at, updated_at`;
 
 async function assertOwnsObjective(objectiveId: string, companyId: string, auth: { userId: string; role: string }): Promise<string> {
   const result = await pool.query('SELECT employee_id FROM okr_objectives WHERE id = $1 AND company_id = $2', [objectiveId, companyId]);
@@ -168,15 +168,25 @@ export const createKeyResult = asyncHandler(async (req: Request, res: Response) 
   const { id: objectiveId } = req.params;
   await assertOwnsObjective(objectiveId, companyId, req.auth!);
 
-  const { title, title_en, metric_type, unit, target_value, weight } = req.body ?? {};
+  const { title, title_en, metric_type, unit, start_value, target_value, weight } = req.body ?? {};
   if (typeof title !== 'string' || !title.trim()) throw new AppError(400, 'title is required');
   const finalMetricType = typeof metric_type === 'string' && METRIC_TYPES.includes(metric_type) ? metric_type : 'number';
 
   const result = await pool.query(
-    `INSERT INTO okr_key_results (company_id, objective_id, title, title_en, metric_type, unit, target_value, weight)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO okr_key_results (company_id, objective_id, title, title_en, metric_type, unit, start_value, target_value, weight)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${KEY_RESULT_FIELDS}`,
-    [companyId, objectiveId, title.trim(), title_en ?? null, finalMetricType, unit ?? null, target_value ?? null, typeof weight === 'number' ? weight : 1]
+    [
+      companyId,
+      objectiveId,
+      title.trim(),
+      title_en ?? null,
+      finalMetricType,
+      unit ?? null,
+      typeof start_value === 'number' ? start_value : 0,
+      target_value ?? null,
+      typeof weight === 'number' ? weight : 1,
+    ]
   );
 
   res.status(201).json({ success: true, key_result: result.rows[0] });
@@ -194,7 +204,7 @@ export const updateKeyResult = asyncHandler(async (req: Request, res: Response) 
   if (!existing.rows[0]) throw new AppError(404, 'Key result not found');
   await assertOwnsObjective(existing.rows[0].objective_id, companyId, req.auth!);
 
-  const { title, title_en, current_value, target_value, unit, weight, status } = req.body ?? {};
+  const { title, title_en, current_value, start_value, target_value, unit, weight, status } = req.body ?? {};
   const sets: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -212,6 +222,11 @@ export const updateKeyResult = asyncHandler(async (req: Request, res: Response) 
     if (typeof current_value !== 'number') throw new AppError(400, 'current_value must be a number');
     sets.push(`current_value = $${i++}`);
     values.push(current_value);
+  }
+  if (start_value !== undefined) {
+    if (typeof start_value !== 'number') throw new AppError(400, 'start_value must be a number');
+    sets.push(`start_value = $${i++}`);
+    values.push(start_value);
   }
   if (target_value !== undefined) {
     sets.push(`target_value = $${i++}`);
