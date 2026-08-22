@@ -5,20 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { isUniqueViolation, isForeignKeyViolation } from '../utils/dbErrors';
 import { computeLateMinutes, computeDeduction } from '../utils/attendance';
 import { logAudit } from '../utils/audit';
-
-// Security fix (code audit finding #1): users has no built-in link to employees, and
-// clockIn/clockOut/list used to trust employee_id from the request without checking it
-// against the caller's own identity — any logged-in user could act on any other
-// employee's attendance. For a plain 'employee' caller we now resolve their OWN
-// employee_id server-side from users.employee_id (added in MIGRATION_040) and use that
-// instead of whatever the client sent. admin/manager are unaffected — they can still
-// target any employee_id, same as before.
-async function getOwnEmployeeId(userId: string, companyId: string): Promise<string> {
-  const result = await pool.query(`SELECT employee_id FROM users WHERE id = $1 AND company_id = $2`, [userId, companyId]);
-  const employeeId = result.rows[0]?.employee_id;
-  if (!employeeId) throw new AppError(403, 'Your account is not linked to an employee record — ask an admin to link it');
-  return employeeId as string;
-}
+import { getOwnEmployeeId } from '../utils/ownEmployee';
 
 export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;

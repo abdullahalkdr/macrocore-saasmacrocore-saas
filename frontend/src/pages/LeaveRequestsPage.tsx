@@ -94,7 +94,13 @@ export default function LeaveRequestsPage() {
   }
 
   useEffect(() => {
-    get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
+    // Only admin/manager ever see/use the employee picker below (the create form hides
+    // it for a plain employee, who self-files against their own linked record instead —
+    // see MIGRATION_040 / leaveRequests.controller.ts create()). Skip exposing the full
+    // company roster to someone who has no use for it.
+    if (isManager) {
+      get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
+    }
     loadRequests();
     loadCalendarYear(calYear);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,7 +157,9 @@ export default function LeaveRequestsPage() {
     setLoading(true);
     try {
       const base = {
-        employee_id: employeeId,
+        // Omitted entirely for a plain employee — the backend resolves it from their
+        // own account and ignores anything sent here anyway (audit finding #2 fix).
+        employee_id: isManager ? employeeId : undefined,
         type,
         start_date: startDate,
         end_date: type === 'permission' ? undefined : endDate || undefined,
@@ -405,17 +413,19 @@ export default function LeaveRequestsPage() {
                 <option value="permission">{t.leaveRequests.typePermission}</option>
               </select>
             </div>
-            <div className="field">
-              <label>{t.leaveRequests.employee}</label>
-              <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required>
-                <option value="">{t.leaveRequests.selectEmployee}</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {isManager && (
+              <div className="field">
+                <label>{t.leaveRequests.employee}</label>
+                <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required>
+                  <option value="">{t.leaveRequests.selectEmployee}</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             {editingId && (
               <div className="field">
                 <label>{t.leaveRequests.status}</label>

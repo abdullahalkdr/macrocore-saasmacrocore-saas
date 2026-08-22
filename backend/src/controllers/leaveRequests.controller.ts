@@ -5,12 +5,23 @@ import { AppError } from '../middleware/errorHandler';
 import { isForeignKeyViolation } from '../utils/dbErrors';
 import { logAudit } from '../utils/audit';
 import { notifyRoles } from '../utils/notifications';
+import { getOwnEmployeeId } from '../utils/ownEmployee';
 
 const TYPES = ['annual_leave', 'sick_leave', 'permission'];
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { employee_id, type, start_date, end_date, start_time, end_time, reason, attachment_base64 } = req.body ?? {};
+  const { type, start_date, end_date, start_time, end_time, reason, attachment_base64 } = req.body ?? {};
+  let { employee_id } = req.body ?? {};
+
+  // Security fix (code audit finding #2): create() used to trust employee_id straight
+  // from the request body with no check against the caller's identity — any logged-in
+  // employee could file a leave/sick-leave request AS a coworker. Same fix pattern as
+  // attendance.controller.ts (finding #1): pin a plain 'employee' caller to their own
+  // linked employee record, ignoring whatever employee_id the client sent.
+  if (req.auth!.role === 'employee') {
+    employee_id = await getOwnEmployeeId(req.auth!.userId, companyId);
+  }
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
   if (typeof type !== 'string' || !TYPES.includes(type)) throw new AppError(400, `type must be one of ${TYPES.join(', ')}`);
@@ -49,7 +60,16 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   const params: unknown[] = [companyId];
   let where = 'lr.company_id = $1';
-  if (typeof employee_id === 'string') {
+
+  // Same finding #2 fix: list() had no per-row ownership filter — any employee could
+  // pull every other employee's leave/sick-leave requests (type, reason, attachment)
+  // for the whole company. Force the filter for role='employee', ignore any
+  // employee_id they pass in the query.
+  if (req.auth!.role === 'employee') {
+    const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
+    params.push(ownEmployeeId);
+    where += ` AND lr.employee_id = $${params.length}`;
+  } else if (typeof employee_id === 'string') {
     params.push(employee_id);
     where += ` AND lr.employee_id = $${params.length}`;
   }
