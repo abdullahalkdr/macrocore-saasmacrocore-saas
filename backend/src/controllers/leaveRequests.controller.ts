@@ -7,12 +7,29 @@ import { logAudit } from '../utils/audit';
 import { notifyRoles } from '../utils/notifications';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
 
-const TYPES = ['annual_leave', 'sick_leave', 'permission'];
+// "Absences" — two sub-sections. category='leave' uses LEAVE_TYPES for `type`.
+// category='absence_permission' pins `type` to the fixed 'permission' value and
+// instead uses the structured permission_reason ("السبب") + notice_received_by.
+const CATEGORIES = ['leave', 'absence_permission'];
+const LEAVE_TYPES = [
+  'azaa_leave',
+  'annual_leave',
+  'covid_19',
+  'hajj_leave',
+  'marriage_leave',
+  'paternity_leave',
+  'sick_leave',
+  'study_leave',
+];
+const PERMISSION_REASONS = ['accident', 'death_in_family', 'medical_appointment', 'sick_family', 'sick_self', 'transportation', 'others'];
+const NOTICE_RECEIVED_BY = ['in_person', 'other_employee', 'phone', 'relative', 'written'];
+// Accepted on update() only, where callers may still send either an old or new type.
+const TYPES_ALL = [...LEAVE_TYPES, 'permission'];
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { type, start_date, end_date, start_time, end_time, reason, attachment_base64 } = req.body ?? {};
-  let { employee_id } = req.body ?? {};
+  const { start_date, end_date, start_time, end_time, reason, attachment_base64 } = req.body ?? {};
+  let { employee_id, category, type, permission_reason, notice_received_by } = req.body ?? {};
 
   // Security fix (code audit finding #2): create() used to trust employee_id straight
   // from the request body with no check against the caller's identity — any logged-in
@@ -24,15 +41,53 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   }
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
-  if (typeof type !== 'string' || !TYPES.includes(type)) throw new AppError(400, `type must be one of ${TYPES.join(', ')}`);
+  if (typeof category !== 'string' || !CATEGORIES.includes(category)) {
+    throw new AppError(400, `category must be one of ${CATEGORIES.join(', ')}`);
+  }
+
+  let finalType: string;
+  let finalPermissionReason: string | null = null;
+  let finalNoticeReceivedBy: string | null = null;
+
+  if (category === 'leave') {
+    if (typeof type !== 'string' || !LEAVE_TYPES.includes(type)) throw new AppError(400, `type must be one of ${LEAVE_TYPES.join(', ')}`);
+    finalType = type;
+  } else {
+    finalType = 'permission';
+    if (typeof permission_reason !== 'string' || !PERMISSION_REASONS.includes(permission_reason)) {
+      throw new AppError(400, `permission_reason must be one of ${PERMISSION_REASONS.join(', ')}`);
+    }
+    if (typeof notice_received_by !== 'string' || !NOTICE_RECEIVED_BY.includes(notice_received_by)) {
+      throw new AppError(400, `notice_received_by must be one of ${NOTICE_RECEIVED_BY.join(', ')}`);
+    }
+    finalPermissionReason = permission_reason;
+    finalNoticeReceivedBy = notice_received_by;
+  }
+
   if (typeof start_date !== 'string') throw new AppError(400, 'start_date is required (YYYY-MM-DD)');
 
   try {
     const result = await pool.query(
-      `INSERT INTO leave_requests (company_id, employee_id, type, start_date, end_date, start_time, end_time, reason, attachment_base64, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
-       RETURNING id, employee_id, type, start_date, end_date, start_time, end_time, reason, status, created_at`,
-      [companyId, employee_id, type, start_date, end_date ?? null, start_time ?? null, end_time ?? null, reason ?? null, attachment_base64 ?? null]
+      `INSERT INTO leave_requests
+         (company_id, employee_id, category, type, start_date, end_date, start_time, end_time,
+          reason, permission_reason, notice_received_by, attachment_base64, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending')
+       RETURNING id, employee_id, category, type, start_date, end_date, start_time, end_time,
+                 reason, permission_reason, notice_received_by, status, created_at`,
+      [
+        companyId,
+        employee_id,
+        category,
+        finalType,
+        start_date,
+        end_date ?? null,
+        start_time ?? null,
+        end_time ?? null,
+        reason ?? null,
+        finalPermissionReason,
+        finalNoticeReceivedBy,
+        attachment_base64 ?? null,
+      ]
     );
     const leaveRequest = result.rows[0];
     await logAudit({ companyId, userId: req.auth!.userId, action: 'leave_request_created', entityType: 'leave_requests', entityId: leaveRequest.id, req });
@@ -42,8 +97,8 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       companyId,
       roles: ['admin', 'manager'],
       type: 'leave_request_created',
-      title: `New leave request — ${employee.rows[0]?.name ?? ''}`,
-      body: `${type} starting ${start_date}`,
+      title: `New request — ${employee.rows[0]?.name ?? ''}`,
+      body: category === 'leave' ? `${finalType} starting ${start_date}` : `Absence permission — ${finalPermissionReason} on ${start_date}`,
       link: '/leave-requests',
     });
 
@@ -56,15 +111,15 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { employee_id, status, type } = req.query;
+  const { employee_id, status, type, category } = req.query;
 
   const params: unknown[] = [companyId];
   let where = 'lr.company_id = $1';
 
   // Same finding #2 fix: list() had no per-row ownership filter — any employee could
-  // pull every other employee's leave/sick-leave requests (type, reason, attachment)
-  // for the whole company. Force the filter for role='employee', ignore any
-  // employee_id they pass in the query.
+  // pull every other employee's leave/absence-permission requests (type, reason,
+  // attachment) for the whole company. Force the filter for role='employee', ignore
+  // any employee_id they pass in the query.
   if (req.auth!.role === 'employee') {
     const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
     params.push(ownEmployeeId);
@@ -81,10 +136,15 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     params.push(type);
     where += ` AND lr.type = $${params.length}`;
   }
+  if (typeof category === 'string') {
+    params.push(category);
+    where += ` AND lr.category = $${params.length}`;
+  }
 
   const result = await pool.query(
-    `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.type, lr.start_date, lr.end_date,
-            lr.start_time, lr.end_time, lr.reason, lr.attachment_base64, lr.status, lr.manager_note,
+    `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.category, lr.type, lr.start_date, lr.end_date,
+            lr.start_time, lr.end_time, lr.reason, lr.permission_reason, lr.notice_received_by,
+            lr.attachment_base64, lr.status, lr.manager_note,
             lr.reviewed_by, lr.reviewed_at, lr.created_at
      FROM leave_requests lr
      JOIN employees e ON e.id = lr.employee_id
@@ -96,12 +156,25 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 // Manager-only full edit — covers the quick "approve/reject" case (send just
 // { status }) and the "edit any request" case from the edit modal (employee,
-// type, dates/times, reason, attachment, status, manager_note all optional/partial).
+// category/type/reason fields, dates/times, status, manager_note all optional/partial).
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { employee_id, type, start_date, end_date, start_time, end_time, reason, attachment_base64, status, manager_note } =
-    req.body ?? {};
+  const {
+    employee_id,
+    category,
+    type,
+    start_date,
+    end_date,
+    start_time,
+    end_time,
+    reason,
+    permission_reason,
+    notice_received_by,
+    attachment_base64,
+    status,
+    manager_note,
+  } = req.body ?? {};
 
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -112,10 +185,29 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     sets.push(`employee_id = $${i++}`);
     values.push(employee_id);
   }
+  if (category !== undefined) {
+    if (!CATEGORIES.includes(category)) throw new AppError(400, `category must be one of ${CATEGORIES.join(', ')}`);
+    sets.push(`category = $${i++}`);
+    values.push(category);
+  }
   if (type !== undefined) {
-    if (!TYPES.includes(type)) throw new AppError(400, `type must be one of ${TYPES.join(', ')}`);
+    if (!TYPES_ALL.includes(type)) throw new AppError(400, `type must be one of ${TYPES_ALL.join(', ')}`);
     sets.push(`type = $${i++}`);
     values.push(type);
+  }
+  if (permission_reason !== undefined) {
+    if (permission_reason !== null && !PERMISSION_REASONS.includes(permission_reason)) {
+      throw new AppError(400, `permission_reason must be one of ${PERMISSION_REASONS.join(', ')}`);
+    }
+    sets.push(`permission_reason = $${i++}`);
+    values.push(permission_reason);
+  }
+  if (notice_received_by !== undefined) {
+    if (notice_received_by !== null && !NOTICE_RECEIVED_BY.includes(notice_received_by)) {
+      throw new AppError(400, `notice_received_by must be one of ${NOTICE_RECEIVED_BY.join(', ')}`);
+    }
+    sets.push(`notice_received_by = $${i++}`);
+    values.push(notice_received_by);
   }
   if (start_date !== undefined) {
     if (typeof start_date !== 'string') throw new AppError(400, 'start_date must be a string');
@@ -163,7 +255,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `UPDATE leave_requests SET ${sets.join(', ')}
      WHERE id = $${i++} AND company_id = $${i++}
-     RETURNING id, employee_id, type, start_date, end_date, start_time, end_time, reason, status, manager_note, reviewed_by, reviewed_at`,
+     RETURNING id, employee_id, category, type, start_date, end_date, start_time, end_time,
+               reason, permission_reason, notice_received_by, status, manager_note, reviewed_by, reviewed_at`,
     values
   );
   const leaveRequest = result.rows[0];
@@ -186,7 +279,7 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   res.status(200).json({ success: true });
 });
 
-// Approved leave that overlaps the given month — feeds the colored annual calendar.
+// Approved leave/absence-permission that overlaps the given month — feeds the colored annual calendar.
 export const calendar = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const year = parseInt(String(req.query.year ?? new Date().getFullYear()), 10);
@@ -209,7 +302,8 @@ export const calendar = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await pool.query(
-    `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.type, lr.start_date, lr.end_date, lr.start_time, lr.end_time
+    `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.category, lr.type, lr.permission_reason,
+            lr.start_date, lr.end_date, lr.start_time, lr.end_time
      FROM leave_requests lr
      JOIN employees e ON e.id = lr.employee_id
      WHERE ${where}

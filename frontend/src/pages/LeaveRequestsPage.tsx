@@ -16,22 +16,46 @@ interface LeaveRequest {
   id: string;
   employee_id: string;
   employee_name: string;
+  category: 'leave' | 'absence_permission';
   type: string;
   start_date: string;
   end_date: string | null;
   start_time: string | null;
   end_time: string | null;
   reason: string | null;
+  permission_reason: string | null;
+  notice_received_by: string | null;
   attachment_base64: string | null;
   status: string;
   manager_note: string | null;
 }
 
-// Green = annual leave, red = sick leave, orange = permission — matches the status
-// legend shown above the calendar.
+const LEAVE_TYPES = [
+  'azaa_leave',
+  'annual_leave',
+  'covid_19',
+  'hajj_leave',
+  'marriage_leave',
+  'paternity_leave',
+  'sick_leave',
+  'study_leave',
+] as const;
+
+const PERMISSION_REASONS = ['accident', 'death_in_family', 'medical_appointment', 'sick_family', 'sick_self', 'transportation', 'others'] as const;
+
+const NOTICE_OPTIONS = ['in_person', 'other_employee', 'phone', 'relative', 'written'] as const;
+
+// One color per leave type, plus a single shared color for absence-permission rows —
+// matches the legend under the calendar.
 const TYPE_COLOR: Record<string, string> = {
+  azaa_leave: '#6b7280',
   annual_leave: '#059669',
+  covid_19: '#b91c1c',
+  hajj_leave: '#7c3aed',
+  marriage_leave: '#db2777',
+  paternity_leave: '#2563eb',
   sick_leave: '#ef4444',
+  study_leave: '#0891b2',
   permission: '#f59e0b',
 };
 
@@ -51,6 +75,8 @@ export default function LeaveRequestsPage() {
   const user = useAuthStore((s) => s.user);
   const isManager = user?.role === 'admin' || user?.role === 'manager';
 
+  const [tab, setTab] = useState<'leave' | 'absence_permission'>('leave');
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,12 +85,14 @@ export default function LeaveRequestsPage() {
   const [loading, setLoading] = useState(false);
 
   const [employeeId, setEmployeeId] = useState('');
-  const [type, setType] = useState('annual_leave');
+  const [type, setType] = useState<string>('annual_leave');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
   const [reason, setReason] = useState('');
+  const [permissionReason, setPermissionReason] = useState('');
+  const [noticeReceivedBy, setNoticeReceivedBy] = useState('');
   const [attachment, setAttachment] = useState<string | null>(null);
   const [status, setStatus] = useState('pending');
   const [managerNote, setManagerNote] = useState('');
@@ -125,6 +153,8 @@ export default function LeaveRequestsPage() {
     setStartTime('');
     setEndTime('');
     setReason('');
+    setPermissionReason('');
+    setNoticeReceivedBy('');
     setAttachment(null);
     setStatus('pending');
     setManagerNote('');
@@ -145,6 +175,8 @@ export default function LeaveRequestsPage() {
     setStartTime(r.start_time ? r.start_time.slice(0, 5) : '');
     setEndTime(r.end_time ? r.end_time.slice(0, 5) : '');
     setReason(r.reason || '');
+    setPermissionReason(r.permission_reason || '');
+    setNoticeReceivedBy(r.notice_received_by || '');
     setAttachment(null);
     setStatus(r.status);
     setManagerNote(r.manager_note || '');
@@ -156,18 +188,24 @@ export default function LeaveRequestsPage() {
     setError(null);
     setLoading(true);
     try {
-      const base = {
+      const base: Record<string, unknown> = {
         // Omitted entirely for a plain employee — the backend resolves it from their
         // own account and ignores anything sent here anyway (audit finding #2 fix).
         employee_id: isManager ? employeeId : undefined,
-        type,
+        category: tab,
         start_date: startDate,
-        end_date: type === 'permission' ? undefined : endDate || undefined,
-        start_time: type === 'permission' ? startTime || undefined : undefined,
-        end_time: type === 'permission' ? endTime || undefined : undefined,
         reason: reason || undefined,
         attachment_base64: attachment || undefined,
       };
+      if (tab === 'leave') {
+        base.type = type;
+        base.end_date = endDate || undefined;
+      } else {
+        base.start_time = startTime || undefined;
+        base.end_time = endTime || undefined;
+        base.permission_reason = permissionReason;
+        base.notice_received_by = noticeReceivedBy;
+      }
       if (editingId) {
         await patch(`/leave-requests/${editingId}`, { ...base, status, manager_note: managerNote || undefined });
       } else {
@@ -209,9 +247,64 @@ export default function LeaveRequestsPage() {
   }
 
   function typeLabel(ty: string) {
-    if (ty === 'annual_leave') return t.leaveRequests.typeAnnual;
-    if (ty === 'sick_leave') return t.leaveRequests.typeSick;
-    return t.leaveRequests.typePermission;
+    switch (ty) {
+      case 'azaa_leave':
+        return t.leaveRequests.typeAzaa;
+      case 'annual_leave':
+        return t.leaveRequests.typeAnnual;
+      case 'covid_19':
+        return t.leaveRequests.typeCovid;
+      case 'hajj_leave':
+        return t.leaveRequests.typeHajj;
+      case 'marriage_leave':
+        return t.leaveRequests.typeMarriage;
+      case 'paternity_leave':
+        return t.leaveRequests.typePaternity;
+      case 'sick_leave':
+        return t.leaveRequests.typeSick;
+      case 'study_leave':
+        return t.leaveRequests.typeStudy;
+      default:
+        return t.leaveRequests.typePermission;
+    }
+  }
+
+  function permissionReasonLabel(r: string | null) {
+    switch (r) {
+      case 'accident':
+        return t.leaveRequests.reasonAccident;
+      case 'death_in_family':
+        return t.leaveRequests.reasonDeathInFamily;
+      case 'medical_appointment':
+        return t.leaveRequests.reasonMedicalAppointment;
+      case 'sick_family':
+        return t.leaveRequests.reasonSickFamily;
+      case 'sick_self':
+        return t.leaveRequests.reasonSickSelf;
+      case 'transportation':
+        return t.leaveRequests.reasonTransportation;
+      case 'others':
+        return t.leaveRequests.reasonOthers;
+      default:
+        return '—';
+    }
+  }
+
+  function noticeLabel(n: string | null) {
+    switch (n) {
+      case 'in_person':
+        return t.leaveRequests.noticeInPerson;
+      case 'other_employee':
+        return t.leaveRequests.noticeOtherEmployee;
+      case 'phone':
+        return t.leaveRequests.noticePhone;
+      case 'relative':
+        return t.leaveRequests.noticeRelative;
+      case 'written':
+        return t.leaveRequests.noticeWritten;
+      default:
+        return '—';
+    }
   }
 
   function statusTag(s: string) {
@@ -248,14 +341,24 @@ export default function LeaveRequestsPage() {
   }
 
   const monthFormatter = new Intl.DateTimeFormat(undefined, { month: 'long' });
+  const visibleRequests = requests.filter((r) => r.category === tab);
 
   return (
     <div>
       <PageHeader title={t.leaveRequests.title} subtitle={t.leaveRequests.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
+      <div className="tabs">
+        <button className={`tab-btn${tab === 'leave' ? ' active' : ''}`} onClick={() => setTab('leave')}>
+          {t.leaveRequests.tabLeave}
+        </button>
+        <button className={`tab-btn${tab === 'absence_permission' ? ' active' : ''}`} onClick={() => setTab('absence_permission')}>
+          {t.leaveRequests.tabAbsencePermission}
+        </button>
+      </div>
+
       <div className="section-title-row">
-        <span className="muted">{t.leaveRequests.count(requests.length)}</span>
+        <span className="muted">{t.leaveRequests.count(visibleRequests.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={openCreate}>
           <IconPlus /> {t.leaveRequests.newItem}
         </button>
@@ -270,9 +373,21 @@ export default function LeaveRequestsPage() {
             <thead>
               <tr>
                 <th>{t.leaveRequests.employee}</th>
-                <th>{t.leaveRequests.type}</th>
-                <th>{t.leaveRequests.startDate}</th>
-                <th>{t.leaveRequests.endDate}</th>
+                {tab === 'leave' ? (
+                  <>
+                    <th>{t.leaveRequests.type}</th>
+                    <th>{t.leaveRequests.startDate}</th>
+                    <th>{t.leaveRequests.endDate}</th>
+                  </>
+                ) : (
+                  <>
+                    <th>{t.leaveRequests.permissionReason}</th>
+                    <th>{t.leaveRequests.noticeReceivedBy}</th>
+                    <th>{t.leaveRequests.startDate}</th>
+                    <th>{t.leaveRequests.startTime}</th>
+                    <th>{t.leaveRequests.endTime}</th>
+                  </>
+                )}
                 <th>{t.leaveRequests.reason}</th>
                 <th>{t.leaveRequests.attachment}</th>
                 <th>{t.leaveRequests.status}</th>
@@ -280,12 +395,24 @@ export default function LeaveRequestsPage() {
               </tr>
             </thead>
             <tbody>
-              {requests.map((r) => (
+              {visibleRequests.map((r) => (
                 <tr key={r.id}>
                   <td style={{ fontWeight: 700 }}>{r.employee_name}</td>
-                  <td>{typeLabel(r.type)}</td>
-                  <td>{r.start_date.slice(0, 10)}</td>
-                  <td>{r.end_date ? r.end_date.slice(0, 10) : '—'}</td>
+                  {tab === 'leave' ? (
+                    <>
+                      <td>{typeLabel(r.type)}</td>
+                      <td>{r.start_date.slice(0, 10)}</td>
+                      <td>{r.end_date ? r.end_date.slice(0, 10) : '—'}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{permissionReasonLabel(r.permission_reason)}</td>
+                      <td>{noticeLabel(r.notice_received_by)}</td>
+                      <td>{r.start_date.slice(0, 10)}</td>
+                      <td>{r.start_time ? r.start_time.slice(0, 5) : '—'}</td>
+                      <td>{r.end_time ? r.end_time.slice(0, 5) : '—'}</td>
+                    </>
+                  )}
                   <td>{r.reason || '—'}</td>
                   <td>
                     {r.attachment_base64 ? (
@@ -321,9 +448,9 @@ export default function LeaveRequestsPage() {
                   )}
                 </tr>
               ))}
-              {requests.length === 0 && (
+              {visibleRequests.length === 0 && (
                 <tr>
-                  <td colSpan={isManager ? 8 : 7}>
+                  <td colSpan={isManager ? (tab === 'leave' ? 8 : 10) : tab === 'leave' ? 7 : 9}>
                     <div className="empty-state">{t.leaveRequests.empty}</div>
                   </td>
                 </tr>
@@ -347,8 +474,8 @@ export default function LeaveRequestsPage() {
           </div>
         </div>
         <div className="card-body">
-          <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12 }}>
-            {(['annual_leave', 'sick_leave', 'permission'] as const).map((ty) => (
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, flexWrap: 'wrap' }}>
+            {[...LEAVE_TYPES, 'permission'].map((ty) => (
               <div key={ty} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: TYPE_COLOR[ty], display: 'inline-block' }} />
                 {typeLabel(ty)}
@@ -367,7 +494,9 @@ export default function LeaveRequestsPage() {
                     {cells.map((day, i) => (
                       <div
                         key={i}
-                        title={(dayMap[day || 0] || []).map((lr) => `${lr.employee_name} — ${typeLabel(lr.type)}`).join('\n')}
+                        title={(dayMap[day || 0] || [])
+                          .map((lr) => `${lr.employee_name} — ${lr.category === 'absence_permission' ? permissionReasonLabel(lr.permission_reason) : typeLabel(lr.type)}`)
+                          .join('\n')}
                         style={{
                           minHeight: 20,
                           borderRadius: 3,
@@ -405,14 +534,44 @@ export default function LeaveRequestsPage() {
           )}
         >
           <form id="leave-form" onSubmit={handleSubmit} className="field-grid">
-            <div className="field">
-              <label>{t.leaveRequests.type}</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="annual_leave">{t.leaveRequests.typeAnnual}</option>
-                <option value="sick_leave">{t.leaveRequests.typeSick}</option>
-                <option value="permission">{t.leaveRequests.typePermission}</option>
-              </select>
-            </div>
+            {tab === 'leave' && (
+              <div className="field">
+                <label>{t.leaveRequests.type}</label>
+                <select value={type} onChange={(e) => setType(e.target.value)}>
+                  {LEAVE_TYPES.map((ty) => (
+                    <option key={ty} value={ty}>
+                      {typeLabel(ty)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {tab === 'absence_permission' && (
+              <>
+                <div className="field">
+                  <label>{t.leaveRequests.permissionReason}</label>
+                  <select value={permissionReason} onChange={(e) => setPermissionReason(e.target.value)} required>
+                    <option value="">{t.leaveRequests.selectReason}</option>
+                    {PERMISSION_REASONS.map((r) => (
+                      <option key={r} value={r}>
+                        {permissionReasonLabel(r)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{t.leaveRequests.noticeReceivedBy}</label>
+                  <select value={noticeReceivedBy} onChange={(e) => setNoticeReceivedBy(e.target.value)} required>
+                    <option value="">{t.leaveRequests.selectNotice}</option>
+                    {NOTICE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {noticeLabel(n)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
             {isManager && (
               <div className="field">
                 <label>{t.leaveRequests.employee}</label>
@@ -436,7 +595,7 @@ export default function LeaveRequestsPage() {
                 </select>
               </div>
             )}
-            {type !== 'permission' ? (
+            {tab === 'leave' ? (
               <>
                 <div className="field">
                   <label>{t.leaveRequests.startDate}</label>
