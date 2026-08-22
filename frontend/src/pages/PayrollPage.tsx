@@ -9,6 +9,7 @@ import Tag from '../components/Tag';
 import StatCard from '../components/StatCard';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 import { exportRowsToCsv } from '../utils/csv';
+import { markSystemAdjustments, mergeSystemAdjustments } from '../utils/payrollAdjustments';
 
 interface PayrollRecord {
   id: string;
@@ -244,15 +245,7 @@ export default function PayrollPage() {
         get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${p.id}`),
         companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(p.employee_id) : Promise.resolve(new Set<string>()),
       ]);
-      setAdjustments(
-        detail.adjustments.map((a) => ({
-          id: a.id,
-          type: a.type,
-          label: a.label,
-          amount: String(a.amount),
-          locked: !!a.id && systemIds.has(a.id),
-        }))
-      );
+      setAdjustments(markSystemAdjustments(detail.adjustments, systemIds));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.payroll.loadFailed);
     }
@@ -283,12 +276,7 @@ export default function PayrollPage() {
           get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${editingId}`),
           companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(employeeId) : Promise.resolve(new Set<string>()),
         ]);
-        const freshSystemRows: Adjustment[] = detail.adjustments
-          .filter((a) => !!a.id && systemIds.has(a.id as string))
-          .map((a) => ({ id: a.id, type: a.type, label: a.label, amount: String(a.amount), locked: true }));
-        const freshSystemIds = new Set(freshSystemRows.map((r) => r.id));
-        const userEditedRows = currentAdjustments.filter((a) => !a.locked && !(a.id && freshSystemIds.has(a.id)));
-        currentAdjustments = [...freshSystemRows, ...userEditedRows];
+        currentAdjustments = mergeSystemAdjustments(detail.adjustments, systemIds, currentAdjustments);
       }
 
       const validAdjustments = currentAdjustments

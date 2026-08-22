@@ -21,6 +21,12 @@ export default function SLAManagementPage() {
   const upsertPolicy = useSLAStore((s) => s.upsertPolicy);
 
   const [error, setError] = useState<string | null>(null);
+  // Same reasoning as PerformancePage: a failed background fetchPolicies() sets
+  // useSLAStore's `error`, not this page's own `error` state (which is reserved for
+  // save-action failures) — surface both so a failed initial load isn't silently an
+  // empty table.
+  const storeError = useSLAStore((s) => s.error);
+  const displayedError = error || storeError;
   const [drafts, setDrafts] = useState<Record<SLAPriority, RowDraft>>({
     low: EMPTY_ROW,
     medium: EMPTY_ROW,
@@ -84,7 +90,7 @@ export default function SLAManagementPage() {
   return (
     <div>
       <PageHeader title={t.sla.title} subtitle={t.sla.subtitle} />
-      {error && <div className="error-banner">{error}</div>}
+      {displayedError && <div className="error-banner">{displayedError}</div>}
 
       <div className="card">
         <div className="table-wrap">

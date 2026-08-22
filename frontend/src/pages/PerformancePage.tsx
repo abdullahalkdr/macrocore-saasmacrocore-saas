@@ -33,6 +33,12 @@ export default function PerformancePage() {
   const [tab, setTab] = useState<Tab>('okr');
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Background list-load failures (e.g. a network drop while a tab's initial
+  // fetchObjectives/fetchForms/fetchCycles/fetchScores call is in flight) set this in
+  // the store rather than throwing — surface it here too, not just action errors set
+  // via setPageError, so a failed background load is never silently an empty table.
+  const storeError = usePerformanceStore((s) => s.error);
+  const displayedError = error || storeError;
 
   useEffect(() => {
     get<{ employees: EmployeeOption[] }>('/employees')
@@ -43,7 +49,7 @@ export default function PerformancePage() {
   return (
     <div>
       <PageHeader title={t.performance.title} subtitle={t.performance.subtitle} />
-      {error && <div className="error-banner">{error}</div>}
+      {displayedError && <div className="error-banner">{displayedError}</div>}
       <div className="tabs">
         <button type="button" className={`tab-btn${tab === 'okr' ? ' active' : ''}`} onClick={() => setTab('okr')}>
           {t.performance.tabOkr}
@@ -345,7 +351,12 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
               {objectives.length === 0 && (
                 <tr>
                   <td colSpan={7}>
-                    <div className="empty-state">{t.performance.objectivesEmpty}</div>
+                    <div className="empty-state">
+                      <div>{t.performance.objectivesEmpty}</div>
+                      <button className="btn btn-primary btn-sm" type="button" onClick={openCreate} style={{ marginTop: 10 }}>
+                        <IconPlus /> {t.performance.newObjective}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -610,7 +621,12 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
               {forms.length === 0 && (
                 <tr>
                   <td colSpan={3}>
-                    <div className="empty-state">{t.performance.formsEmpty}</div>
+                    <div className="empty-state">
+                      <div>{t.performance.formsEmpty}</div>
+                      <button className="btn btn-primary btn-sm" type="button" onClick={openCreate} style={{ marginTop: 10 }}>
+                        <IconPlus /> {t.performance.newForm}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -794,7 +810,12 @@ function FeedbackTab({ employees, setPageError }: { employees: EmployeeOption[];
               {cycles.length === 0 && (
                 <tr>
                   <td colSpan={5}>
-                    <div className="empty-state">{t.performance.cyclesEmpty}</div>
+                    <div className="empty-state">
+                      <div>{t.performance.cyclesEmpty}</div>
+                      <button className="btn btn-primary btn-sm" type="button" onClick={openCreate} style={{ marginTop: 10 }}>
+                        <IconPlus /> {t.performance.newCycle}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -1054,7 +1075,12 @@ function ScoresTab({ employees, setPageError }: { employees: EmployeeOption[]; s
               {scores.length === 0 && (
                 <tr>
                   <td colSpan={7}>
-                    <div className="empty-state">{t.performance.scoresEmpty}</div>
+                    <div className="empty-state">
+                      <div>{t.performance.scoresEmpty}</div>
+                      <button className="btn btn-primary btn-sm" type="button" onClick={openCreate} style={{ marginTop: 10 }}>
+                        <IconPlus /> {t.performance.newScore}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}
