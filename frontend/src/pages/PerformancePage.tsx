@@ -5,6 +5,13 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import { IconPlus, IconTrash } from '../components/Icon';
+import { useLangStore } from '../store/langStore';
+import {
+  APPRAISAL_TEMPLATES,
+  AppraisalTemplateKey,
+  OKR_CATEGORY_TEMPLATES,
+  OkrCategoryKey,
+} from '../constants/performanceTemplates';
 import {
   usePerformanceStore,
   Objective,
@@ -77,12 +84,13 @@ export default function PerformancePage() {
 // ---------------------------------------------------------------------------------
 interface KrDraft {
   title: string;
+  title_en?: string;
   metric_type: MetricType;
   unit: string;
   target_value: string;
   weight: string;
 }
-const EMPTY_KR_DRAFT: KrDraft = { title: '', metric_type: 'number', unit: '', target_value: '', weight: '1' };
+const EMPTY_KR_DRAFT: KrDraft = { title: '', title_en: '', metric_type: 'number', unit: '', target_value: '', weight: '1' };
 
 function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setPageError: (e: string | null) => void }) {
   const t = useT();
@@ -109,6 +117,10 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
   // lets the admin add them in the same step instead of having to save the objective
   // first and only then expand its row to add key results one at a time.
   const [newKrs, setNewKrs] = useState<KrDraft[]>([]);
+  // "Goal Category" template picker — product ask: a blank goal form is
+  // intimidating, so offer a standard starting point. Purely a local-state
+  // autofill; nothing here touches the backend or schema.
+  const [categoryKey, setCategoryKey] = useState<OkrCategoryKey | 'custom' | ''>('');
 
   useEffect(() => {
     fetchObjectives();
@@ -124,7 +136,32 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
     setPeriodStart('');
     setPeriodEnd('');
     setNewKrs([]);
+    setCategoryKey('');
     setOpen(true);
+  }
+  function handleCategoryChange(value: string) {
+    const key = value as OkrCategoryKey | 'custom' | '';
+    setCategoryKey(key);
+    if (key === '' || key === 'custom') {
+      // Custom / no selection — clear so the admin starts from a blank slate.
+      setTitle('');
+      setTitleEn('');
+      setNewKrs([]);
+      return;
+    }
+    const tpl = OKR_CATEGORY_TEMPLATES[key];
+    setTitle(tpl.title);
+    setTitleEn(tpl.title_en);
+    setNewKrs(
+      tpl.keyResults.map((kr) => ({
+        title: kr.title,
+        title_en: kr.title_en,
+        metric_type: kr.metric_type,
+        unit: kr.unit,
+        target_value: '',
+        weight: '1',
+      }))
+    );
   }
   function addNewKr() {
     setNewKrs((rows) => [...rows, { ...EMPTY_KR_DRAFT }]);
@@ -153,6 +190,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
         if (!kr.title.trim()) continue;
         await createKeyResult(objective.id, {
           title: kr.title.trim(),
+          title_en: kr.title_en || undefined,
           metric_type: kr.metric_type,
           unit: kr.unit || undefined,
           target_value: kr.target_value ? Number(kr.target_value) : undefined,
@@ -406,6 +444,16 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
           )}
         >
           <form id="okr-form" onSubmit={handleCreate} className="field-grid">
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>{t.performance.goalCategoryLabel}</label>
+              <select value={categoryKey} onChange={(e) => handleCategoryChange(e.target.value)}>
+                <option value="">{t.performance.goalCategoryPlaceholder}</option>
+                <option value="sales">{t.performance.categorySales}</option>
+                <option value="customerSuccess">{t.performance.categoryCustomerSuccess}</option>
+                <option value="operational">{t.performance.categoryOperational}</option>
+                <option value="custom">{t.performance.templateCustom}</option>
+              </select>
+            </div>
             <div className="field">
               <label>{t.performance.objectiveEmployee}</label>
               <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required>
@@ -515,9 +563,14 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
   // exists yet — same reasoning as OkrTab's newKrs: a form with zero questions isn't
   // useful, so let the admin add them in the same step instead of saving first and
   // only then expanding the row to add questions one at a time.
-  const [newQuestions, setNewQuestions] = useState<{ question_text: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }[]>(
+  const [newQuestions, setNewQuestions] = useState<{ question_text: string; question_text_en?: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }[]>(
     []
   );
+  // "Template" picker — same product ask as OkrTab's categoryKey: a blank
+  // appraisal form is intimidating, so offer a standard starting point. Purely
+  // a local-state autofill; nothing here touches the backend or schema.
+  const [templateKey, setTemplateKey] = useState<AppraisalTemplateKey | 'custom' | ''>('');
+  const lang = useLangStore((s) => s.lang);
 
   useEffect(() => {
     fetchForms();
@@ -528,12 +581,38 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
     setNameEn('');
     setDescription('');
     setNewQuestions([]);
+    setTemplateKey('');
     setOpen(true);
+  }
+  function handleTemplateChange(value: string) {
+    const key = value as AppraisalTemplateKey | 'custom' | '';
+    setTemplateKey(key);
+    if (key === '' || key === 'custom') {
+      // Custom / no selection — clear so the admin starts from a blank slate.
+      setName('');
+      setNameEn('');
+      setDescription('');
+      setNewQuestions([]);
+      return;
+    }
+    const tpl = APPRAISAL_TEMPLATES[key];
+    setName(tpl.name);
+    setNameEn(tpl.name_en);
+    setDescription(lang === 'ar' ? tpl.description_ar : tpl.description_en);
+    setNewQuestions(
+      tpl.questions.map((q) => ({
+        question_text: q.question_text,
+        question_text_en: q.question_text_en,
+        question_type: q.question_type,
+        max_score: String(q.max_score),
+        weight: String(q.weight),
+      }))
+    );
   }
   function addNewQuestion() {
     setNewQuestions((rows) => [...rows, { question_text: '', question_type: 'rating', max_score: '5', weight: '1' }]);
   }
-  function updateNewQuestion(i: number, patch: Partial<{ question_text: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }>) {
+  function updateNewQuestion(i: number, patch: Partial<{ question_text: string; question_text_en?: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }>) {
     setNewQuestions((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
   function removeNewQuestion(i: number) {
@@ -549,6 +628,7 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
         if (!q.question_text.trim()) continue;
         await createQuestion(form.id, {
           question_text: q.question_text.trim(),
+          question_text_en: q.question_text_en || undefined,
           question_type: q.question_type,
           max_score: q.max_score ? Number(q.max_score) : undefined,
           weight: q.weight ? Number(q.weight) : undefined,
@@ -748,6 +828,16 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
           )}
         >
           <form id="appraisal-form-form" onSubmit={handleCreate} className="field-grid">
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>{t.performance.templateLabel}</label>
+              <select value={templateKey} onChange={(e) => handleTemplateChange(e.target.value)}>
+                <option value="">{t.performance.templatePickPlaceholder}</option>
+                <option value="annual360">{t.performance.templateAnnual360}</option>
+                <option value="quarterly">{t.performance.templateQuarterly}</option>
+                <option value="probationary">{t.performance.templateProbationary}</option>
+                <option value="custom">{t.performance.templateCustom}</option>
+              </select>
+            </div>
             <div className="field">
               <label>{t.performance.formName}</label>
               <input value={name} onChange={(e) => setName(e.target.value)} required />
