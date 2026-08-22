@@ -19,6 +19,12 @@ interface UserRow {
   full_name: string | null;
   role: string;
   status: string;
+  employee_id: string | null;
+}
+
+interface EmployeeOption {
+  id: string;
+  name: string;
 }
 
 const ROLES = ['admin', 'manager', 'employee', 'viewer'];
@@ -40,7 +46,9 @@ export default function UsersPage() {
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
+  const [editEmployeeId, setEditEmployeeId] = useState('');
   const [editLoading, setEditLoading] = useState(false);
+  const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
 
   const [resetUser, setResetUser] = useState<UserRow | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -53,6 +61,10 @@ export default function UsersPage() {
   }
 
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    get<{ employees: EmployeeOption[] }>('/employees').then((r) => setEmployeeOptions(r.employees)).catch(() => {});
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -106,6 +118,7 @@ export default function UsersPage() {
     setEditUser(u);
     setEditName(u.full_name || '');
     setEditEmail(u.email);
+    setEditEmployeeId(u.employee_id || '');
   }
 
   async function handleEditSubmit(e: FormEvent) {
@@ -114,7 +127,7 @@ export default function UsersPage() {
     setError(null);
     setEditLoading(true);
     try {
-      await patch(`/users/${editUser.id}`, { full_name: editName, email: editEmail });
+      await patch(`/users/${editUser.id}`, { full_name: editName, email: editEmail, employee_id: editEmployeeId || null });
       setEditUser(null);
       load();
     } catch (err) {
@@ -287,6 +300,18 @@ export default function UsersPage() {
             <div className="field">
               <label>{t.users.email}</label>
               <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required />
+            </div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>{t.users.linkedEmployee}</label>
+              <select value={editEmployeeId} onChange={(e) => setEditEmployeeId(e.target.value)}>
+                <option value="">{t.users.linkedEmployeeNone}</option>
+                {employeeOptions.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name}
+                  </option>
+                ))}
+              </select>
+              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.users.linkedEmployeeHint}</div>
             </div>
           </form>
         </Modal>

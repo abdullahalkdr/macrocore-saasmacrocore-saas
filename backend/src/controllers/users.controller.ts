@@ -96,7 +96,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const totalResult = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE ${where}`, params);
   params.push(limit, offset);
   const usersResult = await pool.query(
-    `SELECT id, email, full_name, first_name, last_name, phone, job_title, role, status, created_at FROM users
+    `SELECT id, email, full_name, first_name, last_name, phone, job_title, role, status, employee_id, created_at FROM users
      WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -136,7 +136,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { role, status, full_name, email, new_password } = req.body ?? {};
+  const { role, status, full_name, email, new_password, employee_id } = req.body ?? {};
 
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -164,6 +164,23 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     sets.push(`email = $${params.length}`);
   }
 
+  // Links this login account to its HR record so attendance.controller.ts can resolve
+  // "who am I" -> employee_id server-side instead of trusting the client (MIGRATION_040).
+  // null unlinks on purpose (e.g. the employee record was deleted, or the link was wrong).
+  if (employee_id !== undefined) {
+    if (employee_id === null) {
+      sets.push('employee_id = NULL');
+    } else {
+      if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id must be a string or null');
+      const employee = await pool.query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [employee_id, companyId]);
+      if (!employee.rows[0]) throw new AppError(400, 'employee_id not found for this company');
+      const clash = await pool.query('SELECT id FROM users WHERE employee_id = $1 AND id != $2', [employee_id, id]);
+      if (clash.rows[0]) throw new AppError(409, 'This employee is already linked to another account');
+      params.push(employee_id);
+      sets.push(`employee_id = $${params.length}`);
+    }
+  }
+
   // Admin-only password reset — a manager can edit role/status/name/email above,
   // but resetting someone's login password is reserved for admins. Also blocked
   // on your own account: use /auth/change-password there (requires current password).
@@ -183,7 +200,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `UPDATE users SET ${sets.join(', ')} WHERE id = $${params.length - 1} AND company_id = $${params.length}
-     RETURNING id, email, full_name, role, status`,
+     RETURNING id, email, full_name, role, status, employee_id`,
     params
   );
   const user = result.rows[0];
