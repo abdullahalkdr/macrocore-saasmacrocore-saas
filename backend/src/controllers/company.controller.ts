@@ -8,7 +8,7 @@ const COMPANY_SELECT_FIELDS = `
   id, name, plan, subscription_status, trial_start_date, trial_end_date, created_at,
   fixed_cost_items, expense_categories, estimated_orders_mode, estimated_orders_manual,
   default_jahez_commission_pct, default_vthru_commission_pct,
-  official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes,
+  official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes, timezone,
   industry, employee_count_range, country, street, building_number, district, city, postal_code,
   commercial_registration_number, fiscal_year_end_month,
   contact_email, contact_phone, logo_base64, stamp_base64,
@@ -57,6 +57,7 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
     grace_period_minutes,
     working_days_per_month,
     standard_shift_minutes,
+    timezone,
     employee_count_range,
     country,
     fiscal_year_end_month,
@@ -130,6 +131,18 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
     if (typeof standard_shift_minutes !== 'number' || standard_shift_minutes <= 0) throw new AppError(400, 'standard_shift_minutes must be a positive number');
     sets.push(`standard_shift_minutes = $${i++}`);
     values.push(standard_shift_minutes);
+  }
+  if (timezone !== undefined) {
+    if (typeof timezone !== 'string' || !timezone.trim()) throw new AppError(400, 'timezone must be a non-empty IANA zone name');
+    try {
+      // Intl throws RangeError for an unrecognized IANA zone name — cheap validation
+      // with no timezone-list dependency.
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    } catch {
+      throw new AppError(400, `'${timezone}' is not a recognized IANA timezone name (e.g. 'Asia/Kuwait', 'Asia/Dubai')`);
+    }
+    sets.push(`timezone = $${i++}`);
+    values.push(timezone);
   }
   if (employee_count_range !== undefined) {
     if (typeof employee_count_range !== 'string') throw new AppError(400, 'employee_count_range must be a string');

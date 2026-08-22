@@ -4,6 +4,7 @@ import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Tag from '../components/Tag';
+import { getTimezoneOffsetMinutes } from '../utils/timezone';
 
 interface Employee {
   id: string;
@@ -38,6 +39,9 @@ export default function AttendancePage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Defaults to Kuwait until /company/me answers — every company still on the old
+  // default reads the same either way, so this never flashes a wrong time.
+  const [companyTimezone, setCompanyTimezone] = useState('Asia/Kuwait');
 
   function load() {
     get<{ attendance: AttendanceRecord[] }>('/attendance')
@@ -51,6 +55,11 @@ export default function AttendancePage() {
     if (!isEmployee) {
       get<{ employees: Employee[] }>('/employees').then((r) => setEmployees(r.employees)).catch(() => {});
     }
+    get<{ timezone?: string }>('/company/me')
+      .then((r) => {
+        if (r.timezone) setCompanyTimezone(r.timezone);
+      })
+      .catch(() => {});
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -95,15 +104,16 @@ export default function AttendancePage() {
     return <Tag color="red">{t.attendance.statusAbsent}</Tag>;
   }
 
-  // clock_in/clock_out come back as real UTC instants; every macrocore company
-  // operates in Kuwait (UTC+3), so shift by that fixed offset before formatting —
-  // otherwise this showed the UTC hour, 3 hours behind the actual Kuwait wall-clock
-  // time the clock-in/out happened at. Matches the same constant used server-side in
-  // backend/src/utils/attendance.ts's computeLateMinutes.
-  const KUWAIT_UTC_OFFSET_MINUTES = 3 * 60;
+  // clock_in/clock_out come back as real UTC instants; shift by the company's own
+  // timezone offset before formatting — otherwise this showed the UTC hour rather
+  // than the company's local wall-clock time the clock-in/out happened at. Used to
+  // be a hardcoded Kuwait UTC+3 constant; now reads companies.timezone dynamically
+  // (multi-tenant SaaS — a Dubai/London tenant needs their own offset, not Kuwait's),
+  // matching backend/src/utils/attendance.ts's computeLateMinutes.
   function timeOnly(iso: string | null) {
     if (!iso) return '—';
-    const shifted = new Date(new Date(iso).getTime() + KUWAIT_UTC_OFFSET_MINUTES * 60000);
+    const offsetMinutes = getTimezoneOffsetMinutes(companyTimezone, new Date(iso));
+    const shifted = new Date(new Date(iso).getTime() + offsetMinutes * 60000);
     return shifted.toISOString().slice(11, 16);
   }
 

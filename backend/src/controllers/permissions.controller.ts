@@ -11,13 +11,24 @@ export const PERMISSION_KEYS = [
   'manual_attendance',
   'edit_waste',
   'edit_expenses',
+  'view_hr_tickets',
 ] as const;
+
+// 'view_hr_tickets' is a restrictive-override key, not a delegation one: the other
+// keys above WIDEN what a plain 'employee' can do (employees start with the least
+// access, admin/manager already have everything). This one does the opposite — HR
+// ticket isolation (see supportTickets.controller.ts) means NOBODY sees HR-category
+// tickets by default, including admin/manager, until they're individually named here.
+// So unlike the other keys, it must be grantable to any role, not just employees.
+const ANY_ROLE_KEYS: readonly string[] = ['view_hr_tickets'];
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
 
+  // Broadened from 'employee'-only: an admin/manager can now also be individually
+  // granted 'view_hr_tickets', so they need to appear here as a grant target too.
   const usersResult = await pool.query(
-    `SELECT id, full_name, email FROM users WHERE company_id = $1 AND role = 'employee' ORDER BY full_name`,
+    `SELECT id, full_name, email, role FROM users WHERE company_id = $1 ORDER BY full_name`,
     [companyId]
   );
   const grantsResult = await pool.query(
@@ -36,13 +47,14 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     id: u.id,
     full_name: u.full_name,
     email: u.email,
+    role: u.role,
     permission_keys: grantsByUser.get(u.id) ?? [],
   }));
 
   res.status(200).json({ success: true, permission_keys: PERMISSION_KEYS, employees });
 });
 
-// Replaces the full permission set for one employee in a single call — simpler for a
+// Replaces the full permission set for one user in a single call — simpler for a
 // checkbox-list UI than granular grant/revoke endpoints.
 export const setForUser = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -56,7 +68,13 @@ export const setForUser = asyncHandler(async (req: Request, res: Response) => {
   const userCheck = await pool.query(`SELECT id, role FROM users WHERE id = $1 AND company_id = $2`, [userId, companyId]);
   if (!userCheck.rows[0]) throw new AppError(404, 'User not found');
   if (userCheck.rows[0].role !== 'employee') {
-    throw new AppError(400, 'Delegated permissions only apply to employee-role users — admins and managers already have full access');
+    const disallowed = permission_keys.find((k: string) => !ANY_ROLE_KEYS.includes(k));
+    if (disallowed !== undefined) {
+      throw new AppError(
+        400,
+        `'${disallowed}' only applies to employee-role users — admins and managers already have full access. Only ${ANY_ROLE_KEYS.join(', ')} can be granted to any role.`
+      );
+    }
   }
 
   const client = await pool.connect();

@@ -39,6 +39,11 @@ import customerReceiptsRoutes from './routes/customerReceipts.routes';
 import recurringInvoicesRoutes from './routes/recurringInvoices.routes';
 import creditNotesRoutes from './routes/creditNotes.routes';
 import notificationsRoutes from './routes/notifications.routes';
+import okrRoutes from './routes/okr.routes';
+import appraisalsRoutes from './routes/appraisals.routes';
+import feedbackRoutes from './routes/feedback.routes';
+import performanceScoresRoutes from './routes/performanceScores.routes';
+import slaPoliciesRoutes from './routes/slaPolicies.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -118,6 +123,17 @@ app.use('/api/customer-receipts', ...silver('Customer receipts'), customerReceip
 app.use('/api/recurring-invoices', ...silver('Recurring invoices'), recurringInvoicesRoutes);
 app.use('/api/credit-notes', ...silver('Credit notes'), creditNotesRoutes);
 app.use('/api/notifications', ...guarded, notificationsRoutes);
+
+// Enterprise HR expansion (Performance & KPI, 360 feedback, HR helpdesk SLA) — Gold
+// tier, same bracket as Payroll/Audit log/API access. /api/support/tickets itself
+// stays ungated (existing exemption above: blocked companies can still ask for
+// help) — only the SLA *policy configuration* endpoint is gated, since setting SLA
+// targets is the enterprise-tier feature, not filing/reading a ticket.
+app.use('/api/okr', ...gold('Performance & KPI'), okrRoutes);
+app.use('/api/appraisals', ...gold('Performance & KPI'), appraisalsRoutes);
+app.use('/api/feedback', ...gold('Performance & KPI'), feedbackRoutes);
+app.use('/api/performance-scores', ...gold('Performance & KPI'), performanceScoresRoutes);
+app.use('/api/sla-policies', ...gold('SLA management'), slaPoliciesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

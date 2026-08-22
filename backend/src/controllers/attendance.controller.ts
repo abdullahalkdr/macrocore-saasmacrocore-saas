@@ -20,7 +20,7 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   if (!employee.rows[0]) throw new AppError(404, 'Employee not found');
 
   const company = await pool.query(
-    `SELECT official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes FROM companies WHERE id = $1`,
+    `SELECT official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes, timezone FROM companies WHERE id = $1`,
     [companyId]
   );
   const settings = company.rows[0] ?? {};
@@ -31,7 +31,8 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
     clockInAt,
     today,
     settings.official_shift_start_time ?? '08:00:00',
-    settings.grace_period_minutes ?? 15
+    settings.grace_period_minutes ?? 15,
+    settings.timezone ?? 'Asia/Kuwait'
   );
   const deduction = computeDeduction(
     employee.rows[0].wage_type === 'hourly' ? 'hourly' : 'monthly',
@@ -137,7 +138,7 @@ export const upsertManual = asyncHandler(async (req: Request, res: Response) => 
   if (!employee.rows[0]) throw new AppError(404, 'Employee not found');
 
   const company = await pool.query(
-    `SELECT official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes FROM companies WHERE id = $1`,
+    `SELECT official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes, timezone FROM companies WHERE id = $1`,
     [companyId]
   );
   const settings = company.rows[0] ?? {};
@@ -148,7 +149,8 @@ export const upsertManual = asyncHandler(async (req: Request, res: Response) => 
       new Date(clock_in),
       date,
       settings.official_shift_start_time ?? '08:00:00',
-      settings.grace_period_minutes ?? 15
+      settings.grace_period_minutes ?? 15,
+      settings.timezone ?? 'Asia/Kuwait'
     );
   }
   const deduction = computeDeduction(

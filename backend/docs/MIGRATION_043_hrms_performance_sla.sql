@@ -19,11 +19,16 @@
 --   - Clock-in/out proxy-attendance prevention, dynamic hour calc, modular
 --     payroll adjustments (bonus/deduction) — attendance.controller.ts
 --     ownership fix + `payroll_adjustments` table, already live.
---   - Company-level attendance timezone — deliberately implemented as a
---     hardcoded Kuwait UTC+3 constant (KUWAIT_UTC_OFFSET_MINUTES) rather than a
---     DB column, a decision already made together; not revisited here.
+-- CORRECTION (post-review): the hardcoded Kuwait UTC+3 constant was flagged as a
+-- scalability blocker for a multi-tenant SaaS (a Dubai/London tenant would get the
+-- wrong attendance times). Reverted that call — section 0 below adds a real
+-- per-company `timezone` column, and the attendance logic now reads it dynamically
+-- (backend/src/utils/timezone.ts + utils/attendance.ts + attendance.controller.ts),
+-- computed via Intl so DST is handled correctly for any IANA zone, not just Kuwait.
 --
 -- What's actually new below:
+--   0. companies.timezone (IANA name, default 'Asia/Kuwait') — replaces the
+--      hardcoded offset.
 --   1. Performance & KPI — OKRs (objectives + key results).
 --   2. 360-degree feedback — customizable appraisal forms/questions, feedback
 --      cycles, per-reviewer requests, and answers.
@@ -32,7 +37,18 @@
 --   4. HR Helpdesk & SLA — extends the existing generic `support_tickets` /
 --      `ticket_replies` system (rather than duplicating it) with HR ticket
 --      categories, SLA due/breach tracking, escalation, and a per-company,
---      per-priority SLA policy table.
+--      per-priority SLA policy table. Ticket visibility is isolated so HR-category
+--      tickets (leave/grievance/document_request/payroll) are hidden from
+--      admin/manager by default — see permissions.controller.ts's new
+--      'view_hr_tickets' key and supportTickets.controller.ts.
+
+-- ========================================================================
+-- 0. Company-level timezone (corrects the earlier hardcoded-Kuwait decision)
+-- ========================================================================
+
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(50) NOT NULL DEFAULT 'Asia/Kuwait';
+-- IANA zone name (e.g. 'Asia/Kuwait', 'Asia/Dubai', 'Europe/London'). Existing rows
+-- default to Kuwait, matching the behavior every current tenant already had.
 
 -- ========================================================================
 -- 1. Performance & KPI System — OKRs
