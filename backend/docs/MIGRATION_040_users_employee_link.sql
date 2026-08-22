@@ -30,7 +30,11 @@ FROM (
   SELECT
     e.company_id,
     LOWER(TRIM(e.email)) AS email_norm,
-    MIN(e.id) AS employee_id,
+    -- uuid has no built-in MIN() aggregate in Postgres; cast through text and back.
+    -- Safe here because HAVING COUNT(*) = 1 below means the group has exactly one
+    -- row anyway, so MIN is only being used to pull that single value out, not to
+    -- pick among several — which id "wins" never actually matters.
+    MIN(e.id::text)::uuid AS employee_id,
     COUNT(*) AS match_count
   FROM employees e
   WHERE e.email IS NOT NULL AND TRIM(e.email) <> ''
