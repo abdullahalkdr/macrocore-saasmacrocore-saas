@@ -94,7 +94,11 @@ async function run() {
       const fkByColumn = new Map(fkResult.rows.map((r) => [r.column_name, r]));
 
       const uniqueResult = await pool.query(
-        `SELECT tc.constraint_name, array_agg(kcu.column_name ORDER BY kcu.ordinal_position) AS cols
+        // ::text cast matters: column_name is information_schema's "sql_identifier" domain
+        // type, and array_agg over a domain produces an array OID node-postgres doesn't
+        // have a built-in parser for — it comes back as a raw "{a,b}" string instead of a
+        // JS array without this cast.
+        `SELECT tc.constraint_name, array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position) AS cols
          FROM information_schema.table_constraints tc
          JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
          WHERE tc.table_schema = 'public' AND tc.table_name = $1 AND tc.constraint_type = 'UNIQUE'
@@ -104,8 +108,9 @@ async function run() {
       const singleColUnique = new Set();
       const compositeUnique = [];
       for (const row of uniqueResult.rows) {
-        if (row.cols.length === 1) singleColUnique.add(row.cols[0]);
-        else compositeUnique.push(row.cols);
+        const cols = Array.isArray(row.cols) ? row.cols : row.cols.replace(/^\{|\}$/g, '').split(',');
+        if (cols.length === 1) singleColUnique.add(cols[0]);
+        else compositeUnique.push(cols);
       }
 
       lines.push(`CREATE TABLE ${table} (`);
