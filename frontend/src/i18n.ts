@@ -60,6 +60,9 @@ const en = {
     lightMode: 'Switch to light mode',
     auto: 'Auto',
     unsavedChangesConfirm: 'You have unsaved changes. Discard them?',
+    unsavedChangesTitle: 'Unsaved changes',
+    discardChanges: 'Discard changes',
+    keepEditing: 'Keep editing',
   },
   nav: {
     groupGeneral: 'General',
@@ -1525,6 +1528,9 @@ const ar: typeof en = {
     lightMode: 'تفعيل الوضع الفاتح',
     auto: 'تلقائي',
     unsavedChangesConfirm: 'عندك تعديلات ما تم حفظها. تبي تلغيها؟',
+    unsavedChangesTitle: 'تعديلات غير محفوظة',
+    discardChanges: 'تجاهل التعديلات',
+    keepEditing: 'الرجوع للتعديل',
   },
   nav: {
     groupGeneral: 'عام',
