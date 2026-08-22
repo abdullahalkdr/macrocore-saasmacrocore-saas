@@ -11,7 +11,7 @@ import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 const CHANNELS = ['cash', 'knet', 'jahez', 'vthru'];
 const DELIVERY_CHANNELS = ['jahez', 'vthru'];
 // Matches backend CASH_DENOMINATIONS in shifts.controller.ts — keep in sync.
-const CASH_DENOMINATIONS = [20, 10, 5, 1, 0.5, 0.25, 0.1, 0.05];
+const CASH_DENOMINATIONS = [20, 10, 5, 1, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01, 0.005];
 
 interface Product {
   id: string;
@@ -287,7 +287,7 @@ export default function ShiftPage() {
 
   const countedCashLive = CASH_DENOMINATIONS.reduce((sum, d) => sum + d * (Number(cashCounts[String(d)]) || 0), 0);
   const expectedCashLive = reconDetail?.total_cash_sales ?? 0;
-  const matchLive = Math.abs(countedCashLive - expectedCashLive) < 0.001;
+  const matchLive = Math.abs(countedCashLive - expectedCashLive) <= 0.005; // keep in sync with backend CASH_TOLERANCE
 
   async function submitRecon() {
     if (!reconTarget || !reconDetail || !reconComplete) return;

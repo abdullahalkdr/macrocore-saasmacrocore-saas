@@ -347,6 +347,13 @@ async function sumRawCostWithCurrentPrices(
   return totalCost;
 }
 
+// Below this many sales rows in the trailing 30 days, "auto" mode's sample is too thin to
+// trust — a brand-new company with zero sales would otherwise divide fixed costs by 1,
+// showing an impossible negative margin the moment it enters its first product. Falls
+// back to the design-guide default (50 orders/day) until enough real data exists.
+const MIN_SAMPLE_ORDERS = 30;
+const DEFAULT_MONTHLY_ORDERS = 1500; // 50/day × 30, from the CornLab design guide
+
 async function getOverheadPerOrder(companyId: string): Promise<{ totalFixedMonthly: number; estimatedOrders: number; overheadPerOrder: number }> {
   const company = await pool.query(
     `SELECT fixed_cost_items, estimated_orders_mode, estimated_orders_manual FROM companies WHERE id = $1`,
@@ -355,11 +362,20 @@ async function getOverheadPerOrder(companyId: string): Promise<{ totalFixedMonth
   const fixedCostItems: { amount: number }[] = company.rows[0]?.fixed_cost_items ?? [];
   const fixedItemsTotal = fixedCostItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
 
-  const salaries = await pool.query(
-    `SELECT COALESCE(SUM(salary_monthly), 0)::float AS total FROM employees WHERE company_id = $1 AND status = 'active'`,
+  // Salaries + allowances of every active employee — mirrors payroll.controller.ts, which
+  // adds allowancesTotal into baseSalary at generation time. Without allowances here, an
+  // employee's actual paid amount (salary + allowances) exceeds what's charged as fixed
+  // overhead, understating product cost and overstating margin.
+  const employees = await pool.query<{ salary_monthly: string | null; allowances: { amount: number }[] | null }>(
+    `SELECT salary_monthly, allowances FROM employees WHERE company_id = $1 AND status = 'active'`,
     [companyId]
   );
-  const totalFixedMonthly = fixedItemsTotal + salaries.rows[0].total;
+  const salariesTotal = employees.rows.reduce((sum, e) => {
+    const salary = Number(e.salary_monthly) || 0;
+    const allowances = (e.allowances ?? []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    return sum + salary + allowances;
+  }, 0);
+  const totalFixedMonthly = fixedItemsTotal + salariesTotal;
 
   const mode = company.rows[0]?.estimated_orders_mode ?? 'auto';
   let estimatedOrders: number;
@@ -368,7 +384,7 @@ async function getOverheadPerOrder(companyId: string): Promise<{ totalFixedMonth
   } else {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const recent = await pool.query(`SELECT COUNT(*)::int AS n FROM sales WHERE company_id = $1 AND created_at >= $2`, [companyId, since]);
-    estimatedOrders = Math.max(1, recent.rows[0].n);
+    estimatedOrders = recent.rows[0].n >= MIN_SAMPLE_ORDERS ? recent.rows[0].n : DEFAULT_MONTHLY_ORDERS;
   }
 
   return { totalFixedMonthly, estimatedOrders, overheadPerOrder: totalFixedMonthly / estimatedOrders };

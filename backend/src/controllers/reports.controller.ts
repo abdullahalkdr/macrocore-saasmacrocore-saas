@@ -34,9 +34,14 @@ async function costBreakdown(companyId: string, start: string, end: string): Pro
      FROM waste_records WHERE company_id = $1 AND created_at >= $2 AND created_at < $3`,
     [companyId, start, end]
   );
+  // expense_date (MIGRATION_017) lets an expense be backdated to when it was actually
+  // incurred, separate from when it was entered — COALESCE falls back to created_at for
+  // older rows that predate the column, so nothing filed before this fix goes missing.
   const expenses = await pool.query(
     `SELECT COALESCE(SUM(amount), 0)::float AS total_expenses FROM expenses
-     WHERE company_id = $1 AND created_at >= $2 AND created_at < $3`,
+     WHERE company_id = $1
+       AND COALESCE(expense_date, created_at::date) >= $2::date
+       AND COALESCE(expense_date, created_at::date) < $3::date`,
     [companyId, start, end]
   );
   const payroll = await pool.query(

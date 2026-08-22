@@ -14,7 +14,16 @@ interface AssignmentInput {
 
 // Fixed KWD denomination set — matches the physical notes/coins a cashier counts at
 // close time. Whitelisted here so cash_denominations never accumulates garbage values.
-export const CASH_DENOMINATIONS = [20, 10, 5, 1, 0.5, 0.25, 0.1, 0.05];
+// Includes the three small coins (20/10/5 fils) that were missing originally — without
+// them a drawer holding real 20/10/5-fils coins could never be counted accurately, which
+// forced a false mismatch on every close.
+export const CASH_DENOMINATIONS = [20, 10, 5, 1, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01, 0.005];
+
+// Reconciliation tolerance: 5 fils, not an exact match. KWD amounts are stored as
+// DECIMAL(10,3) (thousandths, i.e. fils-precision), so anything under 0.001 effectively
+// demanded penny-perfect equality — routine rounding in the last fils flagged shifts as
+// "mismatched" for no real reason.
+export const CASH_TOLERANCE = 0.005;
 
 interface CashCountInput {
   denomination: number;
@@ -123,7 +132,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   const shifts = result.rows.map((r) => ({
     ...r,
-    is_match: r.status === 'closed' ? Math.abs(Number(r.counted_cash) - Number(r.total_cash_sales)) < 0.001 : null,
+    is_match: r.status === 'closed' ? Math.abs(Number(r.counted_cash) - Number(r.total_cash_sales)) <= CASH_TOLERANCE : null,
   }));
 
   res.status(200).json({ success: true, shifts });
@@ -391,7 +400,7 @@ async function buildShiftDetail(companyId: string, id: string) {
     ...salesSummary.rows[0],
     cash_denominations: cashDenominations.rows,
     counted_cash: countedCash,
-    is_match: shift.status === 'closed' ? Math.abs(countedCash - Number(totalCashSales)) < 0.001 : null,
+    is_match: shift.status === 'closed' ? Math.abs(countedCash - Number(totalCashSales)) <= CASH_TOLERANCE : null,
   };
 }
 
