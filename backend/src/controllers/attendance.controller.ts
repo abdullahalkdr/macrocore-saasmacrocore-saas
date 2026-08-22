@@ -6,9 +6,27 @@ import { isUniqueViolation, isForeignKeyViolation } from '../utils/dbErrors';
 import { computeLateMinutes, computeDeduction } from '../utils/attendance';
 import { logAudit } from '../utils/audit';
 
+// Security fix (code audit finding #1): users has no built-in link to employees, and
+// clockIn/clockOut/list used to trust employee_id from the request without checking it
+// against the caller's own identity — any logged-in user could act on any other
+// employee's attendance. For a plain 'employee' caller we now resolve their OWN
+// employee_id server-side from users.employee_id (added in MIGRATION_040) and use that
+// instead of whatever the client sent. admin/manager are unaffected — they can still
+// target any employee_id, same as before.
+async function getOwnEmployeeId(userId: string, companyId: string): Promise<string> {
+  const result = await pool.query(`SELECT employee_id FROM users WHERE id = $1 AND company_id = $2`, [userId, companyId]);
+  const employeeId = result.rows[0]?.employee_id;
+  if (!employeeId) throw new AppError(403, 'Your account is not linked to an employee record — ask an admin to link it');
+  return employeeId as string;
+}
+
 export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { employee_id } = req.body ?? {};
+  let employee_id: unknown = req.body?.employee_id;
+
+  if (req.auth!.role === 'employee') {
+    employee_id = await getOwnEmployeeId(req.auth!.userId, companyId);
+  }
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
 
   const employee = await pool.query(`SELECT salary_monthly, wage_type FROM employees WHERE id = $1 AND company_id = $2`, [employee_id, companyId]);
@@ -54,7 +72,11 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
 
 export const clockOut = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { employee_id } = req.body ?? {};
+  let employee_id: unknown = req.body?.employee_id;
+
+  if (req.auth!.role === 'employee') {
+    employee_id = await getOwnEmployeeId(req.auth!.userId, companyId);
+  }
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
 
   const today = new Date().toISOString().slice(0, 10);
@@ -76,7 +98,14 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   const params: unknown[] = [companyId];
   let where = 'ar.company_id = $1';
-  if (typeof employee_id === 'string') {
+
+  if (req.auth!.role === 'employee') {
+    // Forced ownership filter: an employee can only ever see their own attendance +
+    // payroll-deduction history. Any employee_id they pass in the query is ignored.
+    const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
+    params.push(ownEmployeeId);
+    where += ` AND ar.employee_id = $${params.length}`;
+  } else if (typeof employee_id === 'string') {
     params.push(employee_id);
     where += ` AND ar.employee_id = $${params.length}`;
   }
@@ -106,7 +135,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 // Manual correction endpoint for a manager (e.g. forgot to clock in/out, or override
 // after a dispute). Distinct from clock-in/out which are self-service and time-stamped
-// at request time.
+// at request time. Already gated to admin/manager (or a delegated permission) at the
+// route level in attendance.routes.ts, so no self-service employee ever reaches this.
 export const upsertManual = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { employee_id, date, clock_in, clock_out, status } = req.body ?? {};
