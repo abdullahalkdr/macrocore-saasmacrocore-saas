@@ -29,6 +29,7 @@ import PayrollPage from './pages/PayrollPage';
 import HRDashboardPage from './pages/HRDashboardPage';
 import PerformancePage from './pages/PerformancePage';
 import SLAManagementPage from './pages/SLAManagementPage';
+import PoliciesPage from './pages/PoliciesPage';
 import SupportTicketsPage from './pages/SupportTicketsPage';
 import SettingsPage from './pages/SettingsPage';
 import AccountSettingsPage from './pages/account/AccountSettingsPage';
@@ -277,6 +278,7 @@ export default function App() {
             <Route path="/support" element={<SupportTicketsPage />} />
             <Route path="/attendance" element={<AttendancePage />} />
             <Route path="/leave-requests" element={<LeaveRequestsPage />} />
+            <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/shift-schedule" element={<ShiftSchedulePage />} />
             <Route
               path="/official-documents"

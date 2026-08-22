@@ -44,6 +44,7 @@ import appraisalsRoutes from './routes/appraisals.routes';
 import feedbackRoutes from './routes/feedback.routes';
 import performanceScoresRoutes from './routes/performanceScores.routes';
 import slaPoliciesRoutes from './routes/slaPolicies.routes';
+import policiesRoutes from './routes/policies.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -134,6 +135,7 @@ app.use('/api/appraisals', ...gold('Performance & KPI'), appraisalsRoutes);
 app.use('/api/feedback', ...gold('Performance & KPI'), feedbackRoutes);
 app.use('/api/performance-scores', ...gold('Performance & KPI'), performanceScoresRoutes);
 app.use('/api/sla-policies', ...gold('SLA management'), slaPoliciesRoutes);
+app.use('/api/policies', ...silver('Policies & Procedures'), policiesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

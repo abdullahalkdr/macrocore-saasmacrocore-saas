@@ -9,6 +9,7 @@ import { planLevelOf, PLAN_TIER_NAME } from '../planLevels';
 import { useUpgradeModalStore } from '../store/upgradeModalStore';
 import Avatar from './Avatar';
 import NotificationsBell from './NotificationsBell';
+import AcknowledgmentModal from './AcknowledgmentModal';
 import {
   IconDashboard,
   IconSales,
@@ -171,6 +172,7 @@ export default function Layout() {
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
+        { to: '/policies', label: t.nav.policies, icon: IconReports, minPlan: 2 },
         { to: '/hr-dashboard', label: t.nav.hrDashboard, icon: IconReports, managerOnly: true, minPlan: 3 },
         { to: '/performance', label: t.nav.performance, icon: IconEmployee, managerOnly: true, minPlan: 3 },
       ],
@@ -348,6 +350,7 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
+      <AcknowledgmentModal />
       <div className="mobile-topbar">
         <button type="button" className="mobile-menu-btn" onClick={() => setMobileNavOpen(true)} title={t.common.menu}>
           <IconMenu />
