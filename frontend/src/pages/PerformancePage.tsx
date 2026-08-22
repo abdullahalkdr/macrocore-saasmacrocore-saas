@@ -104,6 +104,11 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [krDrafts, setKrDrafts] = useState<Record<string, KrDraft>>({});
+  // Key Results captured inside the "New Objective" modal itself, before the
+  // objective even exists yet — an OKR with zero key results isn't useful, so this
+  // lets the admin add them in the same step instead of having to save the objective
+  // first and only then expand its row to add key results one at a time.
+  const [newKrs, setNewKrs] = useState<KrDraft[]>([]);
 
   useEffect(() => {
     fetchObjectives();
@@ -118,7 +123,17 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
     setDescription('');
     setPeriodStart('');
     setPeriodEnd('');
+    setNewKrs([]);
     setOpen(true);
+  }
+  function addNewKr() {
+    setNewKrs((rows) => [...rows, { ...EMPTY_KR_DRAFT }]);
+  }
+  function updateNewKr(i: number, patch: Partial<KrDraft>) {
+    setNewKrs((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function removeNewKr(i: number) {
+    setNewKrs((rows) => rows.filter((_, idx) => idx !== i));
   }
 
   async function handleCreate(e: FormEvent) {
@@ -126,7 +141,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
     setSaving(true);
     setPageError(null);
     try {
-      await createObjective({
+      const objective = await createObjective({
         employee_id: employeeId || undefined,
         title,
         title_en: titleEn || undefined,
@@ -134,6 +149,16 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
         period_start: periodStart,
         period_end: periodEnd,
       });
+      for (const kr of newKrs) {
+        if (!kr.title.trim()) continue;
+        await createKeyResult(objective.id, {
+          title: kr.title.trim(),
+          metric_type: kr.metric_type,
+          unit: kr.unit || undefined,
+          target_value: kr.target_value ? Number(kr.target_value) : undefined,
+          weight: kr.weight ? Number(kr.weight) : undefined,
+        });
+      }
       setOpen(false);
     } catch (err) {
       setPageError(err instanceof ApiError ? err.message : t.performance.saveFailed);
@@ -413,6 +438,52 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} />
             </div>
           </form>
+
+          <div className="hr" />
+          <div className="section-title-row">
+            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.keyResultsTitle}</span>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={addNewKr}>
+              <IconPlus /> {t.performance.addKeyResult}
+            </button>
+          </div>
+          {newKrs.map((kr, i) => (
+            <div key={i} className="form-row" style={{ marginBottom: 8 }}>
+              <div className="field" style={{ flex: 2 }}>
+                <input placeholder={t.performance.krTitle} value={kr.title} onChange={(e) => updateNewKr(i, { title: e.target.value })} />
+              </div>
+              <div className="field" style={{ width: 130 }}>
+                <select value={kr.metric_type} onChange={(e) => updateNewKr(i, { metric_type: e.target.value as MetricType })}>
+                  <option value="number">{t.performance.metricNumber}</option>
+                  <option value="percentage">{t.performance.metricPercentage}</option>
+                  <option value="currency">{t.performance.metricCurrency}</option>
+                  <option value="boolean">{t.performance.metricBoolean}</option>
+                </select>
+              </div>
+              <div className="field" style={{ width: 90 }}>
+                <input placeholder={t.performance.krUnit} value={kr.unit} onChange={(e) => updateNewKr(i, { unit: e.target.value })} />
+              </div>
+              <div className="field" style={{ width: 90 }}>
+                <input
+                  type="number"
+                  placeholder={t.performance.krTarget}
+                  value={kr.target_value}
+                  onChange={(e) => updateNewKr(i, { target_value: e.target.value })}
+                />
+              </div>
+              <div className="field" style={{ width: 70 }}>
+                <input
+                  type="number"
+                  placeholder={t.performance.krWeight}
+                  value={kr.weight}
+                  onChange={(e) => updateNewKr(i, { weight: e.target.value })}
+                />
+              </div>
+              <button className="icon-btn" type="button" onClick={() => removeNewKr(i)}>
+                <IconTrash />
+              </button>
+            </div>
+          ))}
+          {newKrs.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{t.performance.noKeyResultsYetHint}</p>}
         </Modal>
       )}
     </div>
@@ -440,6 +511,13 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
   const [saving, setSaving] = useState(false);
   const [expandedFormId, setExpandedFormId] = useState<string | null>(null);
   const [qDraft, setQDraft] = useState({ question_text: '', question_type: 'rating' as const, max_score: '5', weight: '1' });
+  // Questions captured inside the "New Form" modal itself, before the form even
+  // exists yet — same reasoning as OkrTab's newKrs: a form with zero questions isn't
+  // useful, so let the admin add them in the same step instead of saving first and
+  // only then expanding the row to add questions one at a time.
+  const [newQuestions, setNewQuestions] = useState<{ question_text: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }[]>(
+    []
+  );
 
   useEffect(() => {
     fetchForms();
@@ -449,14 +527,33 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
     setName('');
     setNameEn('');
     setDescription('');
+    setNewQuestions([]);
     setOpen(true);
+  }
+  function addNewQuestion() {
+    setNewQuestions((rows) => [...rows, { question_text: '', question_type: 'rating', max_score: '5', weight: '1' }]);
+  }
+  function updateNewQuestion(i: number, patch: Partial<{ question_text: string; question_type: 'rating' | 'text' | 'scale'; max_score: string; weight: string }>) {
+    setNewQuestions((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function removeNewQuestion(i: number) {
+    setNewQuestions((rows) => rows.filter((_, idx) => idx !== i));
   }
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     setPageError(null);
     try {
-      await createForm({ name, name_en: nameEn || undefined, description: description || undefined });
+      const form = await createForm({ name, name_en: nameEn || undefined, description: description || undefined });
+      for (const q of newQuestions) {
+        if (!q.question_text.trim()) continue;
+        await createQuestion(form.id, {
+          question_text: q.question_text.trim(),
+          question_type: q.question_type,
+          max_score: q.max_score ? Number(q.max_score) : undefined,
+          weight: q.weight ? Number(q.weight) : undefined,
+        });
+      }
       setOpen(false);
     } catch (err) {
       setPageError(err instanceof ApiError ? err.message : t.performance.saveFailed);
@@ -664,6 +761,52 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} />
             </div>
           </form>
+
+          <div className="hr" />
+          <div className="section-title-row">
+            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.questionsTitle}</span>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={addNewQuestion}>
+              <IconPlus /> {t.performance.addQuestion}
+            </button>
+          </div>
+          {newQuestions.map((q, i) => (
+            <div key={i} className="form-row" style={{ marginBottom: 8 }}>
+              <div className="field" style={{ flex: 2 }}>
+                <input
+                  placeholder={t.performance.questionText}
+                  value={q.question_text}
+                  onChange={(e) => updateNewQuestion(i, { question_text: e.target.value })}
+                />
+              </div>
+              <div className="field" style={{ width: 110 }}>
+                <select value={q.question_type} onChange={(e) => updateNewQuestion(i, { question_type: e.target.value as 'rating' | 'text' | 'scale' })}>
+                  <option value="rating">{t.performance.typeRating}</option>
+                  <option value="text">{t.performance.typeText}</option>
+                  <option value="scale">{t.performance.typeScale}</option>
+                </select>
+              </div>
+              <div className="field" style={{ width: 90 }}>
+                <input
+                  type="number"
+                  placeholder={t.performance.maxScore}
+                  value={q.max_score}
+                  onChange={(e) => updateNewQuestion(i, { max_score: e.target.value })}
+                />
+              </div>
+              <div className="field" style={{ width: 70 }}>
+                <input
+                  type="number"
+                  placeholder={t.performance.weight}
+                  value={q.weight}
+                  onChange={(e) => updateNewQuestion(i, { weight: e.target.value })}
+                />
+              </div>
+              <button className="icon-btn" type="button" onClick={() => removeNewQuestion(i)}>
+                <IconTrash />
+              </button>
+            </div>
+          ))}
+          {newQuestions.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{t.performance.noQuestionsYetHint}</p>}
         </Modal>
       )}
     </div>
@@ -1119,7 +1262,7 @@ function ScoresTab({ employees, setPageError }: { employees: EmployeeOption[]; s
             <div className="field">
               <label>{t.performance.scoreCycle}</label>
               <select value={cycleId} onChange={(e) => setCycleId(e.target.value)} required>
-                <option value="">{t.performance.cycleFormNone}</option>
+                <option value="">{t.performance.selectCyclePlaceholder}</option>
                 {cycles.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
