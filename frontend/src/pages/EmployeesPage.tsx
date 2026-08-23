@@ -7,6 +7,7 @@ import Tag from '../components/Tag';
 import Avatar from '../components/Avatar';
 import { IconPlus, IconTrash, IconEdit } from '../components/Icon';
 import { useDepartmentsStore } from '../store/useDepartmentsStore';
+import { JOB_ROLE_GROUPS, JobRoleGroupKey, JobRoleKey, getVisibleJobRoleGroups } from '../constants/jobRolesCatalog';
 
 interface Certificate {
   name: string;
@@ -66,16 +67,12 @@ interface Employee {
   days_until_passport_expiry: number | null;
 }
 
-const JOB_ROLE_VALUES = [
-  'kioskWorker',
-  'shiftSupervisor',
-  'branchManager',
-  'prepWorker',
-  'cashier',
-  'delivery',
-  'cleaner',
-  'accountant',
-] as const;
+// Enterprise Job Role Catalog (see ../constants/jobRolesCatalog.ts) replaced the
+// old flat kiosk-only list. ALL_JOB_ROLE_KEYS covers every role across every
+// group (not just the ones currently visible under the selected department) so
+// an existing employee's stored job_role always resolves correctly regardless
+// of which department they're in right now — see resolveJobRoleSelect below.
+const ALL_JOB_ROLE_KEYS: JobRoleKey[] = Array.from(new Set(JOB_ROLE_GROUPS.flatMap((g) => g.roles)));
 const JOB_ROLE_OTHER = '__other__';
 
 function hasExpiryWarning(e: Employee): boolean {
@@ -146,15 +143,73 @@ function calcAge(birthDate: string): number | null {
 
 export default function EmployeesPage() {
   const t = useT();
-  const JOB_ROLE_LABELS: Record<(typeof JOB_ROLE_VALUES)[number], string> = {
-    kioskWorker: t.employees.jobRoleKioskWorker,
+  const JOB_ROLE_LABELS: Record<JobRoleKey, string> = {
+    legalDirector: t.employees.jobRoleLegalDirector,
+    generalCounsel: t.employees.jobRoleGeneralCounsel,
+    seniorLegalCounsel: t.employees.jobRoleSeniorLegalCounsel,
+    legalCounsel: t.employees.jobRoleLegalCounsel,
+    corporateLawyer: t.employees.jobRoleCorporateLawyer,
+    legalResearcher: t.employees.jobRoleLegalResearcher,
+    paralegal: t.employees.jobRoleParalegal,
+    complianceOfficer: t.employees.jobRoleComplianceOfficer,
+    boardSecretary: t.employees.jobRoleBoardSecretary,
+    restaurantManager: t.employees.jobRoleRestaurantManager,
+    assistantRestaurantManager: t.employees.jobRoleAssistantRestaurantManager,
     shiftSupervisor: t.employees.jobRoleShiftSupervisor,
-    branchManager: t.employees.jobRoleBranchManager,
-    prepWorker: t.employees.jobRolePrepWorker,
+    headChef: t.employees.jobRoleHeadChef,
+    commisChef: t.employees.jobRoleCommisChef,
+    barista: t.employees.jobRoleBarista,
+    juiceMaker: t.employees.jobRoleJuiceMaker,
     cashier: t.employees.jobRoleCashier,
-    delivery: t.employees.jobRoleDelivery,
-    cleaner: t.employees.jobRoleCleaner,
+    waiter: t.employees.jobRoleWaiter,
+    sandwichMaker: t.employees.jobRoleSandwichMaker,
+    kitchenSteward: t.employees.jobRoleKitchenSteward,
+    deliveryRider: t.employees.jobRoleDeliveryRider,
+    storeManager: t.employees.jobRoleStoreManager,
+    assistantStoreManager: t.employees.jobRoleAssistantStoreManager,
+    departmentSupervisor: t.employees.jobRoleDepartmentSupervisor,
+    salesAssociate: t.employees.jobRoleSalesAssociate,
+    retailCashier: t.employees.jobRoleRetailCashier,
+    receptionist: t.employees.jobRoleReceptionist,
+    visualMerchandiser: t.employees.jobRoleVisualMerchandiser,
+    storeKeeper: t.employees.jobRoleStoreKeeper,
+    customerServiceAgent: t.employees.jobRoleCustomerServiceAgent,
+    kioskSupervisor: t.employees.jobRoleKioskSupervisor,
+    kioskOperator: t.employees.jobRoleKioskOperator,
+    qualityAuditor: t.employees.jobRoleQualityAuditor,
+    mysteryShopper: t.employees.jobRoleMysteryShopper,
+    securityOfficer: t.employees.jobRoleSecurityOfficer,
+    hrManager: t.employees.jobRoleHrManager,
+    hrOfficer: t.employees.jobRoleHrOfficer,
+    recruitmentSpecialist: t.employees.jobRoleRecruitmentSpecialist,
+    payrollSpecialist: t.employees.jobRolePayrollSpecialist,
+    trainingDevelopmentOfficer: t.employees.jobRoleTrainingDevelopmentOfficer,
+    financeManager: t.employees.jobRoleFinanceManager,
     accountant: t.employees.jobRoleAccountant,
+    accountsPayableOfficer: t.employees.jobRoleAccountsPayableOfficer,
+    treasuryOfficer: t.employees.jobRoleTreasuryOfficer,
+    internalAuditor: t.employees.jobRoleInternalAuditor,
+    itManager: t.employees.jobRoleItManager,
+    softwareDeveloper: t.employees.jobRoleSoftwareDeveloper,
+    itSupportSpecialist: t.employees.jobRoleItSupportSpecialist,
+    systemsAdministrator: t.employees.jobRoleSystemsAdministrator,
+    networkEngineer: t.employees.jobRoleNetworkEngineer,
+    marketingManager: t.employees.jobRoleMarketingManager,
+    marketingSpecialist: t.employees.jobRoleMarketingSpecialist,
+    socialMediaCoordinator: t.employees.jobRoleSocialMediaCoordinator,
+    graphicDesigner: t.employees.jobRoleGraphicDesigner,
+    contentCreator: t.employees.jobRoleContentCreator,
+  };
+  const JOB_ROLE_GROUP_LABELS: Record<JobRoleGroupKey, string> = {
+    legal: t.employees.jobRoleGroupLegal,
+    fnb: t.employees.jobRoleGroupFnb,
+    retail: t.employees.jobRoleGroupRetail,
+    kiosk: t.employees.jobRoleGroupKiosk,
+    fieldControl: t.employees.jobRoleGroupFieldControl,
+    hr: t.employees.jobRoleGroupHr,
+    finance: t.employees.jobRoleGroupFinance,
+    it: t.employees.jobRoleGroupIt,
+    marketing: t.employees.jobRoleGroupMarketing,
   };
   const departments = useDepartmentsStore((s) => s.departments);
   const fetchDepartments = useDepartmentsStore((s) => s.fetchAll);
@@ -183,7 +238,7 @@ export default function EmployeesPage() {
   // match any known option's label — fall back to "Other" with the raw text kept
   // editable, instead of silently losing/blanking it.
   function resolveJobRoleSelect(raw: string): { select: string; custom: string } {
-    for (const key of JOB_ROLE_VALUES) {
+    for (const key of ALL_JOB_ROLE_KEYS) {
       if (raw === JOB_ROLE_LABELS[key]) return { select: key, custom: '' };
     }
     return raw ? { select: JOB_ROLE_OTHER, custom: raw } : { select: '', custom: '' };
@@ -274,7 +329,7 @@ export default function EmployeesPage() {
         form.jobRoleSelect === JOB_ROLE_OTHER
           ? form.jobRole.trim()
           : form.jobRoleSelect
-            ? JOB_ROLE_LABELS[form.jobRoleSelect as (typeof JOB_ROLE_VALUES)[number]]
+            ? JOB_ROLE_LABELS[form.jobRoleSelect as JobRoleKey]
             : '';
       const payload = {
         name: form.name,
@@ -474,10 +529,17 @@ export default function EmployeesPage() {
                     }
                   >
                     <option value="">{t.employees.jobRoleSelectPlaceholder}</option>
-                    {JOB_ROLE_VALUES.map((k) => (
-                      <option key={k} value={k}>
-                        {JOB_ROLE_LABELS[k]}
-                      </option>
+                    {/* Optgroups react to the selected Department: picking "Operations" narrows
+                        this down to the F&B/Retail/Kiosk groups only; no department selected
+                        shows every group (see getVisibleJobRoleGroups). */}
+                    {getVisibleJobRoleGroups(departments.find((d) => d.id === form.departmentId) || null).map((group) => (
+                      <optgroup key={group.key} label={JOB_ROLE_GROUP_LABELS[group.key]}>
+                        {group.roles.map((k) => (
+                          <option key={k} value={k}>
+                            {JOB_ROLE_LABELS[k]}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                     <option value={JOB_ROLE_OTHER}>{t.employees.jobRoleOther}</option>
                   </select>
@@ -503,7 +565,18 @@ export default function EmployeesPage() {
                 </div>
                 <div className="field">
                   <label>{t.employees.department}</label>
-                  <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+                  <select
+                    value={form.departmentId}
+                    onChange={(e) => {
+                      const nextDept = departments.find((d) => d.id === e.target.value) || null;
+                      const stillVisible = getVisibleJobRoleGroups(nextDept).some((g) => g.roles.includes(form.jobRoleSelect as JobRoleKey));
+                      setForm({
+                        ...form,
+                        departmentId: e.target.value,
+                        jobRoleSelect: stillVisible || form.jobRoleSelect === '' || form.jobRoleSelect === JOB_ROLE_OTHER ? form.jobRoleSelect : '',
+                      });
+                    }}
+                  >
                     <option value="">{t.employees.selectDepartment}</option>
                     {departments.map((d) => (
                       <option key={d.id} value={d.id}>
