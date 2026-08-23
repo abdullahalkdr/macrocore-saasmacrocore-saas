@@ -18,6 +18,7 @@ import expensesRoutes from './routes/expenses.routes';
 import wasteRecordsRoutes from './routes/wasteRecords.routes';
 import payrollRoutes from './routes/payroll.routes';
 import supportTicketsRoutes from './routes/supportTickets.routes';
+import ticketCategoriesRoutes from './routes/ticketCategories.routes';
 import syncRoutes from './routes/sync.routes';
 import adminRoutes from './routes/admin.routes';
 import attendanceRoutes from './routes/attendance.routes';
@@ -100,6 +101,11 @@ app.use('/api/expenses', ...guarded, expensesRoutes);
 app.use('/api/waste-records', ...silver('Waste tracking'), wasteRecordsRoutes);
 app.use('/api/payroll', ...gold('Payroll'), payrollRoutes);
 app.use('/api/support/tickets', supportTicketsRoutes);
+// Category *management* (not filing/reading a ticket) is normal tenant
+// config, so unlike /api/support/tickets above this IS behind the standard
+// auth + active-subscription gate — a blocked company can still file a
+// ticket to ask for help, but shouldn't need to redefine its category list.
+app.use('/api/ticket-categories', ...guarded, ticketCategoriesRoutes);
 app.use('/api/sync', ...guarded, syncRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/attendance', ...silver('Attendance tracking'), attendanceRoutes);

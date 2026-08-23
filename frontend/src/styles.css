@@ -331,6 +331,18 @@ table.data-table th { font-size: 11px; }
 .tag.amber { background: var(--amber-50); color: var(--amber-700); }
 .tag.gray { background: var(--surface-alt); color: var(--muted); }
 
+/* Support ticket reply marked is_internal_note = true (MIGRATION_046) — same
+   amber tint .tag.amber already uses, just applied to the whole reply row
+   instead of a pill, plus a start-edge border so it reads as a distinct block
+   scanning down the thread. logical (inline-start) not left/right so it still
+   sits on the correct side under RTL Arabic. */
+.reply-internal-note {
+  background: var(--amber-50);
+  border-inline-start: 3px solid var(--amber-500);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
 .icon-btn {
   background: none;
   border: none;

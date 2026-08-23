@@ -853,6 +853,25 @@ const en = {
     ticketLoadFailed: 'Failed to load ticket',
     replyFailed: 'Failed to send reply',
     statusUpdateFailed: 'Failed to update status',
+    category: 'Category',
+    noCategory: 'No category',
+    categoriesLoadFailed: 'Failed to load categories',
+    internalNote: 'Internal Note',
+    markAsInternalNote: 'Mark as internal note',
+    internalNoteHint: 'Only visible to admins and managers — hidden from the ticket creator.',
+    // MIGRATION_043's original hardcoded category strings — kept as translation
+    // keys so both the legacy `category` column (old tickets, or the create-form
+    // fallback when /api/ticket-categories has nothing) and the new per-company
+    // ticket_categories table can both render through useT() the same way.
+    legacyCategory: {
+      general: 'General',
+      leave: 'Leave',
+      grievance: 'Grievance',
+      document_request: 'Document Request',
+      payroll: 'Payroll',
+      it: 'IT',
+      other: 'Other',
+    },
   },
   settings: {
     title: 'Settings',
@@ -2594,6 +2613,21 @@ const ar: typeof en = {
     ticketLoadFailed: 'فشل تحميل التذكرة',
     replyFailed: 'فشل إرسال الرد',
     statusUpdateFailed: 'فشل تحديث الحالة',
+    category: 'التصنيف',
+    noCategory: 'بدون تصنيف',
+    categoriesLoadFailed: 'فشل تحميل التصنيفات',
+    internalNote: 'ملاحظة داخلية',
+    markAsInternalNote: 'ضعها كملاحظة داخلية',
+    internalNoteHint: 'تظهر للمدراء فقط — ما يشوفها صاحب التذكرة.',
+    legacyCategory: {
+      general: 'عام',
+      leave: 'إجازة',
+      grievance: 'شكوى',
+      document_request: 'طلب مستند',
+      payroll: 'الرواتب',
+      it: 'تقنية المعلومات',
+      other: 'أخرى',
+    },
   },
   settings: {
     title: 'الإعدادات',
