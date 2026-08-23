@@ -859,6 +859,22 @@ const en = {
     internalNote: 'Internal Note',
     markAsInternalNote: 'Mark as internal note',
     internalNoteHint: 'Only visible to admins and managers — hidden from the ticket creator.',
+    // Categories admin tab (admin/manager only) — inline-editable table for
+    // managing ticket_categories, mirroring SLAManagementPage's conventions.
+    tabTickets: 'Tickets',
+    tabCategories: 'Categories',
+    categoriesHint: 'Categories used when creating a ticket. Only admins and managers can add, edit, or delete them.',
+    categoryNameLabel: 'Name (Arabic)',
+    categoryNameEnLabel: 'Name (English)',
+    hrSensitive: 'HR-sensitive',
+    hrSensitiveHint: 'Only visible to roles granted the "View HR tickets" permission.',
+    addCategory: 'Add category',
+    categoriesEmpty: 'No categories yet — add one below.',
+    categoryNameRequired: 'Name is required',
+    categorySaveFailed: 'Failed to save category',
+    categoryDeleteFailed: 'Failed to delete category',
+    categorySaved: 'Saved',
+    deleteCategoryConfirm: 'Delete this category? Tickets using it keep their history but lose this category tag — they will not be deleted.',
     // MIGRATION_043's original hardcoded category strings — kept as translation
     // keys so both the legacy `category` column (old tickets, or the create-form
     // fallback when /api/ticket-categories has nothing) and the new per-company
@@ -2619,6 +2635,20 @@ const ar: typeof en = {
     internalNote: 'ملاحظة داخلية',
     markAsInternalNote: 'ضعها كملاحظة داخلية',
     internalNoteHint: 'تظهر للمدراء فقط — ما يشوفها صاحب التذكرة.',
+    tabTickets: 'التذاكر',
+    tabCategories: 'التصنيفات',
+    categoriesHint: 'التصنيفات المستخدمة عند إنشاء تذكرة. الإضافة والتعديل والحذف للإدارة (admin/manager) فقط.',
+    categoryNameLabel: 'الاسم (عربي)',
+    categoryNameEnLabel: 'الاسم (إنجليزي)',
+    hrSensitive: 'حساس (موارد بشرية)',
+    hrSensitiveHint: 'ما يظهر إلا للأدوار اللي عندها صلاحية "عرض تذاكر الموارد البشرية".',
+    addCategory: 'إضافة تصنيف',
+    categoriesEmpty: 'ما فيه تصنيفات بعد — أضف وحد بالأسفل.',
+    categoryNameRequired: 'الاسم مطلوب',
+    categorySaveFailed: 'فشل حفظ التصنيف',
+    categoryDeleteFailed: 'فشل حذف التصنيف',
+    categorySaved: 'تم الحفظ',
+    deleteCategoryConfirm: 'تحذف هذا التصنيف؟ التذاكر اللي تستخدمه تحتفظ بسجلها بس تفقد وسم التصنيف — ما تنحذف.',
     legacyCategory: {
       general: 'عام',
       leave: 'إجازة',

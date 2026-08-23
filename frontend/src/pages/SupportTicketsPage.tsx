@@ -52,10 +52,19 @@ export default function SupportTicketsPage() {
 
   const categories = useTicketCategoriesStore((s) => s.categories);
   const fetchCategories = useTicketCategoriesStore((s) => s.fetchCategories);
+  const categoriesLoading = useTicketCategoriesStore((s) => s.loading);
+  const createCategory = useTicketCategoriesStore((s) => s.createCategory);
+  const updateCategory = useTicketCategoriesStore((s) => s.updateCategory);
+  const removeCategory = useTicketCategoriesStore((s) => s.removeCategory);
   useEffect(() => {
     fetchCategories();
   }, [fetchCategories]);
   const hasDynamicCategories = categories.length > 0;
+
+  // Categories admin tab (admin/manager only, per the AskUserQuestion decision:
+  // a tab inside this page rather than a separate route/nav item). Employees
+  // never see the tab bar at all, so `tab` effectively stays 'tickets' for them.
+  const [tab, setTab] = useState<'tickets' | 'categories'>('tickets');
 
   function categoryName(cat: TicketCategory): string {
     return lang === 'ar' ? cat.name : cat.name_en || cat.name;
@@ -98,6 +107,94 @@ export default function SupportTicketsPage() {
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [replyMsg, setReplyMsg] = useState('');
   const [markInternal, setMarkInternal] = useState(false);
+
+  // --- Categories admin tab state ---
+  interface CategoryDraft {
+    name: string;
+    name_en: string;
+    is_hr_sensitive: boolean;
+  }
+  const EMPTY_CATEGORY_DRAFT: CategoryDraft = { name: '', name_en: '', is_hr_sensitive: false };
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
+  const [newCategoryDraft, setNewCategoryDraft] = useState<CategoryDraft>(EMPTY_CATEGORY_DRAFT);
+  const [savingCategoryId, setSavingCategoryId] = useState<string | null>(null); // a category id, or 'new'
+  const [savedCategoryId, setSavedCategoryId] = useState<string | null>(null);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+
+  // Same sync-from-server pattern SLAManagementPage uses: overwrite every
+  // row's draft whenever the store's category list changes (covers the
+  // initial load and the refetch each create/update/remove triggers).
+  useEffect(() => {
+    setCategoryDrafts((d) => {
+      const next = { ...d };
+      for (const c of categories) {
+        next[c.id] = { name: c.name, name_en: c.name_en || '', is_hr_sensitive: c.is_hr_sensitive };
+      }
+      return next;
+    });
+  }, [categories]);
+
+  function patchCategoryDraft(id: string, patch: Partial<CategoryDraft>) {
+    setCategoryDrafts((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
+  }
+
+  async function handleSaveCategory(id: string) {
+    const draft = categoryDrafts[id];
+    if (!draft || !draft.name.trim()) {
+      setCategoryError(t.support.categoryNameRequired);
+      return;
+    }
+    setSavingCategoryId(id);
+    setCategoryError(null);
+    setSavedCategoryId(null);
+    try {
+      await updateCategory(id, { name: draft.name.trim(), name_en: draft.name_en.trim() || null, is_hr_sensitive: draft.is_hr_sensitive });
+      setSavedCategoryId(id);
+      setTimeout(() => setSavedCategoryId((cur) => (cur === id ? null : cur)), 2000);
+    } catch (err) {
+      setCategoryError(err instanceof ApiError ? err.message : t.support.categorySaveFailed);
+    } finally {
+      setSavingCategoryId(null);
+    }
+  }
+
+  async function handleDeleteCategory(id: string) {
+    // Deleting only clears category_id on tickets that use it (ON DELETE SET
+    // NULL, MIGRATION_046) — it never touches the tickets themselves. The
+    // confirm message says so explicitly rather than reading like data loss.
+    if (!window.confirm(t.support.deleteCategoryConfirm)) return;
+    setSavingCategoryId(id);
+    setCategoryError(null);
+    try {
+      await removeCategory(id);
+    } catch (err) {
+      setCategoryError(err instanceof ApiError ? err.message : t.support.categoryDeleteFailed);
+    } finally {
+      setSavingCategoryId(null);
+    }
+  }
+
+  async function handleAddCategory(e: FormEvent) {
+    e.preventDefault();
+    if (!newCategoryDraft.name.trim()) {
+      setCategoryError(t.support.categoryNameRequired);
+      return;
+    }
+    setSavingCategoryId('new');
+    setCategoryError(null);
+    try {
+      await createCategory({
+        name: newCategoryDraft.name.trim(),
+        name_en: newCategoryDraft.name_en.trim() || null,
+        is_hr_sensitive: newCategoryDraft.is_hr_sensitive,
+      });
+      setNewCategoryDraft(EMPTY_CATEGORY_DRAFT);
+    } catch (err) {
+      setCategoryError(err instanceof ApiError ? err.message : t.support.categorySaveFailed);
+    } finally {
+      setSavingCategoryId(null);
+    }
+  }
 
   function load() {
     get<{ tickets: Ticket[] }>('/support/tickets')
@@ -180,6 +277,123 @@ export default function SupportTicketsPage() {
       <PageHeader title={t.support.title} subtitle={t.support.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
+      {/* Employees never see a second tab (only admin/manager can manage
+          categories), so the bar itself is admin/manager-only — same
+          isManager gate the internal-note checkbox already uses below. */}
+      {isManager && (
+        <div className="tabs">
+          <button type="button" className={`tab-btn${tab === 'tickets' ? ' active' : ''}`} onClick={() => setTab('tickets')}>
+            {t.support.tabTickets}
+          </button>
+          <button type="button" className={`tab-btn${tab === 'categories' ? ' active' : ''}`} onClick={() => setTab('categories')}>
+            {t.support.tabCategories}
+          </button>
+        </div>
+      )}
+
+      {tab === 'categories' && isManager ? (
+        <div className="card">
+          <div className="card-body">
+            <p className="muted" style={{ marginBottom: 14 }}>
+              {t.support.categoriesHint}
+            </p>
+            {categoryError && <div className="error-banner">{categoryError}</div>}
+
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>{t.support.categoryNameLabel}</th>
+                    <th>{t.support.categoryNameEnLabel}</th>
+                    <th>{t.support.hrSensitive}</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categories.map((c) => {
+                    const draft = categoryDrafts[c.id] ?? { name: c.name, name_en: c.name_en || '', is_hr_sensitive: c.is_hr_sensitive };
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          <input value={draft.name} onChange={(e) => patchCategoryDraft(c.id, { name: e.target.value })} />
+                        </td>
+                        <td>
+                          <input value={draft.name_en} onChange={(e) => patchCategoryDraft(c.id, { name_en: e.target.value })} />
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            style={{ width: 'auto' }}
+                            checked={draft.is_hr_sensitive}
+                            title={t.support.hrSensitiveHint}
+                            onChange={(e) => patchCategoryDraft(c.id, { is_hr_sensitive: e.target.checked })}
+                          />
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            type="button"
+                            onClick={() => handleSaveCategory(c.id)}
+                            disabled={savingCategoryId === c.id}
+                          >
+                            {savingCategoryId === c.id ? t.common.loading : t.common.save}
+                          </button>{' '}
+                          {savedCategoryId === c.id && <Tag color="green">{t.support.categorySaved}</Tag>}{' '}
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            type="button"
+                            onClick={() => handleDeleteCategory(c.id)}
+                            disabled={savingCategoryId === c.id}
+                          >
+                            {t.common.delete}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {categories.length === 0 && !categoriesLoading && (
+                    <tr>
+                      <td colSpan={4}>
+                        <div className="empty-state">{t.support.categoriesEmpty}</div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="hr" style={{ margin: '16px 0' }} />
+
+            <form onSubmit={handleAddCategory} className="form-row">
+              <div className="field" style={{ flex: 1 }}>
+                <label>{t.support.categoryNameLabel}</label>
+                <input value={newCategoryDraft.name} onChange={(e) => setNewCategoryDraft((d) => ({ ...d, name: e.target.value }))} />
+              </div>
+              <div className="field" style={{ flex: 1 }}>
+                <label>{t.support.categoryNameEnLabel}</label>
+                <input value={newCategoryDraft.name_en} onChange={(e) => setNewCategoryDraft((d) => ({ ...d, name_en: e.target.value }))} />
+              </div>
+              <div className="field">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: 'auto' }}
+                    checked={newCategoryDraft.is_hr_sensitive}
+                    onChange={(e) => setNewCategoryDraft((d) => ({ ...d, is_hr_sensitive: e.target.checked }))}
+                  />
+                  <span style={{ fontSize: 13 }}>{t.support.hrSensitive}</span>
+                </label>
+              </div>
+              <div className="field" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn btn-primary" type="submit" disabled={savingCategoryId === 'new'}>
+                  {savingCategoryId === 'new' ? t.common.loading : t.support.addCategory}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="section-title-row">
         <span className="muted">{t.support.count(tickets.length)}</span>
         <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
@@ -357,6 +571,8 @@ export default function SupportTicketsPage() {
             </div>
           </form>
         </Modal>
+      )}
+        </>
       )}
     </div>
   );
