@@ -32,6 +32,7 @@ import SLAManagementPage from './pages/SLAManagementPage';
 import PoliciesPage from './pages/PoliciesPage';
 import SupportTicketsPage from './pages/SupportTicketsPage';
 import ServiceCatalogSettingsPage from './pages/ServiceCatalogSettingsPage';
+import DepartmentsPage from './pages/DepartmentsPage';
 import SettingsPage from './pages/SettingsPage';
 import AccountSettingsPage from './pages/account/AccountSettingsPage';
 import AttendancePage from './pages/AttendancePage';
@@ -287,6 +288,20 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <ServiceCatalogSettingsPage />
+                </RequireRole>
+              }
+            />
+            {/* MIGRATION_048 — dynamic per-company departments (HR/Operations/IT/
+                Marketing/Finance/Legal, etc.), gated the same as /employees
+                itself (MANAGER_ROLES) even though the /api/departments route
+                is not plan-tier gated — a plain employee has no reason to see
+                a department-management page, they just see the department
+                label wherever a name is shown (ticket assignee, etc.). */}
+            <Route
+              path="/departments"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <DepartmentsPage />
                 </RequireRole>
               }
             />

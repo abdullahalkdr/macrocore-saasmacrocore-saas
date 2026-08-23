@@ -118,6 +118,25 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     );
     company = companyResult.rows[0];
 
+    // MIGRATION_048 — every new company starts with the same 6 generic
+    // corporate departments the existing-company data migration seeded
+    // (Human Resources / Operations / Marketing / IT / Finance / Legal).
+    // Same transaction as the company/user insert below, so this can never
+    // partially succeed — a company either gets fully set up or the whole
+    // registration rolls back. Purely a starting point, not a fixed list —
+    // departments.controller.ts lets admin/manager rename, delete, or add
+    // more anytime afterward (see that migration's decision 1).
+    await client.query(
+      `INSERT INTO departments (company_id, name, name_en) VALUES
+         ($1, 'الموارد البشرية', 'Human Resources'),
+         ($1, 'العمليات', 'Operations'),
+         ($1, 'التسويق', 'Marketing'),
+         ($1, 'تقنية المعلومات', 'IT'),
+         ($1, 'المالية', 'Finance'),
+         ($1, 'الشؤون القانونية', 'Legal')`,
+      [company.id]
+    );
+
     const passwordHash = googleSub ? null : await hashPassword(password);
     // Google already verified this mailbox (see googleStart's `payload.email_verified`
     // check) — a Google signup is verified immediately. A password signup starts

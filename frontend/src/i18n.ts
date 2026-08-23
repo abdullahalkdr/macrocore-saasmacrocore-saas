@@ -111,6 +111,7 @@ const en = {
     slaManagement: 'SLA Management',
     policies: 'Policies & Procedures',
     serviceCatalog: 'Service Catalog',
+    departments: 'Departments',
   },
   auth: {
     loginSubtitle: 'Log in to your kiosk',
@@ -463,6 +464,8 @@ const en = {
     statusInactive: 'Suspended',
     location: 'Location',
     selectLocation: 'Select location...',
+    department: 'Department',
+    selectDepartment: 'Select department...',
     jobRoleSelectPlaceholder: 'Select...',
     jobRoleKioskWorker: 'Kiosk worker',
     jobRoleShiftSupervisor: 'Shift supervisor',
@@ -825,6 +828,8 @@ const en = {
     resetFailed: 'Failed to reset password',
     resetSuccessNotice: (email: string, pw: string) => `Password reset for ${email} — new password: ${pw} (share this with them directly)`,
     minLengthHint: 'At least 6 characters.',
+    department: 'Department',
+    noDepartment: '—',
   },
   support: {
     title: 'Support',
@@ -967,6 +972,22 @@ const en = {
     deleteFieldConfirm: 'Delete this field? It will no longer appear on the ticket form; already-submitted tickets keep whatever value they saved.',
     saved: 'Saved',
     loadFailed: 'Failed to load the service catalog',
+  },
+  // MIGRATION_048 — dynamic, per-company corporate departments (HR/Operations/
+  // IT/Marketing/Finance/Legal by default, freely renamed/added/deleted).
+  // Simple single-table CRUD page, mirrors serviceCatalog's Categories tab keys.
+  departments: {
+    title: 'Departments',
+    subtitle: "Your company's own organizational departments — used to label who's who when assigning a support ticket.",
+    nameLabel: 'Name (Arabic)',
+    nameEnLabel: 'Name (English)',
+    empty: 'No departments yet — add one below.',
+    addDepartment: 'Add department',
+    nameRequired: 'Both the Arabic and English name are required',
+    saveFailed: 'Failed to save department',
+    deleteFailed: 'Failed to delete department',
+    deleteConfirm: 'Delete this department? Employees in it are not deleted — they just lose this department label.',
+    saved: 'Saved',
   },
   settings: {
     title: 'Settings',
@@ -1966,6 +1987,7 @@ const ar: typeof en = {
     slaManagement: 'إدارة اتفاقيات مستوى الخدمة',
     policies: 'السياسات والإجراءات',
     serviceCatalog: 'كتالوج الخدمات',
+    departments: 'الأقسام',
   },
   auth: {
     loginSubtitle: 'سجّل دخولك للكشك',
@@ -2318,6 +2340,8 @@ const ar: typeof en = {
     statusInactive: 'موقوف',
     location: 'الموقع',
     selectLocation: 'اختر الموقع...',
+    department: 'القسم',
+    selectDepartment: 'اختر القسم...',
     jobRoleSelectPlaceholder: '- اختر -',
     jobRoleKioskWorker: 'عامل كشك',
     jobRoleShiftSupervisor: 'مشرف وردية',
@@ -2680,6 +2704,8 @@ const ar: typeof en = {
     resetFailed: 'فشل إعادة تعيين كلمة السر',
     resetSuccessNotice: (email: string, pw: string) => `تم تغيير كلمة سر ${email} — الكلمة الجديدة: ${pw} (شاركها معه مباشرة)`,
     minLengthHint: '6 أحرف على الأقل.',
+    department: 'القسم',
+    noDepartment: '—',
   },
   support: {
     title: 'الدعم',
@@ -2810,6 +2836,19 @@ const ar: typeof en = {
     deleteFieldConfirm: 'تحذف هذا الحقل؟ بيختفي من فورم التذكرة؛ التذاكر اللي انحفظت فيها قيمة له تحتفظ بالقيمة كما هي.',
     saved: 'تم الحفظ',
     loadFailed: 'فشل تحميل كتالوج الخدمات',
+  },
+  departments: {
+    title: 'الأقسام',
+    subtitle: 'أقسام شركتك الخاصة — تستخدم لتوضيح مين هو مين عند إسناد تذكرة دعم.',
+    nameLabel: 'الاسم (عربي)',
+    nameEnLabel: 'الاسم (إنجليزي)',
+    empty: 'ما فيه أقسام بعد — أضف وحد بالأسفل.',
+    addDepartment: 'إضافة قسم',
+    nameRequired: 'الاسم بالعربي والإنجليزي مطلوبين',
+    saveFailed: 'فشل حفظ القسم',
+    deleteFailed: 'فشل حذف القسم',
+    deleteConfirm: 'تحذف هذا القسم؟ الموظفين فيه ما ينحذفون — بس يفقدون وسم هذا القسم.',
+    saved: 'تم الحفظ',
   },
   settings: {
     title: 'الإعدادات',

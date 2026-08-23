@@ -20,6 +20,8 @@ interface UserRow {
   role: string;
   status: string;
   employee_id: string | null;
+  department_name: string | null;
+  department_name_en: string | null;
 }
 
 interface EmployeeOption {
@@ -180,6 +182,7 @@ export default function UsersPage() {
                 <th></th>
                 <th>{t.users.name}</th>
                 <th>{t.users.email}</th>
+                <th>{t.users.department}</th>
                 <th>{t.users.role}</th>
                 <th>{t.users.status}</th>
                 <th></th>
@@ -193,6 +196,7 @@ export default function UsersPage() {
                   </td>
                   <td style={{ fontWeight: 700 }}>{u.full_name || '—'}</td>
                   <td>{u.email}</td>
+                  <td className="muted">{u.department_name || t.users.noDepartment}</td>
                   <td>
                     <select value={u.role} onChange={(e) => updateRole(u.id, e.target.value)} disabled={u.id === currentUser?.id}>
                       {ROLES.map((r) => (
@@ -226,7 +230,7 @@ export default function UsersPage() {
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <div className="empty-state">{t.users.empty}</div>
                   </td>
                 </tr>

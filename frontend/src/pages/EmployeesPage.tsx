@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import Avatar from '../components/Avatar';
 import { IconPlus, IconTrash, IconEdit } from '../components/Icon';
+import { useDepartmentsStore } from '../store/useDepartmentsStore';
 
 interface Certificate {
   name: string;
@@ -54,6 +55,9 @@ interface Employee {
   emergency_contact_phone: string | null;
   location_id: string | null;
   location_name: string | null;
+  department_id: string | null;
+  department_name: string | null;
+  department_name_en: string | null;
   allowances: Allowance[];
   shift_start_time: string | null;
   late_grace_minutes: number | null;
@@ -121,6 +125,7 @@ function emptyForm() {
     emergencyContactName: '',
     emergencyContactPhone: '',
     locationId: '',
+    departmentId: '',
     status: 'active' as 'active' | 'inactive',
     allowances: [] as AllowanceRow[],
     shiftStartTime: '',
@@ -151,6 +156,8 @@ export default function EmployeesPage() {
     cleaner: t.employees.jobRoleCleaner,
     accountant: t.employees.jobRoleAccountant,
   };
+  const departments = useDepartmentsStore((s) => s.departments);
+  const fetchDepartments = useDepartmentsStore((s) => s.fetchAll);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [open, setOpen] = useState(false);
@@ -168,6 +175,7 @@ export default function EmployeesPage() {
   useEffect(() => {
     load();
     get<{ locations: Location[] }>('/locations').then((r) => setLocations(r.locations)).catch(() => {});
+    fetchDepartments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -216,6 +224,7 @@ export default function EmployeesPage() {
       emergencyContactName: emp.emergency_contact_name || '',
       emergencyContactPhone: emp.emergency_contact_phone || '',
       locationId: emp.location_id || '',
+      departmentId: emp.department_id || '',
       status: emp.status === 'inactive' ? 'inactive' : 'active',
       allowances: (emp.allowances || []).map((a) => ({ label: a.label, amount: String(a.amount) })),
       shiftStartTime: emp.shift_start_time ? emp.shift_start_time.slice(0, 5) : '',
@@ -292,6 +301,7 @@ export default function EmployeesPage() {
         emergency_contact_name: form.emergencyContactName || undefined,
         emergency_contact_phone: form.emergencyContactPhone || undefined,
         location_id: form.locationId || undefined,
+        department_id: form.departmentId || undefined,
         status: editingId ? form.status : undefined,
         allowances: form.allowances
           .filter((a) => a.label.trim() && a.amount)
@@ -352,6 +362,7 @@ export default function EmployeesPage() {
                 <th></th>
                 <th>{t.employees.name}</th>
                 <th>{t.employees.jobRole}</th>
+                <th>{t.employees.department}</th>
                 <th>{t.employees.location}</th>
                 <th className="num">{t.employees.baseSalaryCol}</th>
                 <th className="num">{t.employees.allowanceCol}</th>
@@ -395,6 +406,7 @@ export default function EmployeesPage() {
                       )}
                     </td>
                     <td>{e.job_role || '—'}</td>
+                    <td>{e.department_name || '—'}</td>
                     <td>{e.location_name || '—'}</td>
                     <td className="num">{baseDisplay}</td>
                     <td className="num">{allowanceTotal > 0 ? `${allowanceTotal.toFixed(3)} KD` : '—'}</td>
@@ -421,7 +433,7 @@ export default function EmployeesPage() {
               })}
               {employees.length === 0 && (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">{t.employees.empty}</div>
                   </td>
                 </tr>
@@ -485,6 +497,17 @@ export default function EmployeesPage() {
                     {locations.map((l) => (
                       <option key={l.id} value={l.id}>
                         {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{t.employees.department}</label>
+                  <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+                    <option value="">{t.employees.selectDepartment}</option>
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
                       </option>
                     ))}
                   </select>

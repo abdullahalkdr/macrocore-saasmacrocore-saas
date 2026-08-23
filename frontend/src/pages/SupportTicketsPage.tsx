@@ -42,6 +42,11 @@ interface CompanyUser {
   id: string;
   email: string;
   full_name: string | null;
+  // MIGRATION_048 — resolved server-side through employee_id -> employees.department_id
+  // -> departments (users.controller.ts's list()). Null for a user with no linked
+  // employee record, or one whose employee record has no department set.
+  department_name: string | null;
+  department_name_en: string | null;
 }
 
 // MIGRATION_043's original hardcoded category strings — the ONLY thing left
@@ -130,10 +135,21 @@ export default function SupportTicketsPage() {
       .then((r) => setCompanyUsers(r.users))
       .catch(() => {});
   }, [isManager]);
+  // MIGRATION_048 — "Ahmad Khaled (IT)" instead of a flat, unlabeled name,
+  // so an admin/manager can actually tell who's IT/HR/etc. when assigning a
+  // ticket. No department shown at all (not even an empty "()") for a user
+  // with no linked employee record or no department set on it — that's the
+  // common case for the small handful of admin/owner accounts a company
+  // starts with, not something to visually flag as broken.
+  function departmentSuffix(u: CompanyUser): string {
+    const name = lang === 'ar' ? u.department_name : u.department_name_en || u.department_name;
+    return name ? ` (${name})` : '';
+  }
   function userLabel(id: string | null): string {
     if (!id) return t.support.unassigned;
     const u = companyUsers.find((c) => c.id === id);
-    return u ? u.full_name || u.email : id;
+    if (!u) return id;
+    return `${u.full_name || u.email}${departmentSuffix(u)}`;
   }
 
   // --- Agent queue filters (admin/manager only; client-side — ticket volume
@@ -450,6 +466,7 @@ export default function SupportTicketsPage() {
                     {companyUsers.map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.full_name || u.email}
+                        {departmentSuffix(u)}
                       </option>
                     ))}
                   </select>

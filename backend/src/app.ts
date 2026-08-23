@@ -12,6 +12,7 @@ import rawMaterialBatchesRoutes from './routes/rawMaterialBatches.routes';
 import stockTransfersRoutes from './routes/stockTransfers.routes';
 import inventoryRoutes from './routes/inventory.routes';
 import employeesRoutes from './routes/employees.routes';
+import departmentsRoutes from './routes/departments.routes';
 import locationsRoutes from './routes/locations.routes';
 import reportsRoutes from './routes/reports.routes';
 import expensesRoutes from './routes/expenses.routes';
@@ -98,6 +99,13 @@ app.use('/api/raw-material-batches', ...silver('Raw material batches'), rawMater
 app.use('/api/stock-transfers', ...silver('Stock transfers'), stockTransfersRoutes);
 app.use('/api/inventory', ...silver('Inventory overview'), inventoryRoutes);
 app.use('/api/employees', ...silver('Employee management'), employeesRoutes);
+// MIGRATION_048 — deliberately NOT silver-gated like /api/employees above,
+// even though its main UI is the department field on that page. A
+// department is also how the support ticket assignee list resolves who's
+// IT/HR/etc. (/api/support/tickets is available on every plan), so gating
+// it to Silver+ would make department-aware ticket assignment impossible
+// on Bronze — same "every plan needs this" reasoning as /api/locations.
+app.use('/api/departments', ...guarded, departmentsRoutes);
 app.use('/api/locations', ...guarded, locationsRoutes);
 app.use('/api/reports', ...guarded, reportsRoutes);
 app.use('/api/expenses', ...guarded, expensesRoutes);

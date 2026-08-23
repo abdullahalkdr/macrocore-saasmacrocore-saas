@@ -168,6 +168,7 @@ export default function Layout() {
       label: t.nav.groupHR,
       items: [
         { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true, minPlan: 2 },
+        { to: '/departments', label: t.nav.departments, icon: IconEmployee, managerOnly: true },
         { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true, minPlan: 3 },
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },

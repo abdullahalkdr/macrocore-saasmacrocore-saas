@@ -22,7 +22,7 @@ const SELECT_COLUMNS = `id, name, email, phone, job_role, salary_monthly, start_
   photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
   nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
   bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
-  late_grace_minutes, created_at`;
+  late_grace_minutes, department_id, created_at`;
 
 // Same columns, prefixed with e. — used by list()/getOne() which LEFT JOIN locations
 // (unprefixed column names would be ambiguous once joined, since locations also has id/name).
@@ -91,8 +91,10 @@ function withExpiries<T extends { civil_id_expiry: string | null; residency_expi
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
-    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name FROM employees e
+    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name, d.name AS department_name, d.name_en AS department_name_en
+     FROM employees e
      LEFT JOIN locations l ON l.id = e.location_id
+     LEFT JOIN departments d ON d.id = e.department_id
      WHERE e.company_id = $1 ORDER BY e.created_at DESC`,
     [companyId]
   );
@@ -103,8 +105,10 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
   const result = await pool.query(
-    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name FROM employees e
+    `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name, d.name AS department_name, d.name_en AS department_name_en
+     FROM employees e
      LEFT JOIN locations l ON l.id = e.location_id
+     LEFT JOIN departments d ON d.id = e.department_id
      WHERE e.id = $1 AND e.company_id = $2`,
     [id, companyId]
   );
@@ -139,6 +143,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     emergency_contact_name,
     emergency_contact_phone,
     location_id,
+    department_id,
     allowances,
     shift_start_time,
     late_grace_minutes,
@@ -158,6 +163,11 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     const loc = await pool.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
     if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
   }
+  // MIGRATION_048 — same cross-tenant-validation shape as location_id above.
+  if (department_id) {
+    const dept = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
+    if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
+  }
   const certList = validateCertificates(certificates);
   const allowanceList = validateAllowances(allowances);
 
@@ -165,10 +175,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     `INSERT INTO employees (company_id, name, email, phone, job_role, salary_monthly, start_date,
        photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
        nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
-       bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
-       late_grace_minutes)
+       bank_iban, emergency_contact_name, emergency_contact_phone, location_id, department_id, allowances,
+       shift_start_time, late_grace_minutes)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21,
-       $22, $23, $24, $25, $26::jsonb, $27, $28)
+       $22, $23, $24, $25, $26, $27::jsonb, $28, $29)
      RETURNING ${SELECT_COLUMNS}`,
     [
       companyId,
@@ -196,6 +206,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       emergency_contact_name ?? null,
       emergency_contact_phone ?? null,
       location_id ?? null,
+      department_id ?? null,
       JSON.stringify(allowanceList),
       shift_start_time ?? null,
       late_grace_minutes ?? null,
@@ -239,6 +250,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     emergency_contact_name,
     emergency_contact_phone,
     location_id,
+    department_id,
     allowances,
     shift_start_time,
     late_grace_minutes,
@@ -301,6 +313,13 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
     }
     setField('location_id', location_id || null);
+  }
+  if (department_id !== undefined) {
+    if (department_id) {
+      const dept = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
+      if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
+    }
+    setField('department_id', department_id || null);
   }
   if (allowances !== undefined) setField('allowances', JSON.stringify(validateAllowances(allowances)), 'jsonb');
   if (shift_start_time !== undefined) {

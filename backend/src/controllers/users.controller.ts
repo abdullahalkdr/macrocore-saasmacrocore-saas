@@ -88,16 +88,33 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   const params: unknown[] = [companyId];
   let where = 'company_id = $1';
+  // Same condition, u.-qualified — the joined query below (employees/departments,
+  // MIGRATION_048) needs it, since an unqualified company_id would be ambiguous
+  // once joined (both employees and departments have their own company_id too).
+  let whereJoined = 'u.company_id = $1';
   if (role) {
     params.push(role);
     where += ` AND role = $${params.length}`;
+    whereJoined += ` AND u.role = $${params.length}`;
   }
 
   const totalResult = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE ${where}`, params);
   params.push(limit, offset);
+  // department_id/department_name(_en) resolved through users.employee_id ->
+  // employees.department_id -> departments (MIGRATION_048) — department
+  // lives on the employee record, not duplicated onto users (see that
+  // migration's decision 3). A user with no linked employee_id, or an
+  // employee with no department set, just comes back with department_name
+  // null — the Support Tickets assignee picker falls back to "no
+  // department" for those, same as it always showed a flat name before.
   const usersResult = await pool.query(
-    `SELECT id, email, full_name, first_name, last_name, phone, job_title, role, status, employee_id, created_at FROM users
-     WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    `SELECT u.id, u.email, u.full_name, u.first_name, u.last_name, u.phone, u.job_title, u.role, u.status,
+            u.employee_id, u.created_at, d.id AS department_id, d.name AS department_name, d.name_en AS department_name_en
+     FROM users u
+     LEFT JOIN employees e ON e.id = u.employee_id
+     LEFT JOIN departments d ON d.id = e.department_id
+     WHERE ${whereJoined}
+     ORDER BY u.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
 
