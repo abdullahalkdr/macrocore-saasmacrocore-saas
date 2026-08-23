@@ -6,8 +6,8 @@ import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import Avatar from '../components/Avatar';
 import { IconPlus, IconTrash, IconEdit } from '../components/Icon';
-import { useDepartmentsStore } from '../store/useDepartmentsStore';
-import { JOB_ROLE_GROUPS, JobRoleGroupKey, JobRoleKey, getVisibleJobRoleGroups } from '../constants/jobRolesCatalog';
+import { useDepartmentsStore, Department, JobRole } from '../store/useDepartmentsStore';
+import { useLangStore } from '../store/langStore';
 
 interface Certificate {
   name: string;
@@ -67,12 +67,12 @@ interface Employee {
   days_until_passport_expiry: number | null;
 }
 
-// Enterprise Job Role Catalog (see ../constants/jobRolesCatalog.ts) replaced the
-// old flat kiosk-only list. ALL_JOB_ROLE_KEYS covers every role across every
-// group (not just the ones currently visible under the selected department) so
-// an existing employee's stored job_role always resolves correctly regardless
-// of which department they're in right now — see resolveJobRoleSelect below.
-const ALL_JOB_ROLE_KEYS: JobRoleKey[] = Array.from(new Set(JOB_ROLE_GROUPS.flatMap((g) => g.roles)));
+// MIGRATION_049 — job roles used to live in a hardcoded frontend catalog
+// (../constants/jobRolesCatalog.ts, now deleted). They're 100% DB-driven now:
+// every Department (from useDepartmentsStore) carries its own `roles: JobRole[]`
+// straight from the job_roles table, so a brand-new department (e.g. "Koko")
+// gets its own roles the moment someone adds them via the Corporate Departments
+// page's "Manage Roles" modal — no frontend redeploy needed.
 const JOB_ROLE_OTHER = '__other__';
 
 function hasExpiryWarning(e: Employee): boolean {
@@ -143,74 +143,7 @@ function calcAge(birthDate: string): number | null {
 
 export default function EmployeesPage() {
   const t = useT();
-  const JOB_ROLE_LABELS: Record<JobRoleKey, string> = {
-    legalDirector: t.employees.jobRoleLegalDirector,
-    generalCounsel: t.employees.jobRoleGeneralCounsel,
-    seniorLegalCounsel: t.employees.jobRoleSeniorLegalCounsel,
-    legalCounsel: t.employees.jobRoleLegalCounsel,
-    corporateLawyer: t.employees.jobRoleCorporateLawyer,
-    legalResearcher: t.employees.jobRoleLegalResearcher,
-    paralegal: t.employees.jobRoleParalegal,
-    complianceOfficer: t.employees.jobRoleComplianceOfficer,
-    boardSecretary: t.employees.jobRoleBoardSecretary,
-    restaurantManager: t.employees.jobRoleRestaurantManager,
-    assistantRestaurantManager: t.employees.jobRoleAssistantRestaurantManager,
-    shiftSupervisor: t.employees.jobRoleShiftSupervisor,
-    headChef: t.employees.jobRoleHeadChef,
-    commisChef: t.employees.jobRoleCommisChef,
-    barista: t.employees.jobRoleBarista,
-    juiceMaker: t.employees.jobRoleJuiceMaker,
-    cashier: t.employees.jobRoleCashier,
-    waiter: t.employees.jobRoleWaiter,
-    sandwichMaker: t.employees.jobRoleSandwichMaker,
-    kitchenSteward: t.employees.jobRoleKitchenSteward,
-    deliveryRider: t.employees.jobRoleDeliveryRider,
-    storeManager: t.employees.jobRoleStoreManager,
-    assistantStoreManager: t.employees.jobRoleAssistantStoreManager,
-    departmentSupervisor: t.employees.jobRoleDepartmentSupervisor,
-    salesAssociate: t.employees.jobRoleSalesAssociate,
-    retailCashier: t.employees.jobRoleRetailCashier,
-    receptionist: t.employees.jobRoleReceptionist,
-    visualMerchandiser: t.employees.jobRoleVisualMerchandiser,
-    storeKeeper: t.employees.jobRoleStoreKeeper,
-    customerServiceAgent: t.employees.jobRoleCustomerServiceAgent,
-    kioskSupervisor: t.employees.jobRoleKioskSupervisor,
-    kioskOperator: t.employees.jobRoleKioskOperator,
-    qualityAuditor: t.employees.jobRoleQualityAuditor,
-    mysteryShopper: t.employees.jobRoleMysteryShopper,
-    securityOfficer: t.employees.jobRoleSecurityOfficer,
-    hrManager: t.employees.jobRoleHrManager,
-    hrOfficer: t.employees.jobRoleHrOfficer,
-    recruitmentSpecialist: t.employees.jobRoleRecruitmentSpecialist,
-    payrollSpecialist: t.employees.jobRolePayrollSpecialist,
-    trainingDevelopmentOfficer: t.employees.jobRoleTrainingDevelopmentOfficer,
-    financeManager: t.employees.jobRoleFinanceManager,
-    accountant: t.employees.jobRoleAccountant,
-    accountsPayableOfficer: t.employees.jobRoleAccountsPayableOfficer,
-    treasuryOfficer: t.employees.jobRoleTreasuryOfficer,
-    internalAuditor: t.employees.jobRoleInternalAuditor,
-    itManager: t.employees.jobRoleItManager,
-    softwareDeveloper: t.employees.jobRoleSoftwareDeveloper,
-    itSupportSpecialist: t.employees.jobRoleItSupportSpecialist,
-    systemsAdministrator: t.employees.jobRoleSystemsAdministrator,
-    networkEngineer: t.employees.jobRoleNetworkEngineer,
-    marketingManager: t.employees.jobRoleMarketingManager,
-    marketingSpecialist: t.employees.jobRoleMarketingSpecialist,
-    socialMediaCoordinator: t.employees.jobRoleSocialMediaCoordinator,
-    graphicDesigner: t.employees.jobRoleGraphicDesigner,
-    contentCreator: t.employees.jobRoleContentCreator,
-  };
-  const JOB_ROLE_GROUP_LABELS: Record<JobRoleGroupKey, string> = {
-    legal: t.employees.jobRoleGroupLegal,
-    fnb: t.employees.jobRoleGroupFnb,
-    retail: t.employees.jobRoleGroupRetail,
-    kiosk: t.employees.jobRoleGroupKiosk,
-    fieldControl: t.employees.jobRoleGroupFieldControl,
-    hr: t.employees.jobRoleGroupHr,
-    finance: t.employees.jobRoleGroupFinance,
-    it: t.employees.jobRoleGroupIt,
-    marketing: t.employees.jobRoleGroupMarketing,
-  };
+  const lang = useLangStore((s) => s.lang);
   const departments = useDepartmentsStore((s) => s.departments);
   const fetchDepartments = useDepartmentsStore((s) => s.fetchAll);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -220,6 +153,23 @@ export default function EmployeesPage() {
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Lang-aware display helpers — departments/roles are stored as bilingual
+  // name/name_en pairs (real DB data), so which one is shown just follows the
+  // current UI language, same convention as DepartmentsPage.tsx.
+  function deptLabel(d: Pick<Department, 'name' | 'name_en'>): string {
+    return lang === 'ar' ? d.name : d.name_en || d.name;
+  }
+  function roleLabel(r: Pick<JobRole, 'name' | 'name_en'>): string {
+    return lang === 'ar' ? r.name : r.name_en || r.name;
+  }
+
+  // Flat list of every role across every department, regardless of which
+  // department is currently selected — needed so an existing employee's
+  // stored job_role text always resolves correctly even if they're shown
+  // while a different (or no) department is selected. Mirrors the old
+  // ALL_JOB_ROLE_KEYS behavior from the static catalog.
+  const allRoles: JobRole[] = departments.flatMap((d) => d.roles || []);
 
   function load() {
     get<{ employees: Employee[] }>('/employees')
@@ -234,14 +184,16 @@ export default function EmployeesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Old free-text job_role values (entered before this dropdown existed) may not
-  // match any known option's label — fall back to "Other" with the raw text kept
-  // editable, instead of silently losing/blanking it.
+  // Old free-text job_role values (entered before this dropdown existed, or
+  // whose underlying job_roles row was since renamed/deleted) may not match
+  // any currently-known role's label — fall back to "Other" with the raw text
+  // kept editable, instead of silently losing/blanking it.
   function resolveJobRoleSelect(raw: string): { select: string; custom: string } {
-    for (const key of ALL_JOB_ROLE_KEYS) {
-      if (raw === JOB_ROLE_LABELS[key]) return { select: key, custom: '' };
+    if (!raw) return { select: '', custom: '' };
+    for (const r of allRoles) {
+      if (raw === roleLabel(r)) return { select: r.id, custom: '' };
     }
-    return raw ? { select: JOB_ROLE_OTHER, custom: raw } : { select: '', custom: '' };
+    return { select: JOB_ROLE_OTHER, custom: raw };
   }
 
   function openCreate() {
@@ -329,7 +281,7 @@ export default function EmployeesPage() {
         form.jobRoleSelect === JOB_ROLE_OTHER
           ? form.jobRole.trim()
           : form.jobRoleSelect
-            ? JOB_ROLE_LABELS[form.jobRoleSelect as JobRoleKey]
+            ? roleLabel(allRoles.find((r) => r.id === form.jobRoleSelect) || { name: '', name_en: '' })
             : '';
       const payload = {
         name: form.name,
@@ -390,6 +342,16 @@ export default function EmployeesPage() {
   }
 
   const liveAge = calcAge(form.birthDate);
+
+  // Which departments' roles show as <optgroup>s in the Job Role dropdown:
+  // a selected department narrows it down to just that department's own
+  // roles (even if currently empty, so "Manage Roles" is discoverable);
+  // no department selected shows every department that has at least one
+  // role, each in its own group labeled with that department's name.
+  const selectedDept = departments.find((d) => d.id === form.departmentId) || null;
+  const roleOptgroupDepts: Department[] = selectedDept
+    ? [selectedDept]
+    : departments.filter((d) => (d.roles || []).length > 0);
 
   return (
     <div>
@@ -529,14 +491,14 @@ export default function EmployeesPage() {
                     }
                   >
                     <option value="">{t.employees.jobRoleSelectPlaceholder}</option>
-                    {/* Optgroups react to the selected Department: picking "Operations" narrows
-                        this down to the F&B/Retail/Kiosk groups only; no department selected
-                        shows every group (see getVisibleJobRoleGroups). */}
-                    {getVisibleJobRoleGroups(departments.find((d) => d.id === form.departmentId) || null).map((group) => (
-                      <optgroup key={group.key} label={JOB_ROLE_GROUP_LABELS[group.key]}>
-                        {group.roles.map((k) => (
-                          <option key={k} value={k}>
-                            {JOB_ROLE_LABELS[k]}
+                    {/* Optgroups react to the selected Department: picking one narrows this
+                        down to just that department's own DB-backed roles; no department
+                        selected shows every department that has roles, each in its own group. */}
+                    {roleOptgroupDepts.map((d) => (
+                      <optgroup key={d.id} label={deptLabel(d)}>
+                        {(d.roles || []).map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {roleLabel(r)}
                           </option>
                         ))}
                       </optgroup>
@@ -569,7 +531,7 @@ export default function EmployeesPage() {
                     value={form.departmentId}
                     onChange={(e) => {
                       const nextDept = departments.find((d) => d.id === e.target.value) || null;
-                      const stillVisible = getVisibleJobRoleGroups(nextDept).some((g) => g.roles.includes(form.jobRoleSelect as JobRoleKey));
+                      const stillVisible = !nextDept || (nextDept.roles || []).some((r) => r.id === form.jobRoleSelect);
                       setForm({
                         ...form,
                         departmentId: e.target.value,
@@ -580,7 +542,7 @@ export default function EmployeesPage() {
                     <option value="">{t.employees.selectDepartment}</option>
                     {departments.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.name}
+                        {deptLabel(d)}
                       </option>
                     ))}
                   </select>
