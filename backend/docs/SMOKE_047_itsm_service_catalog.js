@@ -1,7 +1,9 @@
 /**
- * Smoke test for the ITSM pivot Step 2 (MIGRATION_047 + the 3 new
+ * Smoke test for the ITSM pivot Step 2 + Step 2.5 (MIGRATION_047 + the 3 new
  * service_categories / service_request_types / service_custom_fields
- * controllers + the supportTickets.controller.ts refactor).
+ * controllers + the supportTickets.controller.ts refactor, including the
+ * Step 2.5 server-side dynamic_data validation against service_custom_fields
+ * definitions).
  *
  * Requires the real dev server running first (double-click dev.bat, or
  * `npm run dev` from backend/) — this hits http://localhost:3001 with real
@@ -19,25 +21,30 @@
  *  4. GET service-request-types?category_id= filters correctly
  *  5. service_custom_fields.create rejects a request_type_id from a
  *     DIFFERENT company (cross-tenant)
- *  6. GET service-custom-fields?request_type_id= filters correctly
- *  7. Employee creates a ticket with request_type_id pointing at the
- *     HR-sensitive request type + dynamic_data
- *  8. support/tickets.create rejects a request_type_id from a DIFFERENT
+ *  6. Create two custom fields on the HR request type: one required
+ *     textarea, one optional number
+ *  7. GET service-custom-fields?request_type_id= filters correctly
+ *  8. Create employee user + log in
+ *  9. support/tickets.create rejects a request_type_id from a DIFFERENT
  *     company (cross-tenant)
- *  9. dynamic_data must be a plain object — an array is rejected (400)
- * 10. Admin WITHOUT view_hr_tickets cannot list/see that ticket (isolation
+ * 10. dynamic_data must be a plain object — an array is rejected (400)
+ * 11. Step 2.5: a missing REQUIRED custom field is rejected (400)
+ * 12. Step 2.5: wrong type for a `number` custom field is rejected (400)
+ * 13. Employee creates a ticket with valid dynamic_data (required field
+ *     present, number field correctly typed) — succeeds
+ * 14. Admin WITHOUT view_hr_tickets cannot list/see that ticket (isolation
  *     via the NEW request_type_id path, not just the legacy category
  *     string or category_id)
- * 11. Admin granted view_hr_tickets CAN see it, and getOne() embeds
+ * 15. Admin granted view_hr_tickets CAN see it, and getOne() embeds
  *     request_type_name / request_type_name_en (and does NOT leak the
  *     *_is_hr_sensitive join helper fields)
- * 12. GET support/tickets?request_type_id= filters the list correctly
- * 13. updateStatus() assigned_to: employee sending it is silently ignored
+ * 16. GET support/tickets?request_type_id= filters the list correctly
+ * 17. updateStatus() assigned_to: employee sending it is silently ignored
  *     (not rejected); admin/manager can set it; a cross-tenant assigned_to
  *     is rejected (400)
- * 14. Backward compatibility: a plain legacy ticket (category string only,
+ * 18. Backward compatibility: a plain legacy ticket (category string only,
  *     no category_id/request_type_id) still creates fine
- * 15. Deleting a service_categories row CASCADEs to its
+ * 19. Deleting a service_categories row CASCADEs to its
  *     service_request_types (and from there to service_custom_fields)
  */
 
@@ -140,15 +147,20 @@ async function run() {
   r = await req('POST', '/api/service-custom-fields', A.token, { request_type_id: requestTypeIdB, field_key: 'x', field_label: 'X' });
   ok('cross-company request_type_id rejected (400)', r.status === 400, r.data);
 
-  console.log('\n📝 Test 7: Create a custom field on the HR request type...');
+  console.log('\n📝 Test 7: Create two custom fields on the HR request type (one required text, one optional number)...');
   r = await req('POST', '/api/service-custom-fields', A.token, {
     request_type_id: hrRequestTypeId, field_key: 'urgency_reason', field_label: 'سبب الاستعجال', field_label_en: 'Urgency Reason', field_type: 'textarea', is_required: true,
   });
-  ok('create custom field succeeds (201)', r.status === 201 && r.data.field?.field_type === 'textarea', r.data);
+  ok('create required textarea field succeeds (201)', r.status === 201 && r.data.field?.field_type === 'textarea', r.data);
+
+  r = await req('POST', '/api/service-custom-fields', A.token, {
+    request_type_id: hrRequestTypeId, field_key: 'priority_level', field_label: 'مستوى الأولوية', field_label_en: 'Priority Level', field_type: 'number', is_required: false,
+  });
+  ok('create optional number field succeeds (201)', r.status === 201 && r.data.field?.field_type === 'number', r.data);
 
   console.log('\n🔍 Test 8: GET service-custom-fields?request_type_id= filters correctly...');
   r = await req('GET', `/api/service-custom-fields?request_type_id=${hrRequestTypeId}`, A.token);
-  ok('filtered list returns exactly the 1 field for this request type', r.status === 200 && r.data.fields?.length === 1, r.data);
+  ok('filtered list returns exactly the 2 fields for this request type', r.status === 200 && r.data.fields?.length === 2, r.data);
 
   console.log('\n👤 Test 9: Create employee user in Company A + log in...');
   r = await req('POST', '/api/users', A.token, { email: `smoke047_emp_${Date.now()}@test.local`, name: 'Smoke Employee', role: 'employee' });
@@ -168,19 +180,34 @@ async function run() {
   r = await req('POST', '/api/support/tickets', empToken, { subject: 'bad shape', description: 'x', dynamic_data: ['not', 'an', 'object'] });
   ok('array dynamic_data rejected (400)', r.status === 400, r.data);
 
-  console.log('\n📝 Test 12: Employee creates a ticket against the HR-sensitive request type + dynamic_data...');
+  console.log('\n🚫 Test 12 (Step 2.5): missing the REQUIRED urgency_reason field is rejected...');
+  r = await req('POST', '/api/support/tickets', empToken, {
+    subject: 'Payroll issue', description: 'missing required field', request_type_id: hrRequestTypeId, dynamic_data: {},
+  });
+  ok('missing required custom field rejected (400)', r.status === 400, r.data);
+
+  console.log('\n🚫 Test 13 (Step 2.5): wrong type for the number field (priority_level) is rejected...');
+  r = await req('POST', '/api/support/tickets', empToken, {
+    subject: 'Payroll issue', description: 'bad type', request_type_id: hrRequestTypeId,
+    dynamic_data: { urgency_reason: 'ok, has the required field', priority_level: 'not-a-number' },
+  });
+  ok('non-numeric value for a number field rejected (400)', r.status === 400, r.data);
+
+  console.log('\n📝 Test 14: Employee creates a ticket against the HR-sensitive request type + valid dynamic_data...');
   r = await req('POST', '/api/support/tickets', empToken, {
     subject: 'Payroll issue', description: 'My last payslip looks wrong', priority: 'high',
-    request_type_id: hrRequestTypeId, dynamic_data: { urgency_reason: 'need it before payday' },
+    request_type_id: hrRequestTypeId, dynamic_data: { urgency_reason: 'need it before payday', priority_level: 3 },
   });
   ok(
-    'ticket created (201) with request_type_id + dynamic_data set',
-    r.status === 201 && r.data.ticket?.request_type_id === hrRequestTypeId && r.data.ticket?.dynamic_data?.urgency_reason === 'need it before payday',
+    'ticket created (201) with request_type_id + dynamic_data set (required field present, number field correctly typed)',
+    r.status === 201 && r.data.ticket?.request_type_id === hrRequestTypeId
+      && r.data.ticket?.dynamic_data?.urgency_reason === 'need it before payday'
+      && r.data.ticket?.dynamic_data?.priority_level === 3,
     r.data
   );
   const ticketId = r.data.ticket?.id;
 
-  console.log('\n🔒 Test 13: Admin WITHOUT view_hr_tickets cannot see the ticket (isolation via request_type_id, not category)...');
+  console.log('\n🔒 Test 15: Admin WITHOUT view_hr_tickets cannot see the ticket (isolation via request_type_id, not category)...');
   r = await req('GET', '/api/support/tickets', A.token);
   const adminSeesItInList = (r.data.tickets ?? []).some((t) => t.id === ticketId);
   ok('admin list does NOT include the HR ticket', r.status === 200 && !adminSeesItInList, r.data);
@@ -188,7 +215,7 @@ async function run() {
   r = await req('GET', `/api/support/tickets/${ticketId}`, A.token);
   ok('admin getOne returns 404 (isolation, not 403)', r.status === 404, r.data);
 
-  console.log('\n🔓 Test 14: Grant admin view_hr_tickets, retry — response must embed request_type_name(_en), not leak is_hr_sensitive helper fields...');
+  console.log('\n🔓 Test 16: Grant admin view_hr_tickets, retry — response must embed request_type_name(_en), not leak is_hr_sensitive helper fields...');
   r = await req('GET', '/api/permissions', A.token);
   // NOTE: auth.controller.ts's register() lowercases the email
   // (`normalizedEmail = email.toLowerCase()`) before storing it — the tag
@@ -216,26 +243,26 @@ async function run() {
     r.data.ticket
   );
 
-  console.log('\n🔍 Test 15: GET support/tickets?request_type_id= filters the list...');
+  console.log('\n🔍 Test 17: GET support/tickets?request_type_id= filters the list...');
   r = await req('GET', `/api/support/tickets?request_type_id=${hrRequestTypeId}`, A.token);
   ok('filtered list returns exactly the 1 matching ticket', r.status === 200 && r.data.tickets?.length === 1 && r.data.tickets[0].id === ticketId, r.data);
 
-  console.log('\n🚫 Test 16: Employee tries to set assigned_to via PATCH — silently ignored, not rejected...');
+  console.log('\n🚫 Test 18: Employee tries to set assigned_to via PATCH — silently ignored, not rejected...');
   r = await req('PATCH', `/api/support/tickets/${ticketId}`, empToken, { assigned_to: adminUserId });
   ok('PATCH succeeds (200) but assigned_to stays null', r.status === 200 && r.data.ticket?.assigned_to === null, r.data);
 
-  console.log('\n🚫 Test 17: Admin sets assigned_to to a real user id, but from a DIFFERENT company — rejected...');
+  console.log('\n🚫 Test 19: Admin sets assigned_to to a real user id, but from a DIFFERENT company — rejected...');
   r = await req('GET', '/api/users', B.token);
   const bUserId = (r.data.users ?? [])[0]?.id;
   ok('found a real user id in Company B to use as the cross-tenant probe', !!bUserId, r.data);
   r = await req('PATCH', `/api/support/tickets/${ticketId}`, A.token, { assigned_to: bUserId });
   ok('cross-company assigned_to rejected (400)', r.status === 400, r.data);
 
-  console.log('\n✅ Test 18: Admin/manager sets assigned_to for real...');
+  console.log('\n✅ Test 20: Admin/manager sets assigned_to for real...');
   r = await req('PATCH', `/api/support/tickets/${ticketId}`, A.token, { assigned_to: adminUserId });
   ok('assigned_to set (200)', r.status === 200 && r.data.ticket?.assigned_to === adminUserId, r.data);
 
-  console.log('\n🔄 Test 19: Backward compatibility — a plain legacy ticket (category string only) still works...');
+  console.log('\n🔄 Test 21: Backward compatibility — a plain legacy ticket (category string only) still works...');
   r = await req('POST', '/api/support/tickets', empToken, { subject: 'printer jammed', description: 'again', category: 'it' });
   ok(
     'legacy ticket created (201) with category set and category_id/request_type_id null',
@@ -243,7 +270,7 @@ async function run() {
     r.data
   );
 
-  console.log('\n💥 Test 20: Deleting a service_categories row CASCADEs to its service_request_types...');
+  console.log('\n💥 Test 22: Deleting a service_categories row CASCADEs to its service_request_types...');
   r = await req('DELETE', `/api/service-categories/${categoryId}`, A.token);
   ok('category delete succeeds (200)', r.status === 200, r.data);
 

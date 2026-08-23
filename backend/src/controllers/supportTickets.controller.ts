@@ -93,6 +93,44 @@ async function canAccessTicket(
   return true;
 }
 
+// ITSM pivot Step 2.5: server-side validation of dynamic_data against the
+// request type's own service_custom_fields definitions. Frontend validation
+// alone is not trustworthy — a direct API call can send anything — so this
+// is the actual enforcement point, not a redundant belt-and-suspenders
+// check. Runs only when request_type_id is present; a legacy ticket with no
+// request type has no field definitions to check against.
+//
+// Checks: is_required (missing/empty rejected), and a basic per-field_type
+// shape check (number must be a real JS number; text/textarea/dropdown must
+// be a string). No value-list check for `dropdown` — service_custom_fields
+// has no "options" column yet (MIGRATION_047 didn't add one), so any
+// non-empty string passes for that type; a real known gap, not something
+// silently skipped without a trace.
+async function validateDynamicData(companyId: string, requestTypeId: string, dynamicData: Record<string, unknown>): Promise<void> {
+  const fields = await pool.query(
+    `SELECT field_key, field_label, field_type, is_required
+     FROM service_custom_fields WHERE company_id = $1 AND request_type_id = $2`,
+    [companyId, requestTypeId]
+  );
+
+  for (const field of fields.rows) {
+    const value = dynamicData[field.field_key];
+    const isEmpty = value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
+
+    if (field.is_required && isEmpty) {
+      throw new AppError(400, `${field.field_label} (${field.field_key}) is required`);
+    }
+    if (isEmpty) continue; // optional and not provided — nothing further to check for this field
+
+    if (field.field_type === 'number' && typeof value !== 'number') {
+      throw new AppError(400, `${field.field_label} (${field.field_key}) must be a number`);
+    }
+    if ((field.field_type === 'text' || field.field_type === 'textarea' || field.field_type === 'dropdown') && typeof value !== 'string') {
+      throw new AppError(400, `${field.field_label} (${field.field_key}) must be a string`);
+    }
+  }
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const params: unknown[] = [companyId];
@@ -180,6 +218,13 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       throw new AppError(400, 'dynamic_data must be an object');
     }
     finalDynamicData = dynamic_data;
+  }
+
+  // Step 2.5: enforce the request type's own field definitions server-side.
+  // Only runs when a request_type_id was actually provided and validated
+  // above — a plain legacy ticket has no custom fields to check against.
+  if (finalRequestTypeId) {
+    await validateDynamicData(companyId, finalRequestTypeId, finalDynamicData);
   }
 
   const policy = await pool.query(

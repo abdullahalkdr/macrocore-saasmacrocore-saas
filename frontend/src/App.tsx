@@ -31,6 +31,7 @@ import PerformancePage from './pages/PerformancePage';
 import SLAManagementPage from './pages/SLAManagementPage';
 import PoliciesPage from './pages/PoliciesPage';
 import SupportTicketsPage from './pages/SupportTicketsPage';
+import ServiceCatalogSettingsPage from './pages/ServiceCatalogSettingsPage';
 import SettingsPage from './pages/SettingsPage';
 import AccountSettingsPage from './pages/account/AccountSettingsPage';
 import AttendancePage from './pages/AttendancePage';
@@ -276,6 +277,19 @@ export default function App() {
               }
             />
             <Route path="/support" element={<SupportTicketsPage />} />
+            {/* Service Catalog management (ITSM pivot Step 3) — gated the same
+                as SLAManagementPage/the old ticket_categories admin tab
+                (MANAGER_ROLES), matching what the backend actually allows
+                (serviceCategories/serviceRequestTypes/serviceCustomFields
+                routes require admin OR manager, not admin-only). */}
+            <Route
+              path="/service-catalog"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <ServiceCatalogSettingsPage />
+                </RequireRole>
+              }
+            />
             <Route path="/attendance" element={<AttendancePage />} />
             <Route path="/leave-requests" element={<LeaveRequestsPage />} />
             <Route path="/policies" element={<PoliciesPage />} />

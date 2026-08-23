@@ -1,13 +1,13 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { get, post, patch, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import { useAuthStore } from '../store/authStore';
-import { useTicketCategoriesStore, TicketCategory } from '../store/useTicketCategoriesStore';
+import { useServiceCatalogStore, ServiceCategory, ServiceRequestType, ServiceCustomField } from '../store/useServiceCatalogStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconChevronRight } from '../components/Icon';
 
 interface Ticket {
   id: string;
@@ -16,6 +16,13 @@ interface Ticket {
   priority: string;
   category: string;
   category_id: string | null;
+  request_type_id: string | null;
+  dynamic_data: Record<string, unknown>;
+  assigned_to: string | null;
+  created_by: string;
+  sla_resolution_due_at: string | null;
+  sla_resolution_breached: boolean;
+  resolved_at: string | null;
   created_at: string;
 }
 interface Reply {
@@ -28,12 +35,21 @@ interface Reply {
 interface TicketDetail extends Ticket {
   description: string;
   replies: Reply[];
+  request_type_name?: string;
+  request_type_name_en?: string;
+}
+interface CompanyUser {
+  id: string;
+  email: string;
+  full_name: string | null;
 }
 
-// Mirrors supportTickets.controller.ts's CATEGORIES array (MIGRATION_043) —
-// the create-form's fallback when /api/ticket-categories has nothing yet
-// (empty company, or the request failed). Real per-company categories from
-// MIGRATION_046 are preferred whenever there's at least one.
+// MIGRATION_043's original hardcoded category strings — the ONLY thing left
+// that still reads t.support.legacyCategory. Tickets filed before the ITSM
+// pivot (or that never had a category_id at all) can still carry one of
+// these in the plain `category` VARCHAR; MIGRATION_047's own data migration
+// backfilled request_type_id onto every ticket that HAD a category_id, so
+// this is purely the deepest legacy fallback now, not a form option anymore.
 const LEGACY_CATEGORIES = ['general', 'leave', 'grievance', 'document_request', 'payroll', 'it', 'other'] as const;
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
@@ -41,42 +57,42 @@ const statusTagColor = (s: string): 'green' | 'red' | 'amber' | 'gray' =>
   s === 'open' ? 'green' : s === 'closed' ? 'gray' : s === 'resolved' ? 'green' : 'amber';
 const priorityTagColor = (p: string): 'green' | 'red' | 'amber' | 'gray' => (p === 'high' ? 'red' : p === 'medium' ? 'amber' : 'gray');
 
+// ITSM pivot Step 3 — hard cutover (Principal Architect decision: no parallel
+// old/new UI). The old flat ticket-create modal + ticket_categories admin
+// tab are gone; this page is now the Service Portal (catalog browse ->
+// dynamic ticket form) for everyone, and an Agent Queue (filters + extra
+// columns) for admin/manager. Managing the catalog itself moved to its own
+// Settings page (ServiceCatalogSettingsPage.tsx / /service-catalog) — this
+// page only ever READS categories/requestTypes/customFields now.
 export default function SupportTicketsPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
   const user = useAuthStore((s) => s.user);
-  // Same admin/manager check PolicyDetailsModal uses for its own role-gated
-  // section — no separate macrocore support-staff role exists in this schema
-  // yet (see supportTickets.controller.ts's reply()).
   const isManager = user?.role === 'admin' || user?.role === 'manager';
 
-  const categories = useTicketCategoriesStore((s) => s.categories);
-  const fetchCategories = useTicketCategoriesStore((s) => s.fetchCategories);
-  const categoriesLoading = useTicketCategoriesStore((s) => s.loading);
-  const createCategory = useTicketCategoriesStore((s) => s.createCategory);
-  const updateCategory = useTicketCategoriesStore((s) => s.updateCategory);
-  const removeCategory = useTicketCategoriesStore((s) => s.removeCategory);
+  const categories = useServiceCatalogStore((s) => s.categories);
+  const requestTypes = useServiceCatalogStore((s) => s.requestTypes);
+  const customFields = useServiceCatalogStore((s) => s.customFields);
+  const fetchAll = useServiceCatalogStore((s) => s.fetchAll);
   useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
-  const hasDynamicCategories = categories.length > 0;
+    fetchAll();
+  }, [fetchAll]);
 
-  // Categories admin tab (admin/manager only, per the AskUserQuestion decision:
-  // a tab inside this page rather than a separate route/nav item). Employees
-  // never see the tab bar at all, so `tab` effectively stays 'tickets' for them.
-  const [tab, setTab] = useState<'tickets' | 'categories'>('tickets');
-
-  function categoryName(cat: TicketCategory): string {
-    return lang === 'ar' ? cat.name : cat.name_en || cat.name;
+  function localName(item: { name: string; name_en: string | null }): string {
+    return lang === 'ar' ? item.name : item.name_en || item.name;
   }
-  // Backward compatibility (Step 3, item 4): category_id wins when a ticket has
-  // one; older tickets (or ones created before this company had any
-  // ticket_categories rows) fall back to the legacy `category` string, which
-  // the backend always sets regardless (defaults to 'general').
-  function ticketCategoryLabel(tk: Ticket): string {
-    if (tk.category_id) {
-      const match = categories.find((c) => c.id === tk.category_id);
-      if (match) return categoryName(match);
+
+  // request_type_id is the canonical source for every categorized ticket now
+  // (MIGRATION_047 backfilled it onto anything that had a category_id) — the
+  // plain `category` string is only consulted as the deepest legacy
+  // fallback, for a ticket that predates even ticket_categories.
+  function ticketTypeLabel(tk: Ticket | TicketDetail): string {
+    if ('request_type_name' in tk && tk.request_type_name) {
+      return lang === 'ar' ? tk.request_type_name : tk.request_type_name_en || tk.request_type_name;
+    }
+    if (tk.request_type_id) {
+      const match = requestTypes.find((rt) => rt.id === tk.request_type_id);
+      if (match) return localName(match);
     }
     return t.support.legacyCategory[tk.category as keyof typeof t.support.legacyCategory] ?? tk.category;
   }
@@ -94,144 +110,139 @@ export default function SupportTicketsPage() {
   };
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [open, setOpen] = useState(false);
-  const [subject, setSubject] = useState('');
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState('medium');
-  const [categoryId, setCategoryId] = useState('');
-  const [legacyCategory, setLegacyCategory] = useState<string>('general');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TicketDetail | null>(null);
-  const [replyMsg, setReplyMsg] = useState('');
-  const [markInternal, setMarkInternal] = useState(false);
-
-  // --- Categories admin tab state ---
-  interface CategoryDraft {
-    name: string;
-    name_en: string;
-    is_hr_sensitive: boolean;
-  }
-  const EMPTY_CATEGORY_DRAFT: CategoryDraft = { name: '', name_en: '', is_hr_sensitive: false };
-  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
-  const [newCategoryDraft, setNewCategoryDraft] = useState<CategoryDraft>(EMPTY_CATEGORY_DRAFT);
-  const [savingCategoryId, setSavingCategoryId] = useState<string | null>(null); // a category id, or 'new'
-  const [savedCategoryId, setSavedCategoryId] = useState<string | null>(null);
-  const [categoryError, setCategoryError] = useState<string | null>(null);
-
-  // Same sync-from-server pattern SLAManagementPage uses: overwrite every
-  // row's draft whenever the store's category list changes (covers the
-  // initial load and the refetch each create/update/remove triggers).
-  useEffect(() => {
-    setCategoryDrafts((d) => {
-      const next = { ...d };
-      for (const c of categories) {
-        next[c.id] = { name: c.name, name_en: c.name_en || '', is_hr_sensitive: c.is_hr_sensitive };
-      }
-      return next;
-    });
-  }, [categories]);
-
-  function patchCategoryDraft(id: string, patch: Partial<CategoryDraft>) {
-    setCategoryDrafts((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
-  }
-
-  async function handleSaveCategory(id: string) {
-    const draft = categoryDrafts[id];
-    if (!draft || !draft.name.trim()) {
-      setCategoryError(t.support.categoryNameRequired);
-      return;
-    }
-    setSavingCategoryId(id);
-    setCategoryError(null);
-    setSavedCategoryId(null);
-    try {
-      await updateCategory(id, { name: draft.name.trim(), name_en: draft.name_en.trim() || null, is_hr_sensitive: draft.is_hr_sensitive });
-      setSavedCategoryId(id);
-      setTimeout(() => setSavedCategoryId((cur) => (cur === id ? null : cur)), 2000);
-    } catch (err) {
-      setCategoryError(err instanceof ApiError ? err.message : t.support.categorySaveFailed);
-    } finally {
-      setSavingCategoryId(null);
-    }
-  }
-
-  async function handleDeleteCategory(id: string) {
-    // Deleting only clears category_id on tickets that use it (ON DELETE SET
-    // NULL, MIGRATION_046) — it never touches the tickets themselves. The
-    // confirm message says so explicitly rather than reading like data loss.
-    if (!window.confirm(t.support.deleteCategoryConfirm)) return;
-    setSavingCategoryId(id);
-    setCategoryError(null);
-    try {
-      await removeCategory(id);
-    } catch (err) {
-      setCategoryError(err instanceof ApiError ? err.message : t.support.categoryDeleteFailed);
-    } finally {
-      setSavingCategoryId(null);
-    }
-  }
-
-  async function handleAddCategory(e: FormEvent) {
-    e.preventDefault();
-    if (!newCategoryDraft.name.trim()) {
-      setCategoryError(t.support.categoryNameRequired);
-      return;
-    }
-    setSavingCategoryId('new');
-    setCategoryError(null);
-    try {
-      await createCategory({
-        name: newCategoryDraft.name.trim(),
-        name_en: newCategoryDraft.name_en.trim() || null,
-        is_hr_sensitive: newCategoryDraft.is_hr_sensitive,
-      });
-      setNewCategoryDraft(EMPTY_CATEGORY_DRAFT);
-    } catch (err) {
-      setCategoryError(err instanceof ApiError ? err.message : t.support.categorySaveFailed);
-    } finally {
-      setSavingCategoryId(null);
-    }
-  }
 
   function load() {
     get<{ tickets: Ticket[] }>('/support/tickets')
       .then((r) => setTickets(r.tickets))
       .catch((err) => setError(err instanceof ApiError ? err.message : t.support.loadFailed));
   }
-
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Company users — only fetched for admin/manager, used for the Reporter
+  // column (resolving created_by) and the Assignee picker/column. A plain
+  // employee never sees either, so there's no reason to pull the whole
+  // company's user list into their session.
+  const [companyUsers, setCompanyUsers] = useState<CompanyUser[]>([]);
+  useEffect(() => {
+    if (!isManager) return;
+    get<{ users: CompanyUser[] }>('/users')
+      .then((r) => setCompanyUsers(r.users))
+      .catch(() => {});
+  }, [isManager]);
+  function userLabel(id: string | null): string {
+    if (!id) return t.support.unassigned;
+    const u = companyUsers.find((c) => c.id === id);
+    return u ? u.full_name || u.email : id;
+  }
+
+  // --- Agent queue filters (admin/manager only; client-side — ticket volume
+  // at this scale doesn't warrant round-tripping every filter combination
+  // through the API, and the backend's list() filters don't support an
+  // "assigned_to IS NULL" query anyway). ---
+  const [assignedFilter, setAssignedFilter] = useState<'all' | 'mine' | 'unassigned'>('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [requestTypeFilter, setRequestTypeFilter] = useState('');
+  const visibleTickets = useMemo(() => {
+    if (!isManager) return tickets;
+    return tickets.filter((tk) => {
+      if (assignedFilter === 'mine' && tk.assigned_to !== user?.id) return false;
+      if (assignedFilter === 'unassigned' && tk.assigned_to !== null) return false;
+      if (statusFilter && tk.status !== statusFilter) return false;
+      if (requestTypeFilter && tk.request_type_id !== requestTypeFilter) return false;
+      return true;
+    });
+  }, [tickets, isManager, assignedFilter, statusFilter, requestTypeFilter, user?.id]);
+
+  function slaTag(tk: Ticket) {
+    if (tk.resolved_at) return <Tag color="green">{statusLabel.resolved}</Tag>;
+    if (tk.sla_resolution_breached) return <Tag color="red">{t.support.slaBreached}</Tag>;
+    if (!tk.sla_resolution_due_at) return <span className="muted">{t.support.slaNotSet}</span>;
+    return <Tag color="green">{t.support.slaOnTrack}</Tag>;
+  }
+
+  // --- Portal: catalog browse (category -> request type) -> dynamic form ---
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [portalStep, setPortalStep] = useState<'category' | 'requestType' | 'form'>('category');
+  const [portalCategoryId, setPortalCategoryId] = useState<string | null>(null);
+  const [portalRequestTypeId, setPortalRequestTypeId] = useState<string | null>(null);
+
+  const [subject, setSubject] = useState('');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState('medium');
+  const [dynamicValues, setDynamicValues] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  function openPortal() {
+    setPortalOpen(true);
+    setPortalStep('category');
+    setPortalCategoryId(null);
+    setPortalRequestTypeId(null);
+    setSubject('');
+    setDescription('');
+    setPriority('medium');
+    setDynamicValues({});
+    setError(null);
+  }
+
+  function pickCategory(id: string | null) {
+    setPortalCategoryId(id);
+    setPortalStep('requestType');
+  }
+  function pickRequestType(id: string) {
+    setPortalRequestTypeId(id);
+    setDynamicValues({});
+    setPortalStep('form');
+  }
+  function skipToGeneralRequest() {
+    setPortalCategoryId(null);
+    setPortalRequestTypeId(null);
+    setDynamicValues({});
+    setPortalStep('form');
+  }
+
+  const fieldsForForm: ServiceCustomField[] = portalRequestTypeId ? customFields.filter((f) => f.request_type_id === portalRequestTypeId) : [];
+  const requestTypesForCategory: ServiceRequestType[] = requestTypes.filter((rt) => rt.category_id === portalCategoryId);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    setLoading(true);
+    setSubmitting(true);
     try {
+      // Server-side validation (Step 2.5) is the real enforcement — this is
+      // just a friendlier pre-check so a missing required field doesn't
+      // round-trip to the server just to bounce back with a 400.
+      for (const f of fieldsForForm) {
+        if (f.is_required && !dynamicValues[f.field_key]?.trim()) {
+          throw new ApiError(400, `${lang === 'ar' ? f.field_label : f.field_label_en || f.field_label} (${t.serviceCatalog.isRequiredLabel})`);
+        }
+      }
+      const dynamic_data: Record<string, unknown> = {};
+      for (const f of fieldsForForm) {
+        const raw = dynamicValues[f.field_key];
+        if (raw === undefined || raw === '') continue;
+        dynamic_data[f.field_key] = f.field_type === 'number' ? Number(raw) : raw;
+      }
       await post('/support/tickets', {
         subject,
         description,
         priority,
-        // Exactly one of the two, matching whichever mode the form is in —
-        // sending category_id from a stale/mismatched form state a company
-        // doesn't have would just get rejected by the backend's own
-        // cross-tenant check for no benefit.
-        ...(hasDynamicCategories ? { category_id: categoryId || undefined } : { category: legacyCategory }),
+        ...(portalRequestTypeId ? { request_type_id: portalRequestTypeId, dynamic_data } : {}),
       });
-      setSubject('');
-      setDescription('');
-      setPriority('medium');
-      setCategoryId('');
-      setLegacyCategory('general');
-      setOpen(false);
+      setPortalOpen(false);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.support.saveFailed);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }
+
+  // --- Ticket detail ---
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<TicketDetail | null>(null);
+  const [replyMsg, setReplyMsg] = useState('');
+  const [markInternal, setMarkInternal] = useState(false);
 
   function openTicket(id: string) {
     setOpenId(id);
@@ -245,10 +256,6 @@ export default function SupportTicketsPage() {
     e.preventDefault();
     if (!openId || !replyMsg.trim()) return;
     try {
-      // Only sent at all when isManager — an employee's client never even
-      // offers the checkbox (see the reply form below), and the backend
-      // downgrades it to false anyway if it somehow arrived (defense in
-      // depth, not something the UI needs to duplicate).
       await post(`/support/tickets/${openId}/reply`, {
         message: replyMsg,
         ...(isManager ? { is_internal_note: markInternal } : {}),
@@ -272,134 +279,72 @@ export default function SupportTicketsPage() {
     }
   }
 
+  async function changeAssignee(assigned_to: string) {
+    if (!openId) return;
+    try {
+      await patch(`/support/tickets/${openId}`, { assigned_to: assigned_to || null });
+      openTicket(openId);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.support.assignFailed);
+    }
+  }
+
+  // dynamic_data key -> the field's own definition, when it still exists
+  // (a field can be deleted after tickets were filed against it — the value
+  // stays on the ticket, just falls back to the raw key as its label).
+  function fieldDefFor(key: string): ServiceCustomField | undefined {
+    return customFields.find((f) => f.field_key === key && f.request_type_id === detail?.request_type_id);
+  }
+
   return (
     <div>
       <PageHeader title={t.support.title} subtitle={t.support.subtitle} />
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Employees never see a second tab (only admin/manager can manage
-          categories), so the bar itself is admin/manager-only — same
-          isManager gate the internal-note checkbox already uses below. */}
-      {isManager && (
-        <div className="tabs">
-          <button type="button" className={`tab-btn${tab === 'tickets' ? ' active' : ''}`} onClick={() => setTab('tickets')}>
-            {t.support.tabTickets}
-          </button>
-          <button type="button" className={`tab-btn${tab === 'categories' ? ' active' : ''}`} onClick={() => setTab('categories')}>
-            {t.support.tabCategories}
-          </button>
-        </div>
-      )}
-
-      {tab === 'categories' && isManager ? (
-        <div className="card">
-          <div className="card-body">
-            <p className="muted" style={{ marginBottom: 14 }}>
-              {t.support.categoriesHint}
-            </p>
-            {categoryError && <div className="error-banner">{categoryError}</div>}
-
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>{t.support.categoryNameLabel}</th>
-                    <th>{t.support.categoryNameEnLabel}</th>
-                    <th>{t.support.hrSensitive}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {categories.map((c) => {
-                    const draft = categoryDrafts[c.id] ?? { name: c.name, name_en: c.name_en || '', is_hr_sensitive: c.is_hr_sensitive };
-                    return (
-                      <tr key={c.id}>
-                        <td>
-                          <input value={draft.name} onChange={(e) => patchCategoryDraft(c.id, { name: e.target.value })} />
-                        </td>
-                        <td>
-                          <input value={draft.name_en} onChange={(e) => patchCategoryDraft(c.id, { name_en: e.target.value })} />
-                        </td>
-                        <td>
-                          <input
-                            type="checkbox"
-                            style={{ width: 'auto' }}
-                            checked={draft.is_hr_sensitive}
-                            title={t.support.hrSensitiveHint}
-                            onChange={(e) => patchCategoryDraft(c.id, { is_hr_sensitive: e.target.checked })}
-                          />
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            type="button"
-                            onClick={() => handleSaveCategory(c.id)}
-                            disabled={savingCategoryId === c.id}
-                          >
-                            {savingCategoryId === c.id ? t.common.loading : t.common.save}
-                          </button>{' '}
-                          {savedCategoryId === c.id && <Tag color="green">{t.support.categorySaved}</Tag>}{' '}
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            type="button"
-                            onClick={() => handleDeleteCategory(c.id)}
-                            disabled={savingCategoryId === c.id}
-                          >
-                            {t.common.delete}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {categories.length === 0 && !categoriesLoading && (
-                    <tr>
-                      <td colSpan={4}>
-                        <div className="empty-state">{t.support.categoriesEmpty}</div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="hr" style={{ margin: '16px 0' }} />
-
-            <form onSubmit={handleAddCategory} className="form-row">
-              <div className="field" style={{ flex: 1 }}>
-                <label>{t.support.categoryNameLabel}</label>
-                <input value={newCategoryDraft.name} onChange={(e) => setNewCategoryDraft((d) => ({ ...d, name: e.target.value }))} />
-              </div>
-              <div className="field" style={{ flex: 1 }}>
-                <label>{t.support.categoryNameEnLabel}</label>
-                <input value={newCategoryDraft.name_en} onChange={(e) => setNewCategoryDraft((d) => ({ ...d, name_en: e.target.value }))} />
-              </div>
-              <div className="field">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    style={{ width: 'auto' }}
-                    checked={newCategoryDraft.is_hr_sensitive}
-                    onChange={(e) => setNewCategoryDraft((d) => ({ ...d, is_hr_sensitive: e.target.checked }))}
-                  />
-                  <span style={{ fontSize: 13 }}>{t.support.hrSensitive}</span>
-                </label>
-              </div>
-              <div className="field" style={{ justifyContent: 'flex-end' }}>
-                <button className="btn btn-primary" type="submit" disabled={savingCategoryId === 'new'}>
-                  {savingCategoryId === 'new' ? t.common.loading : t.support.addCategory}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : (
-        <>
       <div className="section-title-row">
-        <span className="muted">{t.support.count(tickets.length)}</span>
-        <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
+        <span className="muted">{t.support.count(visibleTickets.length)}</span>
+        <button className="btn btn-primary btn-sm" onClick={openPortal}>
           <IconPlus /> {t.support.newItem}
         </button>
       </div>
+
+      {isManager && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="card-body" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+            <div className="field" style={{ maxWidth: 200 }}>
+              <label>{t.support.assignee}</label>
+              <select value={assignedFilter} onChange={(e) => setAssignedFilter(e.target.value as typeof assignedFilter)}>
+                <option value="all">{t.support.filterAll}</option>
+                <option value="mine">{t.support.filterAssignedToMe}</option>
+                <option value="unassigned">{t.support.filterUnassigned}</option>
+              </select>
+            </div>
+            <div className="field" style={{ maxWidth: 180 }}>
+              <label>{t.support.status}</label>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="">{t.support.filterAnyStatus}</option>
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {statusLabel[s]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field" style={{ maxWidth: 220 }}>
+              <label>{t.support.requestType}</label>
+              <select value={requestTypeFilter} onChange={(e) => setRequestTypeFilter(e.target.value)}>
+                <option value="">{t.support.filterAnyRequestType}</option>
+                {requestTypes.map((rt) => (
+                  <option key={rt.id} value={rt.id}>
+                    {localName(rt)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="table-wrap">
@@ -407,29 +352,35 @@ export default function SupportTicketsPage() {
             <thead>
               <tr>
                 <th>{t.support.subject}</th>
-                <th>{t.support.category}</th>
+                {isManager && <th>{t.support.reporter}</th>}
+                {isManager && <th>{t.support.assignee}</th>}
+                <th>{t.support.requestType}</th>
                 <th>{t.support.priority}</th>
                 <th>{t.support.status}</th>
+                {isManager && <th>{t.support.timeToResolution}</th>}
                 <th>{t.support.created}</th>
               </tr>
             </thead>
             <tbody>
-              {tickets.map((tk) => (
+              {visibleTickets.map((tk) => (
                 <tr key={tk.id} onClick={() => openTicket(tk.id)} style={{ cursor: 'pointer' }}>
                   <td style={{ fontWeight: 700 }}>{tk.subject}</td>
-                  <td className="muted">{ticketCategoryLabel(tk)}</td>
+                  {isManager && <td className="muted">{userLabel(tk.created_by)}</td>}
+                  {isManager && <td className="muted">{userLabel(tk.assigned_to)}</td>}
+                  <td className="muted">{ticketTypeLabel(tk)}</td>
                   <td>
                     <Tag color={priorityTagColor(tk.priority)}>{priorityLabel[tk.priority] || tk.priority}</Tag>
                   </td>
                   <td>
                     <Tag color={statusTagColor(tk.status)}>{statusLabel[tk.status] || tk.status}</Tag>
                   </td>
+                  {isManager && <td>{slaTag(tk)}</td>}
                   <td>{new Date(tk.created_at).toLocaleDateString()}</td>
                 </tr>
               ))}
-              {tickets.length === 0 && (
+              {visibleTickets.length === 0 && (
                 <tr>
-                  <td colSpan={5}>
+                  <td colSpan={isManager ? 8 : 5}>
                     <div className="empty-state">{t.support.empty}</div>
                   </td>
                 </tr>
@@ -450,18 +401,60 @@ export default function SupportTicketsPage() {
             </div>
 
             <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
-              {t.support.category}: {ticketCategoryLabel(detail)}
+              {t.support.requestType}: {ticketTypeLabel(detail)}
             </div>
 
-            <div className="field" style={{ maxWidth: 200, marginBottom: 14 }}>
-              <label>{t.support.status}</label>
-              <select value={detail.status} onChange={(e) => changeStatus(e.target.value)}>
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {statusLabel[s]}
-                  </option>
-                ))}
-              </select>
+            {/* dynamic_data — shown above the reply thread, per the ITSM
+                portal spec. Falls back to the raw key/value when a field's
+                own definition was since deleted. */}
+            {Object.keys(detail.dynamic_data || {}).length > 0 && (
+              <div className="card" style={{ background: 'var(--surface-alt)', marginBottom: 14 }}>
+                <div className="card-body" style={{ padding: 12 }}>
+                  <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                    {t.support.additionalDetails}
+                  </div>
+                  <div className="field-grid">
+                    {Object.entries(detail.dynamic_data).map(([key, value]) => {
+                      const def = fieldDefFor(key);
+                      const label = def ? (lang === 'ar' ? def.field_label : def.field_label_en || def.field_label) : key;
+                      return (
+                        <div key={key}>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {label}
+                          </div>
+                          <div style={{ fontWeight: 600 }}>{String(value)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="form-row" style={{ marginBottom: 14 }}>
+              <div className="field" style={{ maxWidth: 200 }}>
+                <label>{t.support.status}</label>
+                <select value={detail.status} onChange={(e) => changeStatus(e.target.value)}>
+                  {STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {statusLabel[s]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {isManager && (
+                <div className="field" style={{ maxWidth: 220 }}>
+                  <label>{t.support.assignee}</label>
+                  <select value={detail.assigned_to || ''} onChange={(e) => changeAssignee(e.target.value)}>
+                    <option value="">{t.support.assignTo}</option>
+                    {companyUsers.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.full_name || u.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="hr" />
@@ -496,9 +489,6 @@ export default function SupportTicketsPage() {
                   </button>
                 </div>
               </div>
-              {/* Role-based rendering: a standard employee never sees this at all
-                  (not just disabled) — matches how PolicyDetailsModal gates its
-                  own admin/manager-only roles section. */}
               {isManager && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 8 }}>
                   <input type="checkbox" checked={markInternal} onChange={(e) => setMarkInternal(e.target.checked)} style={{ width: 'auto' }} />
@@ -513,66 +503,144 @@ export default function SupportTicketsPage() {
         </div>
       )}
 
-      {open && (
+      {portalOpen && (
         <Modal
-          title={t.support.newItem}
-          onClose={() => setOpen(false)}
-          actions={(requestClose) => (
-            <>
-              <button className="btn btn-primary" type="submit" form="ticket-form" disabled={loading}>
-                {loading ? t.common.loading : t.common.save}
-              </button>
-              <button className="btn btn-secondary" type="button" onClick={requestClose}>
-                {t.common.cancel}
-              </button>
-            </>
-          )}
+          title={
+            portalStep === 'category'
+              ? t.support.portalTitle
+              : portalStep === 'requestType'
+              ? categories.find((c) => c.id === portalCategoryId)
+                ? localName(categories.find((c) => c.id === portalCategoryId) as ServiceCategory)
+                : t.support.portalTitle
+              : t.support.newItem
+          }
+          onClose={() => setPortalOpen(false)}
+          actions={
+            portalStep === 'form'
+              ? (requestClose) => (
+                  <>
+                    <button className="btn btn-primary" type="submit" form="ticket-form" disabled={submitting}>
+                      {submitting ? t.common.loading : t.common.save}
+                    </button>
+                    <button className="btn btn-secondary" type="button" onClick={requestClose}>
+                      {t.common.cancel}
+                    </button>
+                  </>
+                )
+              : undefined
+          }
         >
-          <form id="ticket-form" onSubmit={handleSubmit} className="field-grid">
-            <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>{t.support.subject}</label>
-              <input value={subject} onChange={(e) => setSubject(e.target.value)} required autoFocus />
-            </div>
-            <div className="field">
-              <label>{t.support.priority}</label>
-              <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-                <option value="low">{t.support.priorityLow}</option>
-                <option value="medium">{t.support.priorityMedium}</option>
-                <option value="high">{t.support.priorityHigh}</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>{t.support.category}</label>
-              {hasDynamicCategories ? (
-                <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                  <option value="">{t.support.noCategory}</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {categoryName(c)}
-                    </option>
-                  ))}
-                </select>
+          {portalStep === 'category' && (
+            <div>
+              <p className="muted" style={{ marginBottom: 14 }}>
+                {t.support.portalHint}
+              </p>
+              {categories.length === 0 ? (
+                <div className="empty-state">{t.support.noCategoriesYet}</div>
               ) : (
-                // Fallback (Step 3, item 2): ticket_categories is empty or
-                // failed to load — degrade to the legacy hardcoded list rather
-                // than leaving the form without a category field at all.
-                <select value={legacyCategory} onChange={(e) => setLegacyCategory(e.target.value)}>
-                  {LEGACY_CATEGORIES.map((key) => (
-                    <option key={key} value={key}>
-                      {t.support.legacyCategory[key]}
-                    </option>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {categories.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ justifyContent: 'space-between', width: '100%' }}
+                      onClick={() => pickCategory(c.id)}
+                    >
+                      <span>{localName(c)}</span>
+                      <IconChevronRight />
+                    </button>
                   ))}
-                </select>
+                </div>
+              )}
+              <div className="hr" style={{ margin: '14px 0' }} />
+              <button type="button" className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={skipToGeneralRequest}>
+                {t.support.noRequestType}
+              </button>
+            </div>
+          )}
+
+          {portalStep === 'requestType' && (
+            <div>
+              <button type="button" className="btn btn-secondary btn-sm" style={{ marginBottom: 14 }} onClick={() => setPortalStep('category')}>
+                ← {t.support.backToCategories}
+              </button>
+              {requestTypesForCategory.length === 0 ? (
+                <div className="empty-state">{t.support.noRequestTypesInCategory}</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {requestTypesForCategory.map((rt) => (
+                    <button
+                      key={rt.id}
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ justifyContent: 'space-between', width: '100%' }}
+                      onClick={() => pickRequestType(rt.id)}
+                    >
+                      <span>{localName(rt)}</span>
+                      <IconChevronRight />
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
-            <div className="field" style={{ gridColumn: '1 / -1' }}>
-              <label>{t.support.description}</label>
-              <textarea value={description} onChange={(e) => setDescription(e.target.value)} required />
-            </div>
-          </form>
+          )}
+
+          {portalStep === 'form' && (
+            <form id="ticket-form" onSubmit={handleSubmit} className="field-grid">
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>{t.support.subject}</label>
+                <input value={subject} onChange={(e) => setSubject(e.target.value)} required autoFocus />
+              </div>
+              <div className="field">
+                <label>{t.support.priority}</label>
+                <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+                  <option value="low">{t.support.priorityLow}</option>
+                  <option value="medium">{t.support.priorityMedium}</option>
+                  <option value="high">{t.support.priorityHigh}</option>
+                </select>
+              </div>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>{t.support.description}</label>
+                <textarea value={description} onChange={(e) => setDescription(e.target.value)} required />
+              </div>
+
+              {/* Form Renderer — one input per service_custom_fields row for
+                  the chosen request type. `dropdown` has no options list in
+                  the schema yet (MIGRATION_047 didn't add one — documented in
+                  supportTickets.controller.ts's validateDynamicData()), so it
+                  renders as a plain text input for now, same as `text`. */}
+              {fieldsForForm.length > 0 && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div className="hr" style={{ margin: '4px 0 12px' }} />
+                  <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                    {t.support.additionalDetails}
+                  </div>
+                </div>
+              )}
+              {fieldsForForm.map((f) => {
+                const fieldLabel = lang === 'ar' ? f.field_label : f.field_label_en || f.field_label;
+                const value = dynamicValues[f.field_key] ?? '';
+                const setValue = (v: string) => setDynamicValues((d) => ({ ...d, [f.field_key]: v }));
+                return (
+                  <div className="field" key={f.id} style={f.field_type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
+                    <label>
+                      {fieldLabel}
+                      {f.is_required && <span style={{ color: 'var(--danger)' }}> *</span>}
+                    </label>
+                    {f.field_type === 'textarea' ? (
+                      <textarea value={value} onChange={(e) => setValue(e.target.value)} required={f.is_required} />
+                    ) : f.field_type === 'number' ? (
+                      <input type="number" className="num" value={value} onChange={(e) => setValue(e.target.value)} required={f.is_required} />
+                    ) : (
+                      <input value={value} onChange={(e) => setValue(e.target.value)} required={f.is_required} />
+                    )}
+                  </div>
+                );
+              })}
+            </form>
+          )}
         </Modal>
-      )}
-        </>
       )}
     </div>
   );
