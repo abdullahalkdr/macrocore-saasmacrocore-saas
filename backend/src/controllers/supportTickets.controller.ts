@@ -29,16 +29,21 @@ const DEFAULT_SLA_MINUTES: Record<string, { response: number; resolution: number
   urgent: { response: 30, resolution: 240 },
 };
 
-const TICKET_FIELDS = `id, subject, description, status, priority, category, category_id, assigned_to, created_by,
+// ITSM pivot (MIGRATION_047): request_type_id/dynamic_data added alongside
+// the existing category/category_id pair, not replacing them yet — a ticket
+// can carry both the legacy category and the new request_type_id at once
+// during the transition (see MIGRATION_047's own header, decision 1).
+const TICKET_FIELDS = `id, subject, description, status, priority, category, category_id, request_type_id, dynamic_data,
+       assigned_to, created_by,
        first_response_at, resolved_at, sla_response_due_at, sla_resolution_due_at,
        sla_response_breached, sla_resolution_breached, escalation_level, escalated_to, escalated_at,
        created_at, updated_at`;
 // Same field list, table-alias-qualified — needed only where the query joins
 // another table (getOne's HR lookup) and an unqualified `id`/`created_at`/etc.
-// would otherwise be ambiguous against ticket_categories' own columns of the
-// same name. Postgres still returns these under their bare column names
-// (e.g. `t.status` comes back as `status`), so the row shape is identical to
-// plain TICKET_FIELDS — nothing downstream needs to know which was used.
+// would otherwise be ambiguous against ticket_categories'/service_request_types'
+// own columns of the same name. Postgres still returns these under their bare
+// column names (e.g. `t.status` comes back as `status`), so the row shape is
+// identical to plain TICKET_FIELDS — nothing downstream needs to know which was used.
 const TICKET_FIELDS_QUALIFIED = TICKET_FIELDS.split(',')
   .map((f) => `t.${f.trim()}`)
   .join(', ');
@@ -48,12 +53,13 @@ const TICKET_FIELDS_QUALIFIED = TICKET_FIELDS.split(',')
 // had zero scoping before this review — any employee could read every other
 // employee's tickets) and the new HR-category isolation for admin/manager.
 //
-// HR-sensitivity is checked two ways: the legacy `category` string against
-// HR_CATEGORIES (MIGRATION_043's original mechanism), OR `category_id`
-// pointing at a ticket_categories row with is_hr_sensitive = true
-// (MIGRATION_046's tenant-configurable path, added in Step 2). Both are
-// checked so isolation holds for a ticket regardless of which one it used —
-// dropping either check would silently widen HR ticket visibility.
+// HR-sensitivity is checked three ways now: the legacy `category` string against
+// HR_CATEGORIES (MIGRATION_043's original mechanism), `category_id` pointing at a
+// ticket_categories row with is_hr_sensitive = true (MIGRATION_046), OR
+// `request_type_id` pointing at a service_request_types row with
+// is_hr_sensitive = true (MIGRATION_047, the ITSM pivot). All three are checked so
+// isolation holds for a ticket regardless of which one it used — dropping any of
+// them would silently widen HR ticket visibility.
 async function visibilityFilter(auth: { userId: string; role: string }, params: unknown[]): Promise<string> {
   if (auth.role === 'employee') {
     params.push(auth.userId);
@@ -70,16 +76,19 @@ async function visibilityFilter(auth: { userId: string; role: string }, params: 
     AND NOT EXISTS (
       SELECT 1 FROM ticket_categories tc WHERE tc.id = support_tickets.category_id AND tc.is_hr_sensitive = true
     )
+    AND NOT EXISTS (
+      SELECT 1 FROM service_request_types rt WHERE rt.id = support_tickets.request_type_id AND rt.is_hr_sensitive = true
+    )
   ))`;
 }
 
 async function canAccessTicket(
   auth: { userId: string; role: string },
-  ticket: { created_by: string; category: string; category_is_hr_sensitive?: boolean }
+  ticket: { created_by: string; category: string; category_is_hr_sensitive?: boolean; request_type_is_hr_sensitive?: boolean }
 ): Promise<boolean> {
   if (ticket.created_by === auth.userId) return true;
   if (auth.role === 'employee') return false;
-  const isHr = HR_CATEGORIES.includes(ticket.category) || ticket.category_is_hr_sensitive === true;
+  const isHr = HR_CATEGORIES.includes(ticket.category) || ticket.category_is_hr_sensitive === true || ticket.request_type_is_hr_sensitive === true;
   if (isHr) return hasPermission(auth.userId, 'view_hr_tickets');
   return true;
 }
@@ -89,8 +98,37 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const params: unknown[] = [companyId];
   const visibility = await visibilityFilter(req.auth!, params);
 
+  // ITSM pivot: agent-queue filtering via optional query params. Every one
+  // of these is additive and independently optional — a request with none
+  // of them reproduces the exact prior behavior byte-for-byte. Invalid/
+  // unrecognized status or priority values are silently ignored (not
+  // rejected) rather than erroring, matching this controller's existing
+  // style for soft/optional input elsewhere (finalPriority/finalCategory in
+  // create()). assigned_to/request_type_id aren't validated against the
+  // caller's own company here — an id from another tenant just matches zero
+  // rows (already scoped by company_id = $1), no data can leak.
+  const filters: string[] = [];
+  const { assigned_to, status, priority, request_type_id } = req.query;
+  if (typeof status === 'string' && STATUSES.includes(status)) {
+    params.push(status);
+    filters.push(`status = $${params.length}`);
+  }
+  if (typeof priority === 'string' && PRIORITIES.includes(priority)) {
+    params.push(priority);
+    filters.push(`priority = $${params.length}`);
+  }
+  if (typeof request_type_id === 'string') {
+    params.push(request_type_id);
+    filters.push(`request_type_id = $${params.length}`);
+  }
+  if (typeof assigned_to === 'string') {
+    params.push(assigned_to);
+    filters.push(`assigned_to = $${params.length}`);
+  }
+  const filterSql = filters.length ? ` AND ${filters.join(' AND ')}` : '';
+
   const result = await pool.query(
-    `SELECT ${TICKET_FIELDS} FROM support_tickets WHERE company_id = $1${visibility} ORDER BY created_at DESC`,
+    `SELECT ${TICKET_FIELDS} FROM support_tickets WHERE company_id = $1${visibility}${filterSql} ORDER BY created_at DESC`,
     params
   );
   res.status(200).json({ success: true, tickets: result.rows });
@@ -98,13 +136,13 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { subject, description, priority, category, category_id } = req.body ?? {};
+  const { subject, description, priority, category, category_id, request_type_id, dynamic_data } = req.body ?? {};
 
   if (typeof subject !== 'string' || subject.trim().length < 1) throw new AppError(400, 'subject is required');
   if (typeof description !== 'string' || description.trim().length < 1) throw new AppError(400, 'description is required');
   const finalPriority = typeof priority === 'string' && PRIORITIES.includes(priority) ? priority : 'medium';
   // Legacy string category — kept exactly as before as a fallback for clients
-  // (older mobile builds, etc.) that don't send category_id yet.
+  // (older mobile builds, etc.) that don't send category_id/request_type_id yet.
   const finalCategory = typeof category === 'string' && CATEGORIES.includes(category) ? category : 'general';
 
   // category_id is optional and additive. When present it must belong to the
@@ -119,6 +157,31 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     finalCategoryId = category_id;
   }
 
+  // ITSM pivot: request_type_id, same cross-tenant-validation shape as
+  // category_id above. A ticket can carry both at once during the
+  // transition — which one the create-ticket UI actually offers per company
+  // is a frontend decision (Step 3+), not enforced here.
+  let finalRequestTypeId: string | null = null;
+  if (request_type_id !== undefined && request_type_id !== null) {
+    if (typeof request_type_id !== 'string') throw new AppError(400, 'request_type_id must be a string');
+    const rtCheck = await pool.query('SELECT id FROM service_request_types WHERE id = $1 AND company_id = $2', [request_type_id, companyId]);
+    if (!rtCheck.rows[0]) throw new AppError(400, 'request_type_id does not belong to this company');
+    finalRequestTypeId = request_type_id;
+  }
+
+  // dynamic_data: shape check only (must be a plain JSON object, not an
+  // array or primitive) — validating individual keys against
+  // service_custom_fields' field definitions (required fields, per-
+  // field_type value checks) is not built yet; open item in the ITSM pivot
+  // decision log, not a silent gap.
+  let finalDynamicData: Record<string, unknown> = {};
+  if (dynamic_data !== undefined && dynamic_data !== null) {
+    if (typeof dynamic_data !== 'object' || Array.isArray(dynamic_data)) {
+      throw new AppError(400, 'dynamic_data must be an object');
+    }
+    finalDynamicData = dynamic_data;
+  }
+
   const policy = await pool.query(
     'SELECT response_minutes, resolution_minutes FROM sla_policies WHERE company_id = $1 AND priority = $2',
     [companyId, finalPriority]
@@ -129,10 +192,24 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `INSERT INTO support_tickets
-       (company_id, created_by, subject, description, priority, category, category_id, sla_response_due_at, sla_resolution_due_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8::int * INTERVAL '1 minute'), NOW() + ($9::int * INTERVAL '1 minute'))
+       (company_id, created_by, subject, description, priority, category, category_id, request_type_id, dynamic_data,
+        sla_response_due_at, sla_resolution_due_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
+             NOW() + ($10::int * INTERVAL '1 minute'), NOW() + ($11::int * INTERVAL '1 minute'))
      RETURNING ${TICKET_FIELDS}`,
-    [companyId, req.auth!.userId, subject.trim(), description.trim(), finalPriority, finalCategory, finalCategoryId, responseMinutes, resolutionMinutes]
+    [
+      companyId,
+      req.auth!.userId,
+      subject.trim(),
+      description.trim(),
+      finalPriority,
+      finalCategory,
+      finalCategoryId,
+      finalRequestTypeId,
+      JSON.stringify(finalDynamicData),
+      responseMinutes,
+      resolutionMinutes,
+    ]
   );
   const ticket = result.rows[0];
 
@@ -146,9 +223,13 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const ticketResult = await pool.query(
-    `SELECT ${TICKET_FIELDS_QUALIFIED}, COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive
+    `SELECT ${TICKET_FIELDS_QUALIFIED},
+            COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+            COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
+            rt.name AS request_type_name, rt.name_en AS request_type_name_en
      FROM support_tickets t
      LEFT JOIN ticket_categories tc ON tc.id = t.category_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
@@ -172,9 +253,13 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const isPlainCreator = req.auth!.role === 'employee' && ticket.created_by === req.auth!.userId;
   const replies = isPlainCreator ? repliesResult.rows.filter((r) => !r.is_internal_note) : repliesResult.rows;
 
-  // category_is_hr_sensitive is a join-only helper for canAccessTicket() above,
-  // never part of the ticket's public shape — strip it before responding.
-  const { category_is_hr_sensitive, ...publicTicket } = ticket;
+  // category_is_hr_sensitive/request_type_is_hr_sensitive are join-only
+  // helpers for canAccessTicket() above, never part of the ticket's public
+  // shape — strip before responding. request_type_name/_en ARE part of the
+  // public shape (ITSM pivot Step 2 spec: embed the resolved name here,
+  // unlike category_id which the frontend resolves client-side against its
+  // own /ticket-categories fetch).
+  const { category_is_hr_sensitive, request_type_is_hr_sensitive, ...publicTicket } = ticket;
 
   res.status(200).json({ success: true, ticket: publicTicket, replies });
 });
@@ -188,10 +273,13 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
   if (is_internal_note !== undefined && typeof is_internal_note !== 'boolean') throw new AppError(400, 'is_internal_note must be a boolean');
 
   const ticket = await pool.query(
-    `SELECT t.id, t.created_by, t.category, t.category_id, COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id,
+            COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+            COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.first_response_at, t.sla_response_due_at
      FROM support_tickets t
      LEFT JOIN ticket_categories tc ON tc.id = t.category_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
@@ -235,30 +323,33 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
 export const updateStatus = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { status, category_id } = req.body ?? {};
+  const { status, category_id, assigned_to } = req.body ?? {};
 
-  if (status === undefined && category_id === undefined) {
-    throw new AppError(400, 'Provide at least one of: status, category_id');
+  if (status === undefined && category_id === undefined && assigned_to === undefined) {
+    throw new AppError(400, 'Provide at least one of: status, category_id, assigned_to');
   }
   if (status !== undefined && !STATUSES.includes(status)) {
     throw new AppError(400, `status must be one of ${STATUSES.join(', ')}`);
   }
 
   const existing = await pool.query(
-    `SELECT t.id, t.created_by, t.category, t.category_id, COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id,
+            COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+            COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.resolved_at, t.sla_resolution_due_at
      FROM support_tickets t
      LEFT JOIN ticket_categories tc ON tc.id = t.category_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
   if (!existing.rows[0]) throw new AppError(404, 'Ticket not found');
   if (!(await canAccessTicket(req.auth!, existing.rows[0]))) throw new AppError(404, 'Ticket not found');
 
-  // category_id, like create()'s, must belong to the same tenant. null is a
-  // valid, explicit "clear it" (unlike most COALESCE-on-omit updates
-  // elsewhere in this codebase) — touchesCategory tracks whether the field
-  // was sent at all, separately from what value it should end up as.
+  // category_id is explicit-null-vs-omitted aware (unlike most COALESCE-on-
+  // omit updates elsewhere in this codebase) — null clears it, omitted
+  // leaves it alone. touchesCategory tracks whether the field was sent at
+  // all, separately from what value it should end up as.
   let touchesCategory = false;
   let nextCategoryId: string | null = null;
   if (category_id !== undefined) {
@@ -271,6 +362,30 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     }
   }
 
+  // ITSM pivot: agent assignment. Reuses this existing endpoint rather than
+  // a separate /assign route (per the pivot plan's own "updateStatus() or a
+  // new assign endpoint" wording) — one fewer route, and assignment is just
+  // another field-level update like category_id already is above.
+  //
+  // Only admin/manager can actually change it. A plain employee sending
+  // assigned_to gets it silently ignored (touchesAssignment stays false, so
+  // the UPDATE below leaves assigned_to exactly as it was) rather than
+  // rejected — matches this controller's existing convention for
+  // unauthorized-but-harmless input (see reply()'s is_internal_note
+  // downgrade, right above in this same file).
+  const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
+  let touchesAssignment = false;
+  let nextAssignedTo: string | null = null;
+  if (assigned_to !== undefined && isManager) {
+    touchesAssignment = true;
+    if (assigned_to !== null) {
+      if (typeof assigned_to !== 'string') throw new AppError(400, 'assigned_to must be a string or null');
+      const userCheck = await pool.query('SELECT id FROM users WHERE id = $1 AND company_id = $2', [assigned_to, companyId]);
+      if (!userCheck.rows[0]) throw new AppError(400, 'assigned_to does not belong to this company');
+      nextAssignedTo = assigned_to;
+    }
+  }
+
   const closing = status === 'resolved' || status === 'closed';
   const stampResolved = closing && !existing.rows[0].resolved_at;
 
@@ -278,12 +393,13 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     `UPDATE support_tickets
      SET status = COALESCE($1, status),
          category_id = CASE WHEN $2 THEN $3::uuid ELSE category_id END,
-         resolved_at = CASE WHEN $4 THEN NOW() ELSE resolved_at END,
-         sla_resolution_breached = CASE WHEN $4 THEN (NOW() > sla_resolution_due_at) ELSE sla_resolution_breached END,
+         assigned_to = CASE WHEN $4 THEN $5::uuid ELSE assigned_to END,
+         resolved_at = CASE WHEN $6 THEN NOW() ELSE resolved_at END,
+         sla_resolution_breached = CASE WHEN $6 THEN (NOW() > sla_resolution_due_at) ELSE sla_resolution_breached END,
          updated_at = NOW()
-     WHERE id = $5 AND company_id = $6
+     WHERE id = $7 AND company_id = $8
      RETURNING ${TICKET_FIELDS}`,
-    [status ?? null, touchesCategory, nextCategoryId, stampResolved, id, companyId]
+    [status ?? null, touchesCategory, nextCategoryId, touchesAssignment, nextAssignedTo, stampResolved, id, companyId]
   );
   if (!result.rows[0]) throw new AppError(404, 'Ticket not found');
 
@@ -292,6 +408,9 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   }
   if (touchesCategory) {
     await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_category_reassigned', entityType: 'support_tickets', entityId: id as string, req });
+  }
+  if (touchesAssignment) {
+    await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_assigned', entityType: 'support_tickets', entityId: id as string, req });
   }
 
   res.status(200).json({ success: true, ticket: result.rows[0] });

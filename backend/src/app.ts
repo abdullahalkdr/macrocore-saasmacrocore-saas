@@ -19,6 +19,9 @@ import wasteRecordsRoutes from './routes/wasteRecords.routes';
 import payrollRoutes from './routes/payroll.routes';
 import supportTicketsRoutes from './routes/supportTickets.routes';
 import ticketCategoriesRoutes from './routes/ticketCategories.routes';
+import serviceCategoriesRoutes from './routes/serviceCategories.routes';
+import serviceRequestTypesRoutes from './routes/serviceRequestTypes.routes';
+import serviceCustomFieldsRoutes from './routes/serviceCustomFields.routes';
 import syncRoutes from './routes/sync.routes';
 import adminRoutes from './routes/admin.routes';
 import attendanceRoutes from './routes/attendance.routes';
@@ -106,6 +109,15 @@ app.use('/api/support/tickets', supportTicketsRoutes);
 // auth + active-subscription gate — a blocked company can still file a
 // ticket to ask for help, but shouldn't need to redefine its category list.
 app.use('/api/ticket-categories', ...guarded, ticketCategoriesRoutes);
+// ITSM pivot (MIGRATION_047) — additive alongside /api/ticket-categories
+// above, not replacing it yet (see the pivot decision log: full cutover is
+// a later step). Same auth + active-subscription gate, no plan tier, same
+// reasoning as ticket-categories: this is catalog *management*, not
+// filing/reading a ticket, so it doesn't need the ungated exemption
+// /api/support/tickets itself has.
+app.use('/api/service-categories', ...guarded, serviceCategoriesRoutes);
+app.use('/api/service-request-types', ...guarded, serviceRequestTypesRoutes);
+app.use('/api/service-custom-fields', ...guarded, serviceCustomFieldsRoutes);
 app.use('/api/sync', ...guarded, syncRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/attendance', ...silver('Attendance tracking'), attendanceRoutes);
