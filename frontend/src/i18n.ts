@@ -63,6 +63,7 @@ const en = {
     unsavedChangesTitle: 'Unsaved changes',
     discardChanges: 'Discard changes',
     keepEditing: 'Keep editing',
+    confirmDeleteTitle: 'Confirm delete',
   },
   nav: {
     groupGeneral: 'General',
@@ -2019,6 +2020,7 @@ const ar: typeof en = {
     unsavedChangesTitle: 'تعديلات غير محفوظة',
     discardChanges: 'تجاهل التعديلات',
     keepEditing: 'الرجوع للتعديل',
+    confirmDeleteTitle: 'تأكيد الحذف',
   },
   nav: {
     groupGeneral: 'عام',

@@ -3,6 +3,7 @@ import { get, post, del, ApiError } from '../api/client';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { IconPlus } from '../components/Icon';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { useAuthStore } from '../store/authStore';
 import { useLangStore } from '../store/langStore';
 import { useT } from '../i18n';
@@ -47,6 +48,7 @@ export default function StockTransfersPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   function load() {
     Promise.all([
@@ -67,8 +69,10 @@ export default function StockTransfersPage() {
   }
   const selectedMaterialUnit = materials.find((m) => m.id === rawMaterialId)?.package_unit || '';
 
-  async function handleDelete(id: string) {
-    if (!window.confirm(t.stockTransfers.undoConfirm)) return;
+  async function handleDelete() {
+    const id = confirmDeleteId;
+    if (!id) return;
+    setConfirmDeleteId(null);
     setError(null);
     try {
       await del(`/stock-transfers/${id}`);
@@ -137,7 +141,7 @@ export default function StockTransfersPage() {
                   <td>{new Date(tr.created_at).toLocaleString(lang === 'ar' ? 'ar-KW' : 'en-GB')}</td>
                   {isPrivileged && (
                     <td>
-                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(tr.id)}>
+                      <button className="btn btn-sm btn-danger" onClick={() => setConfirmDeleteId(tr.id)}>
                         {t.stockTransfers.undo}
                       </button>
                     </td>
@@ -218,6 +222,14 @@ export default function StockTransfersPage() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          message={t.stockTransfers.undoConfirm}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
       )}
     </div>
   );

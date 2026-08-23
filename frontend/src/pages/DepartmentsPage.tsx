@@ -1,10 +1,11 @@
-import { FormEvent, Fragment, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useT } from '../i18n';
 import { get, ApiError } from '../api/client';
 import { useDepartmentsStore, Department } from '../store/useDepartmentsStore';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import Tag from '../components/Tag';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
@@ -74,6 +75,8 @@ export default function DepartmentsPage() {
   const [rolesForId, setRolesForId] = useState<string | null>(null);
   const rolesForDept = rolesForId ? departments.find((d) => d.id === rolesForId) || null : null;
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   function displayName(d: Pick<Department, 'name' | 'name_en'>): string {
     return lang === 'ar' ? d.name : d.name_en || d.name;
   }
@@ -120,8 +123,10 @@ export default function DepartmentsPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm(t.departments.deleteConfirm)) return;
+  async function handleDelete() {
+    const id = confirmDeleteId;
+    if (!id) return;
+    setConfirmDeleteId(null);
     setError(null);
     try {
       await removeDepartment(id);
@@ -149,7 +154,7 @@ export default function DepartmentsPage() {
           <button className="icon-btn" title={t.common.delete} onClick={() => openEdit(d)}>
             <IconEdit />
           </button>
-          <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(d.id)}>
+          <button className="icon-btn" title={t.common.delete} onClick={() => setConfirmDeleteId(d.id)}>
             <IconTrash />
           </button>
         </td>
@@ -271,6 +276,14 @@ export default function DepartmentsPage() {
           removeRole={removeRole}
         />
       )}
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          message={t.departments.deleteConfirm}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -303,6 +316,7 @@ function ManageRolesModal({
   const [savingId, setSavingId] = useState<string | null>(null); // a role id, or 'new'
   const [drafts, setDrafts] = useState<Record<string, RoleDraft>>({});
   const [newRole, setNewRole] = useState<RoleDraft>({ name: '', name_en: '' });
+  const [confirmDeleteRoleId, setConfirmDeleteRoleId] = useState<string | null>(null);
 
   useEffect(() => {
     setDrafts(Object.fromEntries(department.roles.map((r) => [r.id, { name: r.name, name_en: r.name_en || '' }])));
@@ -341,8 +355,10 @@ function ManageRolesModal({
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm(t.departments.deleteRoleConfirm)) return;
+  async function handleDelete() {
+    const id = confirmDeleteRoleId;
+    if (!id) return;
+    setConfirmDeleteRoleId(null);
     setSavingId(id);
     setError(null);
     try {
@@ -355,54 +371,37 @@ function ManageRolesModal({
   }
 
   return (
+    <>
     <Modal title={`${t.departments.manageRolesTitle} — ${lang === 'ar' ? department.name : department.name_en}`} onClose={onClose}>
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>{t.departments.roleNameLabel}</th>
-              <th>{t.departments.roleNameEnLabel}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {department.roles.map((r) => (
-              <Fragment key={r.id}>
-                <tr>
-                  <td>
-                    <input
-                      value={draftFor(r.id).name}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name: e.target.value } }))}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={draftFor(r.id).name_en}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name_en: e.target.value } }))}
-                    />
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="btn btn-primary btn-sm" type="button" onClick={() => handleSave(r.id)} disabled={savingId === r.id}>
-                      {savingId === r.id ? t.common.loading : t.common.save}
-                    </button>{' '}
-                    <button className="icon-btn" onClick={() => handleDelete(r.id)}>
-                      <IconTrash />
-                    </button>
-                  </td>
-                </tr>
-              </Fragment>
-            ))}
-            {department.roles.length === 0 && (
-              <tr>
-                <td colSpan={3}>
-                  <div className="empty-state">{t.departments.rolesEmpty}</div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="role-list">
+        <div className="role-row role-row-head">
+          <span>{t.departments.roleNameLabel}</span>
+          <span>{t.departments.roleNameEnLabel}</span>
+          <span />
+        </div>
+        {department.roles.map((r) => (
+          <div className="role-row" key={r.id}>
+            <input
+              value={draftFor(r.id).name}
+              onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name: e.target.value } }))}
+            />
+            <input
+              value={draftFor(r.id).name_en}
+              onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name_en: e.target.value } }))}
+            />
+            <div className="role-row-actions">
+              <button className="btn btn-primary btn-sm" type="button" onClick={() => handleSave(r.id)} disabled={savingId === r.id}>
+                {savingId === r.id ? t.common.loading : t.common.save}
+              </button>
+              <button className="icon-btn" onClick={() => setConfirmDeleteRoleId(r.id)}>
+                <IconTrash />
+              </button>
+            </div>
+          </div>
+        ))}
+        {department.roles.length === 0 && <div className="empty-state">{t.departments.rolesEmpty}</div>}
       </div>
 
       <div className="hr" style={{ margin: '14px 0' }} />
@@ -423,5 +422,14 @@ function ManageRolesModal({
         </div>
       </form>
     </Modal>
+
+    {confirmDeleteRoleId && (
+      <ConfirmDialog
+        message={t.departments.deleteRoleConfirm}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDeleteRoleId(null)}
+      />
+    )}
+    </>
   );
 }

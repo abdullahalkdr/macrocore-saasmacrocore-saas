@@ -156,7 +156,19 @@ tr:hover td { background: var(--surface-alt); }
 
 .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 12px; color: var(--muted); font-weight: 700; }
-.field input, .field select, .field textarea {
+/* Global UI/UX polish -- Step 1 (Global Typography & Input Sizing). Promoted
+   from .field-scoped to app-wide: every native input/select/textarea gets
+   the same Tajawal font, 13px size, padding and rounded border the styled
+   <select>s already had -- not just inputs sitting inside a .field wrapper.
+   Several dynamic list rows (Manage Roles below, Service Catalog's inline
+   table-cell inputs) render bare <input> with none of this, so English text
+   fell back to the browser's larger unstyled default and looked mismatched
+   next to Arabic. Checkbox/radio/range/color/file keep their native widget
+   (textbox padding/border-radius doesn't apply meaningfully to those). */
+input, select, textarea { font-family: inherit; }
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+select,
+textarea {
   padding: 9px 10px;
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -165,7 +177,9 @@ tr:hover td { background: var(--surface-alt); }
   outline: none;
   color: var(--text);
 }
-.field input:focus, .field select:focus, .field textarea:focus {
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):focus,
+select:focus,
+textarea:focus {
   border-color: var(--amber-400);
   box-shadow: 0 0 0 2px rgba(251, 191, 36, .25);
 }
@@ -377,12 +391,29 @@ table.data-table th { font-size: 11px; }
   display: flex; align-items: center; justify-content: center;
   z-index: 200; padding: 16px;
 }
-.modal-box { background: var(--surface); color: var(--text); border-radius: 16px; max-width: 520px; width: 100%; max-height: 88vh; overflow-y: auto; }
-.modal-head { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+/* Global UI/UX polish -- Step 3 (Sticky Modal Headers & Footers). The box is
+   a column flex container capped at 85vh; only .modal-body scrolls
+   internally, so .modal-head (title + X) and .modal-actions (Save/Cancel)
+   stay put no matter how long the form is -- previously the whole box
+   scrolled as one unit, so on long forms (e.g. the employee modal) the X
+   and the Save button both disappeared off-screen until you scrolled all
+   the way down. */
+.modal-box {
+  background: var(--surface); color: var(--text); border-radius: 16px;
+  max-width: 520px; width: 100%; max-height: 85vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-head {
+  flex-shrink: 0; position: sticky; top: 0; z-index: 10; background: var(--surface);
+  padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;
+}
 .modal-head h3 { margin: 0; font-size: 16px; font-weight: 800; }
 .modal-close { background: none; border: none; color: var(--muted); padding: 4px; cursor: pointer; }
-.modal-body { padding: 18px 20px; }
-.modal-actions { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-start; }
+.modal-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
+.modal-actions {
+  flex-shrink: 0; position: sticky; bottom: 0; z-index: 10; background: var(--surface);
+  padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-start;
+}
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .tab-btn {
@@ -498,4 +529,19 @@ tr:hover .print-btn { opacity: 1; }
    JS sets for the desktop/tablet case. */
 @media (max-width: 480px) {
   .nav-flyout { left: 12px !important; right: 12px !important; width: auto !important; }
+}
+
+/* ---------- Manage Roles modal: responsive row grid (no horizontal scroll) ----------
+   Global UI/UX polish -- Step 2. A <table> sizes its columns to the intrinsic
+   width of the <input>s inside them, which overflowed the 520px modal box
+   and forced .table-wrap's horizontal scrollbar. A CSS Grid with 1fr tracks
+   lets both inputs shrink to fit the modal instead -- this list never needs
+   to scroll sideways. */
+.role-list { display: flex; flex-direction: column; gap: 6px; }
+.role-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; }
+.role-row input { width: 100%; min-width: 0; }
+.role-row-head { font-size: 11px; font-weight: 700; color: var(--muted); padding: 0 2px 2px; }
+.role-row-actions { display: flex; gap: 4px; white-space: nowrap; }
+@media (max-width: 480px) {
+  .role-row:not(.role-row-head) { grid-template-columns: 1fr; }
 }

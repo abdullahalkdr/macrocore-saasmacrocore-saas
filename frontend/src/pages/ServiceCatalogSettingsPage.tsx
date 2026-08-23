@@ -11,6 +11,7 @@ import {
 } from '../store/useServiceCatalogStore';
 import PageHeader from '../components/PageHeader';
 import Tag from '../components/Tag';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const FIELD_TYPES: CustomFieldType[] = ['text', 'textarea', 'number', 'dropdown'];
 
@@ -52,6 +53,10 @@ export default function ServiceCatalogSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null); // a row id, or 'new'
   const [savedId, setSavedId] = useState<string | null>(null);
+  // Pending destructive action awaiting confirmation via <ConfirmDialog> (replaces
+  // window.confirm() -- see Global UI/UX polish Step 4). One shared slot covers all
+  // 3 delete kinds on this page since only one confirm dialog can be open at a time.
+  const [pendingDelete, setPendingDelete] = useState<{ kind: 'category' | 'requestType' | 'field'; id: string } | null>(null);
 
   function flashSaved(id: string) {
     setSavedId(id);
@@ -127,7 +132,6 @@ export default function ServiceCatalogSettingsPage() {
   }
 
   async function handleDeleteCategory(id: string) {
-    if (!window.confirm(t.serviceCatalog.deleteCategoryConfirm)) return;
     setSavingId(id);
     setError(null);
     try {
@@ -201,7 +205,6 @@ export default function ServiceCatalogSettingsPage() {
   }
 
   async function handleDeleteRequestType(id: string) {
-    if (!window.confirm(t.serviceCatalog.deleteRequestTypeConfirm)) return;
     setSavingId(id);
     setError(null);
     try {
@@ -290,7 +293,6 @@ export default function ServiceCatalogSettingsPage() {
   }
 
   async function handleDeleteField(id: string) {
-    if (!window.confirm(t.serviceCatalog.deleteFieldConfirm)) return;
     setSavingId(id);
     setError(null);
     try {
@@ -351,7 +353,7 @@ export default function ServiceCatalogSettingsPage() {
                             {savingId === c.id ? t.common.loading : t.common.save}
                           </button>{' '}
                           {savedId === c.id && <Tag color="green">{t.serviceCatalog.saved}</Tag>}{' '}
-                          <button className="btn btn-secondary btn-sm" type="button" onClick={() => handleDeleteCategory(c.id)} disabled={savingId === c.id}>
+                          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setPendingDelete({ kind: 'category', id: c.id })} disabled={savingId === c.id}>
                             {t.common.delete}
                           </button>
                         </td>
@@ -439,7 +441,7 @@ export default function ServiceCatalogSettingsPage() {
                             {savingId === rt.id ? t.common.loading : t.common.save}
                           </button>{' '}
                           {savedId === rt.id && <Tag color="green">{t.serviceCatalog.saved}</Tag>}{' '}
-                          <button className="btn btn-secondary btn-sm" type="button" onClick={() => handleDeleteRequestType(rt.id)} disabled={savingId === rt.id}>
+                          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setPendingDelete({ kind: 'requestType', id: rt.id })} disabled={savingId === rt.id}>
                             {t.common.delete}
                           </button>
                         </td>
@@ -565,7 +567,7 @@ export default function ServiceCatalogSettingsPage() {
                                 {savingId === f.id ? t.common.loading : t.common.save}
                               </button>{' '}
                               {savedId === f.id && <Tag color="green">{t.serviceCatalog.saved}</Tag>}{' '}
-                              <button className="btn btn-secondary btn-sm" type="button" onClick={() => handleDeleteField(f.id)} disabled={savingId === f.id}>
+                              <button className="btn btn-secondary btn-sm" type="button" onClick={() => setPendingDelete({ kind: 'field', id: f.id })} disabled={savingId === f.id}>
                                 {t.common.delete}
                               </button>
                             </td>
@@ -624,6 +626,26 @@ export default function ServiceCatalogSettingsPage() {
             )}
           </div>
         </div>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          message={
+            pendingDelete.kind === 'category'
+              ? t.serviceCatalog.deleteCategoryConfirm
+              : pendingDelete.kind === 'requestType'
+                ? t.serviceCatalog.deleteRequestTypeConfirm
+                : t.serviceCatalog.deleteFieldConfirm
+          }
+          onConfirm={() => {
+            const { kind, id } = pendingDelete;
+            setPendingDelete(null);
+            if (kind === 'category') handleDeleteCategory(id);
+            else if (kind === 'requestType') handleDeleteRequestType(id);
+            else handleDeleteField(id);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
     </div>
   );
