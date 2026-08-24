@@ -67,7 +67,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await pool.query(
-    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id
+    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id AND c.company_id = q.company_id
      WHERE ${where} ORDER BY q.created_at DESC`,
     params
   );
@@ -79,7 +79,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const result = await pool.query(
-    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id
+    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id AND c.company_id = q.company_id
      WHERE q.id = $1 AND q.company_id = $2`,
     [id, companyId]
   );
@@ -216,7 +216,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'sales_quote_updated', entityType: 'sales_quotes', entityId: id as string, req });
 
   const full = await pool.query(
-    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id WHERE q.id = $1`,
+    `SELECT ${LIST_SELECT} FROM sales_quotes q LEFT JOIN customers c ON c.id = q.customer_id AND c.company_id = q.company_id WHERE q.id = $1`,
     [id]
   );
   const items2 = await fetchItems(id as string);

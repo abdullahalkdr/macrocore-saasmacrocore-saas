@@ -273,8 +273,8 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             rt.name AS request_type_name, rt.name_en AS request_type_name_en
      FROM support_tickets t
-     LEFT JOIN ticket_categories tc ON tc.id = t.category_id
-     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
+     LEFT JOIN ticket_categories tc ON tc.id = t.category_id AND tc.company_id = t.company_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id AND rt.company_id = t.company_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
@@ -323,8 +323,8 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.first_response_at, t.sla_response_due_at
      FROM support_tickets t
-     LEFT JOIN ticket_categories tc ON tc.id = t.category_id
-     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
+     LEFT JOIN ticket_categories tc ON tc.id = t.category_id AND tc.company_id = t.company_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id AND rt.company_id = t.company_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
@@ -383,8 +383,8 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.resolved_at, t.sla_resolution_due_at
      FROM support_tickets t
-     LEFT JOIN ticket_categories tc ON tc.id = t.category_id
-     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id
+     LEFT JOIN ticket_categories tc ON tc.id = t.category_id AND tc.company_id = t.company_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id AND rt.company_id = t.company_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );

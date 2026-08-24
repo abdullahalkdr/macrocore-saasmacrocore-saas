@@ -117,8 +117,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
             COALESCE(sale_totals.total_cash_sales, 0)::float AS total_cash_sales,
             COALESCE(cash_totals.counted_cash, 0)::float AS counted_cash
      FROM shifts s
-     LEFT JOIN employees e ON e.id = s.employee_id
-     LEFT JOIN locations l ON l.id = s.location_id
+     LEFT JOIN employees e ON e.id = s.employee_id AND e.company_id = s.company_id
+     LEFT JOIN locations l ON l.id = s.location_id AND l.company_id = s.company_id
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(total_price) FILTER (WHERE payment_method = 'cash'), 0) AS total_cash_sales
        FROM sales WHERE sales.shift_id = s.id
@@ -368,8 +368,8 @@ async function buildShiftDetail(companyId: string, id: string) {
     `SELECT s.id, s.employee_id, e.name AS employee_name, s.location_id, l.name AS location_name,
             s.date, s.opened_at, s.closed_at, s.status, s.closing_notes
      FROM shifts s
-     LEFT JOIN employees e ON e.id = s.employee_id
-     LEFT JOIN locations l ON l.id = s.location_id
+     LEFT JOIN employees e ON e.id = s.employee_id AND e.company_id = s.company_id
+     LEFT JOIN locations l ON l.id = s.location_id AND l.company_id = s.company_id
      WHERE s.id = $1 AND s.company_id = $2`,
     [id, companyId]
   );

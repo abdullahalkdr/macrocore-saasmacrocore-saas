@@ -93,8 +93,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name, d.name AS department_name, d.name_en AS department_name_en
      FROM employees e
-     LEFT JOIN locations l ON l.id = e.location_id
-     LEFT JOIN departments d ON d.id = e.department_id
+     LEFT JOIN locations l ON l.id = e.location_id AND l.company_id = e.company_id
+     LEFT JOIN departments d ON d.id = e.department_id AND d.company_id = e.company_id
      WHERE e.company_id = $1 ORDER BY e.created_at DESC`,
     [companyId]
   );
@@ -107,8 +107,8 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name, d.name AS department_name, d.name_en AS department_name_en
      FROM employees e
-     LEFT JOIN locations l ON l.id = e.location_id
-     LEFT JOIN departments d ON d.id = e.department_id
+     LEFT JOIN locations l ON l.id = e.location_id AND l.company_id = e.company_id
+     LEFT JOIN departments d ON d.id = e.department_id AND d.company_id = e.company_id
      WHERE e.id = $1 AND e.company_id = $2`,
     [id, companyId]
   );

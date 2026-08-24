@@ -42,7 +42,7 @@ const LIST_SELECT = `
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
-    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id
+    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id AND c.company_id = t.company_id
      WHERE t.company_id = $1 ORDER BY t.created_at DESC`,
     [companyId]
   );
@@ -53,7 +53,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
   const result = await pool.query(
-    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id
+    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id AND c.company_id = t.company_id
      WHERE t.id = $1 AND t.company_id = $2`,
     [id, companyId]
   );
@@ -162,7 +162,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'recurring_invoice_template_updated', entityType: 'recurring_invoice_templates', entityId: id as string, req });
 
   const full = await pool.query(
-    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id WHERE t.id = $1`,
+    `SELECT ${LIST_SELECT} FROM recurring_invoice_templates t LEFT JOIN customers c ON c.id = t.customer_id AND c.company_id = t.company_id WHERE t.id = $1`,
     [id]
   );
   const items2 = await fetchItems(id as string);

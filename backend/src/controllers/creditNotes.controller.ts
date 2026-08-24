@@ -57,8 +57,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
     `SELECT ${LIST_SELECT} FROM sales_credit_notes n
-     LEFT JOIN customers c ON c.id = n.customer_id
-     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id
+     LEFT JOIN customers c ON c.id = n.customer_id AND c.company_id = n.company_id
+     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id AND inv.company_id = n.company_id
      WHERE n.company_id = $1 ORDER BY n.created_at DESC`,
     [companyId]
   );
@@ -70,8 +70,8 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const result = await pool.query(
     `SELECT ${LIST_SELECT} FROM sales_credit_notes n
-     LEFT JOIN customers c ON c.id = n.customer_id
-     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id
+     LEFT JOIN customers c ON c.id = n.customer_id AND c.company_id = n.company_id
+     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id AND inv.company_id = n.company_id
      WHERE n.id = $1 AND n.company_id = $2`,
     [id, companyId]
   );
@@ -205,8 +205,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const full = await pool.query(
     `SELECT ${LIST_SELECT} FROM sales_credit_notes n
-     LEFT JOIN customers c ON c.id = n.customer_id
-     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id
+     LEFT JOIN customers c ON c.id = n.customer_id AND c.company_id = n.company_id
+     LEFT JOIN sales_invoices inv ON inv.id = n.source_invoice_id AND inv.company_id = n.company_id
      WHERE n.id = $1`,
     [id]
   );

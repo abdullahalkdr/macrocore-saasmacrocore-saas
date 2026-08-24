@@ -94,8 +94,8 @@ export const listAdjustments = asyncHandler(async (req: Request, res: Response) 
             l.name AS location_name,
             u.full_name AS created_by_name
      FROM stock_adjustments sa
-     JOIN raw_materials rm ON rm.id = sa.raw_material_id
-     JOIN locations l ON l.id = sa.location_id
+     JOIN raw_materials rm ON rm.id = sa.raw_material_id AND rm.company_id = sa.company_id
+     JOIN locations l ON l.id = sa.location_id AND l.company_id = sa.company_id
      LEFT JOIN users u ON u.id = sa.created_by
      WHERE ${where}
      ORDER BY sa.created_at DESC

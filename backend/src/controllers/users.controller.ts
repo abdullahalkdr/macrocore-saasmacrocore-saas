@@ -111,8 +111,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     `SELECT u.id, u.email, u.full_name, u.first_name, u.last_name, u.phone, u.job_title, u.role, u.status,
             u.employee_id, u.created_at, d.id AS department_id, d.name AS department_name, d.name_en AS department_name_en
      FROM users u
-     LEFT JOIN employees e ON e.id = u.employee_id
-     LEFT JOIN departments d ON d.id = e.department_id
+     LEFT JOIN employees e ON e.id = u.employee_id AND e.company_id = u.company_id
+     LEFT JOIN departments d ON d.id = e.department_id AND d.company_id = u.company_id
      WHERE ${whereJoined}
      ORDER BY u.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params

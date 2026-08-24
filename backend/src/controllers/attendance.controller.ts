@@ -114,7 +114,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     `SELECT ar.id, ar.employee_id, e.name AS employee_name, ar.date, ar.clock_in, ar.clock_out,
             ar.late_minutes, ar.deduction_amount, ar.status
      FROM attendance_records ar
-     JOIN employees e ON e.id = ar.employee_id
+     JOIN employees e ON e.id = ar.employee_id AND e.company_id = ar.company_id
      WHERE ${where} ORDER BY ar.date DESC, ar.clock_in DESC`,
     params
   );

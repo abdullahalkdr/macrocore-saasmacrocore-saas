@@ -45,7 +45,7 @@ export const listObjectives = asyncHandler(async (req: Request, res: Response) =
   const objectives = await pool.query(
     `SELECT o.id, o.employee_id, o.title, o.title_en, o.description, o.period_start, o.period_end,
             o.status, o.progress_pct, o.created_by, o.created_at, o.updated_at, e.name AS employee_name
-     FROM okr_objectives o JOIN employees e ON e.id = o.employee_id
+     FROM okr_objectives o JOIN employees e ON e.id = o.employee_id AND e.company_id = o.company_id
      WHERE ${where} ORDER BY o.period_start DESC, o.created_at DESC`,
     params
   );
@@ -78,6 +78,16 @@ export const createObjective = asyncHandler(async (req: Request, res: Response) 
     employee_id = await getOwnEmployeeId(req.auth!.userId, companyId);
   }
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
+
+  // Security fix (tenant-isolation audit, finding C4): identical gap to
+  // leaveRequests.controller.ts's C1 (Phase 1) — admin/manager-supplied employee_id
+  // was inserted with no company check. Only caught while confirming write-time
+  // validation as part of Phase 2's JOIN audit on this file.
+  if (req.auth!.role !== 'employee') {
+    const employeeCheck = await pool.query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [employee_id, companyId]);
+    if (employeeCheck.rows.length === 0) throw new AppError(400, 'employee_id not found');
+  }
+
   if (typeof title !== 'string' || !title.trim()) throw new AppError(400, 'title is required');
   if (typeof period_start !== 'string') throw new AppError(400, 'period_start is required (YYYY-MM-DD)');
   if (typeof period_end !== 'string') throw new AppError(400, 'period_end is required (YYYY-MM-DD)');
@@ -197,7 +207,7 @@ export const updateKeyResult = asyncHandler(async (req: Request, res: Response) 
   const { id } = req.params;
 
   const existing = await pool.query(
-    `SELECT kr.id, o.id AS objective_id FROM okr_key_results kr JOIN okr_objectives o ON o.id = kr.objective_id
+    `SELECT kr.id, o.id AS objective_id FROM okr_key_results kr JOIN okr_objectives o ON o.id = kr.objective_id AND o.company_id = kr.company_id
      WHERE kr.id = $1 AND kr.company_id = $2`,
     [id, companyId]
   );

@@ -14,7 +14,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     `SELECT rm.id, rm.name, rm.name_en, rm.category, rm.package_qty, rm.package_unit, rm.purchase_price,
             rm.supplier_name, rm.supplier_id, s.name AS supplier_display_name, rm.min_stock_qty, rm.created_at
      FROM raw_materials rm
-     LEFT JOIN suppliers s ON s.id = rm.supplier_id
+     LEFT JOIN suppliers s ON s.id = rm.supplier_id AND s.company_id = rm.company_id
      WHERE rm.company_id = $1 ORDER BY rm.created_at DESC`,
     [companyId]
   );

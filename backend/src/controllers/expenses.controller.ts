@@ -21,7 +21,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     `SELECT e.id, e.category, e.amount, e.description, e.receipt_image, e.location_id, e.expense_date,
             e.created_at, e.created_by, l.name AS location_name, u.full_name AS created_by_name
      FROM expenses e
-     LEFT JOIN locations l ON l.id = e.location_id
+     LEFT JOIN locations l ON l.id = e.location_id AND l.company_id = e.company_id
      LEFT JOIN users u ON u.id = e.created_by
      WHERE ${where}
      ORDER BY COALESCE(e.expense_date, e.created_at::date) DESC, e.created_at DESC`,

@@ -100,6 +100,17 @@ export const createRequests = asyncHandler(async (req: Request, res: Response) =
     }
   }
 
+  // Security fix (tenant-isolation audit, finding C5): subject_employee_id and
+  // reviewer_employee_id were inserted with NO company check at all — not even a
+  // self-pin fallback like C1/C4, since this endpoint is always admin/manager-only
+  // (route-gated). Batch-checks every referenced id in one query since a bulk
+  // assignment call can carry many requests.
+  const employeeIds = [...new Set(requests.flatMap((r) => [r.subject_employee_id, r.reviewer_employee_id]))];
+  const employeeCheck = await pool.query('SELECT id FROM employees WHERE id = ANY($1::uuid[]) AND company_id = $2', [employeeIds, companyId]);
+  if (employeeCheck.rows.length !== employeeIds.length) {
+    throw new AppError(400, 'One or more subject_employee_id/reviewer_employee_id values do not belong to this company');
+  }
+
   const client = await pool.connect();
   const created: unknown[] = [];
   try {
@@ -151,8 +162,8 @@ export const listRequests = asyncHandler(async (req: Request, res: Response) => 
     `SELECT fr.id, fr.cycle_id, fr.subject_employee_id, s.name AS subject_name, fr.reviewer_employee_id,
             r.name AS reviewer_name, fr.reviewer_type, fr.status, fr.overall_score, fr.submitted_at, fr.created_at
      FROM feedback_requests fr
-     JOIN employees s ON s.id = fr.subject_employee_id
-     JOIN employees r ON r.id = fr.reviewer_employee_id
+     JOIN employees s ON s.id = fr.subject_employee_id AND s.company_id = fr.company_id
+     JOIN employees r ON r.id = fr.reviewer_employee_id AND r.company_id = fr.company_id
      WHERE ${where} ORDER BY fr.created_at DESC`,
     params
   );
@@ -176,8 +187,8 @@ export const listMyRequests = asyncHandler(async (req: Request, res: Response) =
     `SELECT fr.id, fr.cycle_id, c.name AS cycle_name, fr.subject_employee_id, s.name AS subject_name,
             fr.reviewer_type, fr.status, fr.submitted_at, fr.created_at
      FROM feedback_requests fr
-     JOIN employees s ON s.id = fr.subject_employee_id
-     JOIN feedback_cycles c ON c.id = fr.cycle_id
+     JOIN employees s ON s.id = fr.subject_employee_id AND s.company_id = fr.company_id
+     JOIN feedback_cycles c ON c.id = fr.cycle_id AND c.company_id = fr.company_id
      WHERE ${where} ORDER BY fr.created_at DESC`,
     params
   );
@@ -271,7 +282,7 @@ export const getResults = asyncHandler(async (req: Request, res: Response) => {
 
   const summary = await pool.query(
     `SELECT fr.cycle_id, c.name AS cycle_name, COUNT(DISTINCT fr.id)::int AS reviewer_count, AVG(fr.overall_score) AS average_overall_score
-     FROM feedback_requests fr JOIN feedback_cycles c ON c.id = fr.cycle_id
+     FROM feedback_requests fr JOIN feedback_cycles c ON c.id = fr.cycle_id AND c.company_id = fr.company_id
      WHERE ${where} GROUP BY fr.cycle_id, c.name`,
     params
   );
@@ -279,8 +290,8 @@ export const getResults = asyncHandler(async (req: Request, res: Response) => {
   const perQuestion = await pool.query(
     `SELECT fa.question_id, q.question_text, q.question_text_en, AVG(fa.score) AS average_score, COUNT(*)::int AS answer_count
      FROM feedback_answers fa
-     JOIN feedback_requests fr ON fr.id = fa.feedback_request_id
-     JOIN appraisal_form_questions q ON q.id = fa.question_id
+     JOIN feedback_requests fr ON fr.id = fa.feedback_request_id AND fr.company_id = fa.company_id
+     JOIN appraisal_form_questions q ON q.id = fa.question_id AND q.company_id = fa.company_id
      WHERE ${where} GROUP BY fa.question_id, q.question_text, q.question_text_en`,
     params
   );

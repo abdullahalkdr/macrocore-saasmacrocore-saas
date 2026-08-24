@@ -28,8 +28,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `SELECT ${SELECT} FROM shift_schedules s
-     JOIN employees e ON e.id = s.employee_id
-     LEFT JOIN locations l ON l.id = s.location_id
+     JOIN employees e ON e.id = s.employee_id AND e.company_id = s.company_id
+     LEFT JOIN locations l ON l.id = s.location_id AND l.company_id = s.company_id
      WHERE ${where}
      ORDER BY s.date ASC, s.start_time ASC NULLS LAST`,
     params
@@ -63,7 +63,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'shift_schedule_created', entityType: 'shift_schedules', entityId: id, req });
 
   const full = await pool.query(
-    `SELECT ${SELECT} FROM shift_schedules s JOIN employees e ON e.id = s.employee_id LEFT JOIN locations l ON l.id = s.location_id WHERE s.id = $1`,
+    `SELECT ${SELECT} FROM shift_schedules s JOIN employees e ON e.id = s.employee_id AND e.company_id = s.company_id LEFT JOIN locations l ON l.id = s.location_id AND l.company_id = s.company_id WHERE s.id = $1`,
     [id]
   );
   res.status(201).json({ success: true, shift_schedule: full.rows[0] });
@@ -115,7 +115,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'shift_schedule_updated', entityType: 'shift_schedules', entityId: id as string, req });
 
   const full = await pool.query(
-    `SELECT ${SELECT} FROM shift_schedules s JOIN employees e ON e.id = s.employee_id LEFT JOIN locations l ON l.id = s.location_id WHERE s.id = $1`,
+    `SELECT ${SELECT} FROM shift_schedules s JOIN employees e ON e.id = s.employee_id AND e.company_id = s.company_id LEFT JOIN locations l ON l.id = s.location_id AND l.company_id = s.company_id WHERE s.id = $1`,
     [id]
   );
   res.status(200).json({ success: true, shift_schedule: full.rows[0] });

@@ -15,8 +15,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
     `SELECT ${LIST_SELECT} FROM customer_receipts r
-     LEFT JOIN customers c ON c.id = r.customer_id
-     LEFT JOIN sales_invoices i ON i.id = r.invoice_id
+     LEFT JOIN customers c ON c.id = r.customer_id AND c.company_id = r.company_id
+     LEFT JOIN sales_invoices i ON i.id = r.invoice_id AND i.company_id = r.company_id
      WHERE r.company_id = $1 ORDER BY r.receipt_date DESC, r.created_at DESC`,
     [companyId]
   );

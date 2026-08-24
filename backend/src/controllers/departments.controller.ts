@@ -90,9 +90,9 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
          '[]'
        ) AS roles
      FROM departments d
-     LEFT JOIN employees m ON m.id = d.manager_id
-     LEFT JOIN employees e ON e.department_id = d.id
-     LEFT JOIN job_roles jr ON jr.department_id = d.id
+     LEFT JOIN employees m ON m.id = d.manager_id AND m.company_id = d.company_id
+     LEFT JOIN employees e ON e.department_id = d.id AND e.company_id = d.company_id
+     LEFT JOIN job_roles jr ON jr.department_id = d.id AND jr.company_id = d.company_id
      WHERE d.company_id = $1
      GROUP BY d.id, m.id, m.name
      ORDER BY d.name`,

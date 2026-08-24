@@ -16,7 +16,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS}
      FROM official_documents od
-     LEFT JOIN employees e ON e.id = od.addressed_to_employee_id
+     LEFT JOIN employees e ON e.id = od.addressed_to_employee_id AND e.company_id = od.company_id
      WHERE od.company_id = $1
      ORDER BY od.created_at DESC`,
     [companyId]
@@ -30,7 +30,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS}
      FROM official_documents od
-     LEFT JOIN employees e ON e.id = od.addressed_to_employee_id
+     LEFT JOIN employees e ON e.id = od.addressed_to_employee_id AND e.company_id = od.company_id
      WHERE od.id = $1 AND od.company_id = $2`,
     [id, companyId]
   );

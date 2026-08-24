@@ -30,7 +30,7 @@ export const listScores = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT ps.id, ps.employee_id, e.name AS employee_name, ps.cycle_id, ps.okr_score, ps.feedback_score,
             ps.final_score, ps.bonus_amount, ps.payroll_adjustment_id, ps.status, ps.created_at, ps.updated_at
-     FROM performance_scores ps JOIN employees e ON e.id = ps.employee_id
+     FROM performance_scores ps JOIN employees e ON e.id = ps.employee_id AND e.company_id = ps.company_id
      WHERE ${where} ORDER BY ps.created_at DESC`,
     params
   );
