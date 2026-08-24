@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { assertPeriodOpen } from '../utils/periodGuard';
 
 interface AdjustmentInput {
   type: 'bonus' | 'deduction';
@@ -101,6 +102,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
   if (typeof month_year !== 'string' || !/^\d{4}-\d{2}$/.test(month_year)) throw new AppError(400, 'month_year must be YYYY-MM');
+  {
+    const [guardYear, guardMonth] = month_year.split('-').map(Number);
+    await assertPeriodOpen(companyId, guardYear, guardMonth);
+  }
   if (paid_date !== undefined && paid_date !== null && (typeof paid_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(paid_date))) {
     throw new AppError(400, 'paid_date must be YYYY-MM-DD');
   }
@@ -243,12 +248,16 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   } = req.body ?? {};
 
   const existing = await pool.query(
-    `SELECT base_salary, attendance_bonus, other_deductions, hourly_rate, hours_worked, attendance_deduction, status, paid_date
+    `SELECT month_year, base_salary, attendance_bonus, other_deductions, hourly_rate, hours_worked, attendance_deduction, status, paid_date
      FROM payroll WHERE id = $1 AND company_id = $2`,
     [id, companyId]
   );
   if (!existing.rows[0]) throw new AppError(404, 'Payroll record not found');
   const cur = existing.rows[0];
+  {
+    const [guardYear, guardMonth] = (cur.month_year as string).split('-').map(Number);
+    await assertPeriodOpen(companyId, guardYear, guardMonth);
+  }
 
   const numOrThrow = (val: unknown, field: string): number => {
     if (typeof val !== 'number') throw new AppError(400, `${field} must be a number`);
@@ -348,6 +357,13 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
+  const existing = await pool.query('SELECT month_year FROM payroll WHERE id = $1 AND company_id = $2', [id, companyId]);
+  if (!existing.rows[0]) throw new AppError(404, 'Payroll record not found');
+  {
+    const [guardYear, guardMonth] = (existing.rows[0].month_year as string).split('-').map(Number);
+    await assertPeriodOpen(companyId, guardYear, guardMonth);
+  }
+
   const result = await pool.query('DELETE FROM payroll WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
   if (result.rows.length === 0) throw new AppError(404, 'Payroll record not found');
 
@@ -360,9 +376,13 @@ export const pay = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
-  const existing = await pool.query('SELECT id, status FROM payroll WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const existing = await pool.query('SELECT id, status, month_year FROM payroll WHERE id = $1 AND company_id = $2', [id, companyId]);
   if (!existing.rows[0]) throw new AppError(404, 'Payroll record not found');
   if (existing.rows[0].status === 'paid') throw new AppError(400, 'Already paid');
+  {
+    const [guardYear, guardMonth] = (existing.rows[0].month_year as string).split('-').map(Number);
+    await assertPeriodOpen(companyId, guardYear, guardMonth);
+  }
 
   const result = await pool.query(
     `UPDATE payroll SET status = 'paid', paid_date = NOW() WHERE id = $1 AND company_id = $2

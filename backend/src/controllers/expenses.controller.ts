@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { assertDateNotClosed } from '../utils/periodGuard';
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -41,6 +42,12 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
   }
 
+  // No expense_date supplied -> this row is effectively dated today (list()'s
+  // own COALESCE(expense_date, created_at::date) treats it the same way), so
+  // that's what gets checked against closed_periods.
+  const effectiveDate = typeof expense_date === 'string' && expense_date ? expense_date : new Date().toISOString().slice(0, 10);
+  await assertDateNotClosed(companyId, effectiveDate);
+
   const result = await pool.query(
     `INSERT INTO expenses (company_id, category, amount, description, receipt_image, location_id, expense_date, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -69,6 +76,24 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
   const { category, amount, description, receipt_image, location_id, expense_date } = req.body ?? {};
+
+  // ::text cast so this comes back as a plain 'YYYY-MM-DD' string -- see
+  // periodGuard.ts's note on why that's safer than a driver-parsed Date.
+  const currentRow = await pool.query(
+    `SELECT (COALESCE(expense_date, created_at::date))::text AS effective_date FROM expenses WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
+  );
+  if (!currentRow.rows[0]) throw new AppError(404, 'Expense not found');
+  // Block editing a record that currently sits in a closed period at all, not
+  // just landing a change inside one -- otherwise a closed August row could
+  // still be "fixed" (amount, category...) freely by anyone who leaves the
+  // date untouched.
+  await assertDateNotClosed(companyId, currentRow.rows[0].effective_date);
+  // And separately block moving an open-period expense INTO a closed one via
+  // a new expense_date.
+  if (expense_date !== undefined && expense_date) {
+    await assertDateNotClosed(companyId, expense_date);
+  }
 
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -125,6 +150,16 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
+
+  // Deleting is still a write against the period's financial data -- a closed
+  // month shouldn't be editable by just deleting the inconvenient row instead
+  // of updating it.
+  const currentRow = await pool.query(
+    `SELECT (COALESCE(expense_date, created_at::date))::text AS effective_date FROM expenses WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
+  );
+  if (!currentRow.rows[0]) throw new AppError(404, 'Expense not found');
+  await assertDateNotClosed(companyId, currentRow.rows[0].effective_date);
 
   const result = await pool.query('DELETE FROM expenses WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
   if (result.rows.length === 0) throw new AppError(404, 'Expense not found');
