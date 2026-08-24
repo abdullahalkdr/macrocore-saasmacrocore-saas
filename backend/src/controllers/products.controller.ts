@@ -47,6 +47,25 @@ function validateSizes(sizes: unknown): SizeInput[] {
   });
 }
 
+// Security fix (tenant-isolation audit, finding C3): same gap as purchaseOrders.controller.ts's
+// C2 — raw_material_id in ingredients/sizes only ever went through an FK-existence check
+// (raw_materials.id is a global PK, not compound with company_id), so a cross-tenant
+// raw_material_id inserted successfully instead of throwing. The old catch-block comment
+// ("doesn't exist for this company") was wrong for the same reason — the FK can't see
+// company_id at all. One batched query covers both the flat ingredients list and every
+// size's nested ingredients list.
+async function assertRawMaterialsInCompany(rawMaterialIds: string[], companyId: string) {
+  const uniqueIds = [...new Set(rawMaterialIds)];
+  if (uniqueIds.length === 0) return;
+  const result = await pool.query(
+    `SELECT id FROM raw_materials WHERE id = ANY($1::uuid[]) AND company_id = $2`,
+    [uniqueIds, companyId]
+  );
+  if (result.rows.length !== uniqueIds.length) {
+    throw new AppError(400, 'One or more ingredients reference a raw_material_id that does not belong to this company');
+  }
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query(
@@ -117,6 +136,14 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const hasSizes = has_sizes === true;
   const ingredientList = hasSizes ? [] : validateIngredients(ingredients);
   const sizeList = hasSizes ? validateSizes(sizes) : [];
+
+  await assertRawMaterialsInCompany(
+    [
+      ...ingredientList.map((ing) => ing.raw_material_id),
+      ...sizeList.flatMap((size) => (size.ingredients ?? []).map((ing) => ing.raw_material_id)),
+    ],
+    companyId
+  );
 
   const client = await pool.connect();
   let product;
@@ -198,6 +225,14 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const replaceSizes = has_sizes !== undefined || sizes !== undefined;
   const ingredientList = replaceIngredients ? (nextHasSizes ? [] : validateIngredients(ingredients)) : null;
   const sizeList = replaceSizes ? (nextHasSizes ? validateSizes(sizes) : []) : null;
+
+  await assertRawMaterialsInCompany(
+    [
+      ...(ingredientList ?? []).map((ing) => ing.raw_material_id),
+      ...(sizeList ?? []).flatMap((size) => (size.ingredients ?? []).map((ing) => ing.raw_material_id)),
+    ],
+    companyId
+  );
 
   const sets: string[] = [];
   const values: unknown[] = [];

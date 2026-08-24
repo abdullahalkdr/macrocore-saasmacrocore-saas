@@ -20,6 +20,23 @@ function validateItems(items: unknown): ItemInput[] {
   return items;
 }
 
+// Security fix (tenant-isolation audit, finding C2): raw_material_id used to go
+// straight into purchase_order_items with only the FK-existence constraint backing it
+// (raw_materials.id is a global PK, not compound with company_id) — a cross-tenant
+// raw_material_id inserted successfully instead of throwing. One batched query for the
+// whole item list rather than one row at a time, since a PO can carry many items.
+async function assertRawMaterialsInCompany(rawMaterialIds: string[], companyId: string) {
+  const uniqueIds = [...new Set(rawMaterialIds)];
+  if (uniqueIds.length === 0) return;
+  const result = await pool.query(
+    `SELECT id FROM raw_materials WHERE id = ANY($1::uuid[]) AND company_id = $2`,
+    [uniqueIds, companyId]
+  );
+  if (result.rows.length !== uniqueIds.length) {
+    throw new AppError(400, 'One or more items reference a raw_material_id that does not belong to this company');
+  }
+}
+
 async function fetchItems(poId: string) {
   const result = await pool.query(
     `SELECT poi.id, poi.raw_material_id, rm.name AS raw_material_name, rm.name_en AS raw_material_name_en,
@@ -83,6 +100,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const { supplier_id, order_date, expected_date, notes, items } = req.body ?? {};
 
   const itemList = validateItems(items);
+  await assertRawMaterialsInCompany(itemList.map((it) => it.raw_material_id), companyId);
 
   if (supplier_id) {
     const sup = await pool.query('SELECT id FROM suppliers WHERE id = $1 AND company_id = $2', [supplier_id, companyId]);
@@ -170,6 +188,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
     if (items !== undefined) {
       const itemList = validateItems(items);
+      await assertRawMaterialsInCompany(itemList.map((it) => it.raw_material_id), companyId);
       await client.query(`DELETE FROM purchase_order_items WHERE purchase_order_id = $1`, [id]);
       for (const it of itemList) {
         await client.query(

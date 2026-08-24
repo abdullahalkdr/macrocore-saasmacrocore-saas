@@ -50,6 +50,18 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   }
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
+
+  // Security fix (tenant-isolation audit, finding C1): admin/manager-supplied
+  // employee_id was inserted with no company check at all — a plain 'employee' caller
+  // is already pinned to their own record above, but admin/manager could previously
+  // file a leave_requests row for ANY employee UUID in the database, including one
+  // belonging to a different company. Same write-time check every other controller
+  // already runs on its own FK inputs (assertManagerInCompany, department checks, etc.).
+  if (req.auth!.role !== 'employee') {
+    const employeeCheck = await pool.query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [employee_id, companyId]);
+    if (employeeCheck.rows.length === 0) throw new AppError(400, 'employee_id not found');
+  }
+
   if (typeof category !== 'string' || !CATEGORIES.includes(category)) {
     throw new AppError(400, `category must be one of ${CATEGORIES.join(', ')}`);
   }
