@@ -23,7 +23,27 @@ interface JobRoleWithGrants extends JobRoleRow {
   permission_keys: string[];
 }
 
-const PERMISSION_KEYS = ['approve_leave', 'manual_attendance', 'edit_waste', 'edit_expenses', 'manage_payroll', 'view_profit_margins'] as const;
+// Kept in sync by hand with backend/src/controllers/permissions.controller.ts's own
+// PERMISSION_KEYS — the backend is the source of truth (it 400s on an unknown key), this
+// list only drives which checkbox columns render.
+const PERMISSION_KEYS = [
+  'approve_leave',
+  'manual_attendance',
+  'edit_waste',
+  'edit_expenses',
+  'manage_payroll',
+  'view_profit_margins',
+  'view_all_employees',
+  'edit_sensitive_data',
+  'view_financials',
+  'manage_cost_centers',
+  'approve_purchase_orders',
+  'override_credit_limit',
+  'submit_appraisal',
+  'apply_custom_discount',
+  'export_sensitive_reports',
+  'manage_system_settings',
+] as const;
 type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 export default function PermissionsPage() {
@@ -42,6 +62,17 @@ export default function PermissionsPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Client-side only — both lists are already scoped to one company (small enough to
+  // filter in the browser, no need for a server round-trip per keystroke).
+  const [userSearch, setUserSearch] = useState('');
+  const [roleSearch, setRoleSearch] = useState('');
+  const filteredEmployees = employees.filter((e) =>
+    (e.full_name || e.email).toLowerCase().includes(userSearch.trim().toLowerCase())
+  );
+  const filteredJobRoles = jobRoles.filter((r) =>
+    (r.name_en || r.name).toLowerCase().includes(roleSearch.trim().toLowerCase()) || r.name.includes(roleSearch.trim())
+  );
 
   function loadUsers() {
     get<{ employees: EmployeeRow[] }>('/permissions')
@@ -133,7 +164,15 @@ export default function PermissionsPage() {
 
       {tab === 'user' && (
         <div className="card">
-          <div className="table-wrap">
+          <div className="field" style={{ maxWidth: 320, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder={t.permissions.searchEmployee}
+            />
+          </div>
+          <div className="table-wrap permissions-scroll">
             <table className="data-table">
               <thead>
                 <tr>
@@ -145,7 +184,7 @@ export default function PermissionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {employees.map((emp) => {
+                {filteredEmployees.map((emp) => {
                   const keys = currentUserKeys(emp);
                   const isDirty = emp.id in dirtyUsers;
                   return (
@@ -168,10 +207,10 @@ export default function PermissionsPage() {
                     </tr>
                   );
                 })}
-                {employees.length === 0 && (
+                {filteredEmployees.length === 0 && (
                   <tr>
                     <td colSpan={PERMISSION_KEYS.length + 2}>
-                      <div className="empty-state">{t.permissions.empty}</div>
+                      <div className="empty-state">{employees.length === 0 ? t.permissions.empty : t.permissions.noResults}</div>
                     </td>
                   </tr>
                 )}
@@ -183,7 +222,15 @@ export default function PermissionsPage() {
 
       {tab === 'jobRole' && (
         <div className="card">
-          <div className="table-wrap">
+          <div className="field" style={{ maxWidth: 320, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={roleSearch}
+              onChange={(e) => setRoleSearch(e.target.value)}
+              placeholder={t.permissions.searchJobRole}
+            />
+          </div>
+          <div className="table-wrap permissions-scroll">
             <table className="data-table">
               <thead>
                 <tr>
@@ -195,7 +242,7 @@ export default function PermissionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {jobRoles.map((role) => {
+                {filteredJobRoles.map((role) => {
                   const keys = currentRoleKeys(role);
                   const isDirty = role.id in dirtyRoles;
                   return (
@@ -223,10 +270,10 @@ export default function PermissionsPage() {
                     </tr>
                   );
                 })}
-                {jobRoles.length === 0 && (
+                {filteredJobRoles.length === 0 && (
                   <tr>
                     <td colSpan={PERMISSION_KEYS.length + 2}>
-                      <div className="empty-state">{t.permissions.emptyJobRoles}</div>
+                      <div className="empty-state">{jobRoles.length === 0 ? t.permissions.emptyJobRoles : t.permissions.noResults}</div>
                     </td>
                   </tr>
                 )}

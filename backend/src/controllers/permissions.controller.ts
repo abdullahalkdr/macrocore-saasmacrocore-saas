@@ -15,6 +15,15 @@ import { effectivePermissions } from '../utils/permissions';
 // admin/manager by default, with this key as the named exception for specific job
 // roles/users. Both are still delegation keys in the ANY_ROLE_KEYS sense — grantable to
 // 'employee' accounts only, same as the four keys above them.
+//
+// The 10 keys below (view_all_employees ... manage_system_settings) are catalog-only for
+// now — added so they're grantable and show up as columns in the Permissions UI, but per
+// the rule at the top of this comment block ("each key must have a matching
+// requireRoleOrPermission(...) check wired into a real route for it to do anything"),
+// none of them are wired to an actual route check yet. Granting one today has no
+// enforcement effect — it's a placeholder for the routes/features that will check it
+// later. Flagged here deliberately rather than silently; don't advertise a permission as
+// real to a customer before it's actually enforced somewhere.
 export const PERMISSION_KEYS = [
   'approve_leave',
   'manual_attendance',
@@ -23,6 +32,16 @@ export const PERMISSION_KEYS = [
   'view_hr_tickets',
   'manage_payroll',
   'view_profit_margins',
+  'view_all_employees',
+  'edit_sensitive_data',
+  'view_financials',
+  'manage_cost_centers',
+  'approve_purchase_orders',
+  'override_credit_limit',
+  'submit_appraisal',
+  'apply_custom_discount',
+  'export_sensitive_reports',
+  'manage_system_settings',
 ] as const;
 
 // 'view_hr_tickets' is a restrictive-override key, not a delegation one: the other

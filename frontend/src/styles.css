@@ -339,6 +339,22 @@ textarea:focus {
 .table-wrap { overflow-x: auto; }
 table.data-table th { font-size: 11px; }
 
+/* PermissionsPage.tsx's "by employee"/"by job role" tables — with the full 16-key
+   Enterprise permission matrix these tables get both very tall (many rows) and very
+   wide (many permission columns). A bounded max-height + overflow:auto (not the shared
+   .table-wrap's overflow-x-only rule, which has no height limit to make sticky
+   meaningful) turns this into a proper self-contained scroll region so `position: sticky`
+   on the header row has a real scrolling ancestor to stick within — the classic frozen-
+   header-row pattern, scoped to this page only so it doesn't touch any other table. */
+.permissions-scroll { max-height: 62vh; overflow: auto; }
+.permissions-scroll table.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+}
+
 .tag { display: inline-block; padding: 3px 9px; border-radius: 100px; font-size: 11px; font-weight: 700; }
 .tag.green { background: var(--emerald-50); color: var(--emerald-700); }
 .tag.red { background: var(--red-50); color: var(--red-600); }
