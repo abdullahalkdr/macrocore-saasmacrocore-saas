@@ -12,6 +12,7 @@ export interface Department {
   id: string;
   name: string;
   name_en: string;
+  code: string | null;
   parent_department_id: string | null;
   manager_id: string | null;
   manager: { id: string; name: string } | null;
@@ -27,6 +28,7 @@ export interface Department {
 export interface DepartmentInput {
   name: string;
   name_en: string;
+  code?: string | null;
   parent_department_id?: string | null;
   manager_id?: string | null;
   cost_center_code?: string | null;

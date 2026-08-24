@@ -12,6 +12,9 @@ import { IconPlus, IconChevronRight } from '../components/Icon';
 
 interface Ticket {
   id: string;
+  // MIGRATION_057 — Smart Numbering, [DEPT]-[YYMM]-[XXXX] e.g. IT-2608-0001. Null
+  // for a legacy ticket created before this migration ran.
+  ticket_number: string | null;
   subject: string;
   status: string;
   priority: string;
@@ -64,6 +67,11 @@ interface TicketDetail extends Ticket {
   request_type_name?: string;
   request_type_name_en?: string;
   approval?: ItsmApprovalSummary | null;
+  // Whether the CURRENTLY LOGGED IN user is allowed to change this ticket's status —
+  // admin/manager always, plus an IT-department employee (see
+  // supportTickets.controller.ts's canManageTicketStatus()). Drives whether the
+  // status field below renders as an editable <select> or a read-only tag.
+  can_manage_status: boolean;
 }
 interface CompanyUser {
   id: string;
@@ -456,7 +464,14 @@ export default function SupportTicketsPage() {
             <tbody>
               {visibleTickets.map((tk) => (
                 <tr key={tk.id} onClick={() => openTicket(tk.id)} style={{ cursor: 'pointer' }}>
-                  <td style={{ fontWeight: 700 }}>{tk.subject}</td>
+                  <td style={{ fontWeight: 700 }}>
+                    {tk.ticket_number && (
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 11, display: 'block' }}>
+                        {tk.ticket_number}
+                      </span>
+                    )}
+                    {tk.subject}
+                  </td>
                   {isManager && <td className="muted">{userLabel(tk.created_by)}</td>}
                   {isManager && <td className="muted">{userLabel(tk.assigned_to)}</td>}
                   <td className="muted">{ticketTypeLabel(tk)}</td>
@@ -485,7 +500,14 @@ export default function SupportTicketsPage() {
       {openId && detail && (
         <div className="card">
           <div className="card-head">
-            <h2>{detail.subject}</h2>
+            <h2>
+              {detail.ticket_number && (
+                <span className="muted" style={{ fontWeight: 500, fontSize: 13, marginInlineEnd: 8 }}>
+                  {detail.ticket_number}
+                </span>
+              )}
+              {detail.subject}
+            </h2>
           </div>
           <div className="card-body">
             {/* Original ticket content — subject is already the card-head <h2> above;
@@ -603,13 +625,23 @@ export default function SupportTicketsPage() {
             <div className="form-row" style={{ marginBottom: 14 }}>
               <div className="field" style={{ maxWidth: 200 }}>
                 <label>{t.support.status}</label>
-                <select value={detail.status} onChange={(e) => changeStatus(e.target.value)}>
-                  {STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {statusLabel[s]}
-                    </option>
-                  ))}
-                </select>
+                {detail.can_manage_status ? (
+                  <select value={detail.status} onChange={(e) => changeStatus(e.target.value)}>
+                    {STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {statusLabel[s]}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  // Only IT staff, managers, and admins can move a ticket through its
+                  // status lifecycle (see canManageTicketStatus() on the backend) —
+                  // everyone else, including the ticket's own requester, sees a
+                  // read-only tag instead of an editable dropdown.
+                  <div style={{ paddingTop: 4 }}>
+                    <Tag color={statusTagColor(detail.status)}>{statusLabel[detail.status] || detail.status}</Tag>
+                  </div>
+                )}
               </div>
               {isManager && (
                 <div className="field" style={{ maxWidth: 220 }}>

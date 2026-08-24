@@ -31,6 +31,7 @@ interface EmployeeOption {
 interface DepartmentFormState {
   name: string;
   name_en: string;
+  code: string;
   parent_department_id: string;
   manager_id: string;
   cost_center_code: string;
@@ -38,7 +39,7 @@ interface DepartmentFormState {
 }
 
 function emptyDepartmentForm(): DepartmentFormState {
-  return { name: '', name_en: '', parent_department_id: '', manager_id: '', cost_center_code: '', status: 'active' };
+  return { name: '', name_en: '', code: '', parent_department_id: '', manager_id: '', cost_center_code: '', status: 'active' };
 }
 
 export default function DepartmentsPage() {
@@ -91,6 +92,7 @@ export default function DepartmentsPage() {
     setForm({
       name: d.name,
       name_en: d.name_en,
+      code: d.code || '',
       parent_department_id: d.parent_department_id || '',
       manager_id: d.manager_id || '',
       cost_center_code: d.cost_center_code || '',
@@ -108,6 +110,7 @@ export default function DepartmentsPage() {
       const payload = {
         name: form.name.trim(),
         name_en: form.name_en.trim(),
+        code: form.code.trim() || null,
         parent_department_id: form.parent_department_id || null,
         manager_id: form.manager_id || null,
         cost_center_code: form.cost_center_code.trim() || null,
@@ -141,6 +144,7 @@ export default function DepartmentsPage() {
         <td style={{ fontWeight: depth === 0 ? 700 : 500, paddingInlineStart: depth * 22 }}>
           {depth > 0 ? `— ${displayName(d)}` : displayName(d)}
         </td>
+        <td className="muted">{d.code || '—'}</td>
         <td>{d.cost_center_code || '—'}</td>
         <td>{d.manager ? d.manager.name : '—'}</td>
         <td>
@@ -182,6 +186,7 @@ export default function DepartmentsPage() {
               <thead>
                 <tr>
                   <th>{t.departments.colDepartment}</th>
+                  <th>{t.departments.colCode}</th>
                   <th>{t.departments.colCostCenter}</th>
                   <th>{t.departments.colManager}</th>
                   <th>{t.departments.colStatus}</th>
@@ -193,7 +198,7 @@ export default function DepartmentsPage() {
                 {renderRows(departmentTree, 0)}
                 {departmentTree.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={6}>
+                    <td colSpan={7}>
                       <div className="empty-state">{t.departments.empty}</div>
                     </td>
                   </tr>
@@ -227,6 +232,18 @@ export default function DepartmentsPage() {
             <div className="field">
               <label>{t.departments.nameEnLabel}</label>
               <input value={form.name_en} onChange={(e) => setForm({ ...form, name_en: e.target.value })} required />
+            </div>
+            <div className="field">
+              <label>{t.departments.codeLabel}</label>
+              <input
+                value={form.code}
+                onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+                maxLength={10}
+                placeholder={t.departments.codePlaceholder}
+              />
+              <span className="muted" style={{ fontSize: 11 }}>
+                {t.departments.codeHint}
+              </span>
             </div>
             <div className="field">
               <label>{t.departments.parentLabel}</label>

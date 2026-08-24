@@ -6,6 +6,7 @@ import { logAudit } from '../utils/audit';
 import { hasPermission } from '../utils/permissions';
 import { createItsmApprovalChain, getBlockingApproval, getItsmApprovalSummary } from '../utils/itsmApprovals';
 import { planLevelOf } from '../config/planFeatures';
+import { generateTicketNumber } from '../utils/sequences';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
@@ -35,7 +36,7 @@ const DEFAULT_SLA_MINUTES: Record<string, { response: number; resolution: number
 // the existing category/category_id pair, not replacing them yet — a ticket
 // can carry both the legacy category and the new request_type_id at once
 // during the transition (see MIGRATION_047's own header, decision 1).
-const TICKET_FIELDS = `id, subject, description, status, priority, category, category_id, request_type_id, dynamic_data,
+const TICKET_FIELDS = `id, ticket_number, subject, description, status, priority, category, category_id, request_type_id, dynamic_data,
        assigned_to, created_by,
        first_response_at, resolved_at, sla_response_due_at, sla_resolution_due_at,
        sla_response_breached, sla_resolution_breached, escalation_level, escalated_to, escalated_at,
@@ -82,6 +83,27 @@ async function visibilityFilter(auth: { userId: string; role: string }, params: 
       SELECT 1 FROM service_request_types rt WHERE rt.id = support_tickets.request_type_id AND rt.is_hr_sensitive = true
     )
   ))`;
+}
+
+// Who can change a ticket's status: admin/manager always, plus a plain employee
+// whose own department is IT (the helpdesk-running department) — everyone else
+// (the ticket's own requester included) can read the ticket and reply, but cannot
+// move it through open -> in_progress -> resolved -> closed themselves. Checked
+// against name_en ILIKE 'IT' rather than the new departments.code column alone —
+// every company's default-seeded IT department (MIGRATION_048) already has
+// name_en = 'IT' from day one, so this works out of the box even for a company
+// that hasn't set department codes yet (code is for ticket numbering, see
+// MIGRATION_057; this check doesn't depend on it).
+async function canManageTicketStatus(auth: { userId: string; role: string; companyId: string }): Promise<boolean> {
+  if (auth.role === 'admin' || auth.role === 'manager') return true;
+  const result = await pool.query(
+    `SELECT 1 FROM users u
+     JOIN employees e ON e.id = u.employee_id
+     JOIN departments d ON d.id = e.department_id
+     WHERE u.id = $1 AND u.company_id = $2 AND (d.code = 'IT' OR d.name_en ILIKE 'IT')`,
+    [auth.userId, auth.companyId]
+  );
+  return result.rows.length > 0;
 }
 
 async function canAccessTicket(
@@ -237,16 +259,36 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const responseMinutes = policy.rows[0]?.response_minutes ?? fallback.response;
   const resolutionMinutes = policy.rows[0]?.resolution_minutes ?? fallback.resolution;
 
+  // MIGRATION_057 — Smart Numbering: [DEPT]-[YYMM]-[XXXX]. Resolved from the
+  // requester's own department code; 'GEN' whenever there's no linked employee,
+  // no department set on that employee, or the department hasn't had a code
+  // configured yet (see the migration's own decision 1) — numbering never blocks
+  // ticket creation, it just isn't department-specific until an admin sets codes.
+  let departmentCode = 'GEN';
+  const requesterEmployee = await pool.query('SELECT employee_id FROM users WHERE id = $1', [req.auth!.userId]);
+  const requesterEmployeeId = requesterEmployee.rows[0]?.employee_id;
+  if (requesterEmployeeId) {
+    const deptCode = await pool.query(
+      `SELECT d.code FROM employees e JOIN departments d ON d.id = e.department_id
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [requesterEmployeeId, companyId]
+    );
+    const code = deptCode.rows[0]?.code;
+    if (typeof code === 'string' && code.trim()) departmentCode = code.trim().toUpperCase();
+  }
+  const ticketNumber = await generateTicketNumber(companyId, departmentCode);
+
   const result = await pool.query(
     `INSERT INTO support_tickets
-       (company_id, created_by, subject, description, priority, category, category_id, request_type_id, dynamic_data,
+       (company_id, created_by, ticket_number, subject, description, priority, category, category_id, request_type_id, dynamic_data,
         sla_response_due_at, sla_resolution_due_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
-             NOW() + ($10::int * INTERVAL '1 minute'), NOW() + ($11::int * INTERVAL '1 minute'))
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+             NOW() + ($11::int * INTERVAL '1 minute'), NOW() + ($12::int * INTERVAL '1 minute'))
      RETURNING ${TICKET_FIELDS}`,
     [
       companyId,
       req.auth!.userId,
+      ticketNumber,
       subject.trim(),
       description.trim(),
       finalPriority,
@@ -328,7 +370,11 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   // Status" block simply doesn't render when this is null.
   const approval = await getItsmApprovalSummary(companyId, id as string, req.auth!);
 
-  res.status(200).json({ success: true, ticket: publicTicket, replies, approval });
+  // Drives whether SupportTicketsPage.tsx renders the status field as an editable
+  // <select> or a read-only tag — see canManageTicketStatus()'s own comment above.
+  const canManageStatus = await canManageTicketStatus(req.auth!);
+
+  res.status(200).json({ success: true, ticket: publicTicket, replies, approval, can_manage_status: canManageStatus });
 });
 
 export const reply = asyncHandler(async (req: Request, res: Response) => {
@@ -412,6 +458,17 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   );
   if (!existing.rows[0]) throw new AppError(404, 'Ticket not found');
   if (!(await canAccessTicket(req.auth!, existing.rows[0]))) throw new AppError(404, 'Ticket not found');
+
+  // Status is the one field here that a ticket's own requester must not be able to
+  // move themselves — see canManageTicketStatus()'s own comment. Unlike
+  // assigned_to's silent-ignore-if-unauthorized convention below, this is a hard
+  // 403: the status dropdown is now hidden client-side for anyone without this
+  // right, so a request that still sends `status` past that point is either a
+  // stale UI or a direct API call, and either way deserves a real error, not a
+  // silent no-op that looks like success.
+  if (status !== undefined && !(await canManageTicketStatus(req.auth!))) {
+    throw new AppError(403, 'Only IT staff, managers, and admins can change a ticket status.');
+  }
 
   // category_id is explicit-null-vs-omitted aware (unlike most COALESCE-on-
   // omit updates elsewhere in this codebase) — null clears it, omitted

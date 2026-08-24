@@ -29,6 +29,7 @@ interface DeptRow {
   id: string;
   name: string;
   name_en: string;
+  code: string | null;
   parent_department_id: string | null;
   manager_id: string | null;
   cost_center_code: string | null;
@@ -52,6 +53,7 @@ function buildDepartmentTree(rows: DeptRow[]) {
         id: r.id,
         name: r.name,
         name_en: r.name_en,
+        code: r.code,
         parent_department_id: r.parent_department_id,
         manager_id: r.manager_id,
         manager: r.manager_emp_id ? { id: r.manager_emp_id, name: r.manager_name } : null,
@@ -80,7 +82,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const result = await pool.query<DeptRow>(
     `SELECT
-       d.id, d.name, d.name_en, d.parent_department_id, d.manager_id, d.cost_center_code, d.status,
+       d.id, d.name, d.name_en, d.code, d.parent_department_id, d.manager_id, d.cost_center_code, d.status,
        d.created_at, d.updated_at,
        m.id AS manager_emp_id, m.name AS manager_name,
        COUNT(DISTINCT e.id) AS employee_count,
@@ -139,22 +141,27 @@ async function assertValidParent(companyId: string, parentId: string, selfId: st
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { name, name_en, parent_department_id, manager_id, cost_center_code, status } = req.body ?? {};
+  const { name, name_en, code, parent_department_id, manager_id, cost_center_code, status } = req.body ?? {};
 
   if (typeof name !== 'string' || name.trim().length < 1) throw new AppError(400, 'name is required');
   if (typeof name_en !== 'string' || name_en.trim().length < 1) throw new AppError(400, 'name_en is required');
   if (status !== undefined && !STATUSES.includes(status)) throw new AppError(400, `status must be one of ${STATUSES.join(', ')}`);
+  if (code !== undefined && code !== null) {
+    if (typeof code !== 'string') throw new AppError(400, 'code must be a string');
+    if (code.trim().length > 10) throw new AppError(400, 'code must be 10 characters or fewer');
+  }
   if (parent_department_id) await assertValidParent(companyId, parent_department_id, null);
   if (manager_id) await assertValidManager(companyId, manager_id);
 
   const result = await pool.query(
-    `INSERT INTO departments (company_id, name, name_en, parent_department_id, manager_id, cost_center_code, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, name, name_en, parent_department_id, manager_id, cost_center_code, status, created_at, updated_at`,
+    `INSERT INTO departments (company_id, name, name_en, code, parent_department_id, manager_id, cost_center_code, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, name, name_en, code, parent_department_id, manager_id, cost_center_code, status, created_at, updated_at`,
     [
       companyId,
       name.trim(),
       name_en.trim(),
+      typeof code === 'string' && code.trim() ? code.trim().toUpperCase() : null,
       parent_department_id || null,
       manager_id || null,
       cost_center_code || null,
@@ -171,11 +178,15 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { name, name_en, parent_department_id, manager_id, cost_center_code, status } = req.body ?? {};
+  const { name, name_en, code, parent_department_id, manager_id, cost_center_code, status } = req.body ?? {};
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length < 1)) throw new AppError(400, 'name must be a non-empty string');
   if (name_en !== undefined && (typeof name_en !== 'string' || name_en.trim().length < 1)) throw new AppError(400, 'name_en must be a non-empty string');
   if (status !== undefined && !STATUSES.includes(status)) throw new AppError(400, `status must be one of ${STATUSES.join(', ')}`);
+  if (code !== undefined && code !== null) {
+    if (typeof code !== 'string') throw new AppError(400, 'code must be a string');
+    if (code.trim().length > 10) throw new AppError(400, 'code must be 10 characters or fewer');
+  }
   if (parent_department_id !== undefined && parent_department_id !== null) await assertValidParent(companyId, parent_department_id, id as string);
   if (manager_id !== undefined && manager_id !== null) await assertValidManager(companyId, manager_id);
 
@@ -184,6 +195,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   let i = 1;
   if (name !== undefined) { sets.push(`name = $${i++}`); values.push(name.trim()); }
   if (name_en !== undefined) { sets.push(`name_en = $${i++}`); values.push(name_en.trim()); }
+  if (code !== undefined) { sets.push(`code = $${i++}`); values.push(typeof code === 'string' && code.trim() ? code.trim().toUpperCase() : null); }
   if (parent_department_id !== undefined) { sets.push(`parent_department_id = $${i++}`); values.push(parent_department_id || null); }
   if (manager_id !== undefined) { sets.push(`manager_id = $${i++}`); values.push(manager_id || null); }
   if (cost_center_code !== undefined) { sets.push(`cost_center_code = $${i++}`); values.push(cost_center_code || null); }
@@ -195,7 +207,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `UPDATE departments SET ${sets.join(', ')} WHERE id = $${i++} AND company_id = $${i++}
-     RETURNING id, name, name_en, parent_department_id, manager_id, cost_center_code, status, created_at, updated_at`,
+     RETURNING id, name, name_en, code, parent_department_id, manager_id, cost_center_code, status, created_at, updated_at`,
     values
   );
   if (!result.rows[0]) throw new AppError(404, 'Department not found');
