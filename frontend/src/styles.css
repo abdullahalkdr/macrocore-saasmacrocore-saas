@@ -355,6 +355,30 @@ table.data-table th { font-size: 11px; }
   box-shadow: 0 1px 0 var(--border);
 }
 
+/* PermissionsPage.tsx "by job role" tab — cascading Department -> Job Role selection
+   replaced the old matrix table (unusable past a handful of roles x 16 permission
+   columns). Once a role is picked, its permissions render as a responsive checkbox
+   grid instead of table columns. */
+.permission-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  margin: 14px 0 18px;
+}
+.permission-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--surface);
+  cursor: pointer;
+}
+.permission-check-item:hover { background: var(--surface-alt); }
+
 .tag { display: inline-block; padding: 3px 9px; border-radius: 100px; font-size: 11px; font-weight: 700; }
 .tag.green { background: var(--emerald-50); color: var(--emerald-700); }
 .tag.red { background: var(--red-50); color: var(--red-600); }

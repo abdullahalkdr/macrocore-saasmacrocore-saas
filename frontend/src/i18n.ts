@@ -1423,6 +1423,11 @@ const en = {
     searchEmployee: 'Search by employee name...',
     searchJobRole: 'Search by job role name...',
     noResults: 'No matches for this search.',
+    department: 'Department',
+    selectDepartmentPlaceholder: 'Select department...',
+    selectJobRolePlaceholder: 'Select job role...',
+    noRoleSelected: 'Select a department and job role above to manage its permissions.',
+    savePermissions: 'Save permissions',
   },
   customers: {
     title: 'Customers',
@@ -3493,6 +3498,11 @@ const ar: typeof en = {
     searchEmployee: 'بحث باسم الموظف...',
     searchJobRole: 'بحث باسم المسمى الوظيفي...',
     noResults: 'ما فيه نتائج مطابقة للبحث.',
+    department: 'القسم',
+    selectDepartmentPlaceholder: '- اختر القسم -',
+    selectJobRolePlaceholder: '- اختر المسمى الوظيفي -',
+    noRoleSelected: 'اختر القسم والمسمى الوظيفي فوق عشان تدير صلاحياته.',
+    savePermissions: 'حفظ الصلاحيات',
   },
   customers: {
     title: 'العملاء',

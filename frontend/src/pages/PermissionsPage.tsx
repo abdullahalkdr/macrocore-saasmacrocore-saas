@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { get, put, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 
 interface EmployeeRow {
@@ -16,6 +17,7 @@ interface JobRoleRow {
   id: string;
   name: string;
   name_en: string | null;
+  department_id: string;
   department_name: string;
   department_name_en: string | null;
 }
@@ -48,31 +50,58 @@ type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 export default function PermissionsPage() {
   const t = useT();
+  const lang = useLangStore((s) => s.lang);
   const [tab, setTab] = useState<'user' | 'jobRole'>('user');
+
+  // job_roles/departments are stored bilingually (name = Arabic, name_en = English) —
+  // same convention EmployeesPage.tsx's roleLabel()/deptLabel() already follow. Bug fix:
+  // this page was previously always preferring name_en regardless of active UI language,
+  // so job role/department names showed in English even with lang === 'ar'.
+  function localized(name: string, nameEn: string | null): string {
+    return lang === 'ar' ? name : nameEn || name;
+  }
 
   // --- By-employee tab (existing) ---
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [dirtyUsers, setDirtyUsers] = useState<Record<string, string[]>>({});
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
 
-  // --- By-job-role tab (new) ---
+  // --- By-job-role tab: cascading Department -> Job Role selection (replaces the old
+  // full matrix table, which became unusable once there were dozens of roles x 16
+  // permission columns — pick one role at a time instead of scanning a giant grid). ---
   const [jobRoles, setJobRoles] = useState<JobRoleWithGrants[]>([]);
   const [dirtyRoles, setDirtyRoles] = useState<Record<string, string[]>>({});
   const [savingRoleId, setSavingRoleId] = useState<string | null>(null);
+  const [selectedDeptId, setSelectedDeptId] = useState('');
+  const [selectedRoleId, setSelectedRoleId] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Client-side only — both lists are already scoped to one company (small enough to
-  // filter in the browser, no need for a server round-trip per keystroke).
+  // Client-side only — the employee list is already scoped to one company (small enough
+  // to filter in the browser, no need for a server round-trip per keystroke).
   const [userSearch, setUserSearch] = useState('');
-  const [roleSearch, setRoleSearch] = useState('');
   const filteredEmployees = employees.filter((e) =>
     (e.full_name || e.email).toLowerCase().includes(userSearch.trim().toLowerCase())
   );
-  const filteredJobRoles = jobRoles.filter((r) =>
-    (r.name_en || r.name).toLowerCase().includes(roleSearch.trim().toLowerCase()) || r.name.includes(roleSearch.trim())
-  );
+
+  // Departments derived from the job_roles list itself (each role row already carries
+  // its department id/name/name_en) — no separate departments fetch needed.
+  const departmentOptions: { id: string; name: string; name_en: string | null }[] = [];
+  const seenDept = new Set<string>();
+  for (const r of jobRoles) {
+    if (!seenDept.has(r.department_id)) {
+      seenDept.add(r.department_id);
+      departmentOptions.push({ id: r.department_id, name: r.department_name, name_en: r.department_name_en });
+    }
+  }
+  departmentOptions.sort((a, b) => localized(a.name, a.name_en).localeCompare(localized(b.name, b.name_en)));
+
+  const rolesForSelectedDept = jobRoles
+    .filter((r) => r.department_id === selectedDeptId)
+    .sort((a, b) => localized(a.name, a.name_en).localeCompare(localized(b.name, b.name_en)));
+
+  const selectedRole = jobRoles.find((r) => r.id === selectedRoleId) ?? null;
 
   function loadUsers() {
     get<{ employees: EmployeeRow[] }>('/permissions')
@@ -222,64 +251,82 @@ export default function PermissionsPage() {
 
       {tab === 'jobRole' && (
         <div className="card">
-          <div className="field" style={{ maxWidth: 320, marginBottom: 12 }}>
-            <input
-              type="text"
-              value={roleSearch}
-              onChange={(e) => setRoleSearch(e.target.value)}
-              placeholder={t.permissions.searchJobRole}
-            />
-          </div>
-          <div className="table-wrap permissions-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t.permissions.jobRole}</th>
-                  {PERMISSION_KEYS.map((key) => (
-                    <th key={key}>{t.permissions.keys[key]}</th>
-                  ))}
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredJobRoles.map((role) => {
-                  const keys = currentRoleKeys(role);
-                  const isDirty = role.id in dirtyRoles;
-                  return (
-                    <tr key={role.id}>
-                      <td style={{ fontWeight: 700 }}>
-                        {role.name_en || role.name}
-                        <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
-                          {role.department_name_en || role.department_name}
-                        </div>
-                      </td>
-                      {PERMISSION_KEYS.map((key) => (
-                        <td key={key} style={{ textAlign: 'center' }}>
-                          <input type="checkbox" checked={keys.includes(key)} onChange={() => toggleRole(role, key)} />
-                        </td>
-                      ))}
-                      <td>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          disabled={!isDirty || savingRoleId === role.id}
-                          onClick={() => saveRole(role)}
-                        >
-                          {savingRoleId === role.id ? t.common.loading : t.common.save}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredJobRoles.length === 0 && (
-                  <tr>
-                    <td colSpan={PERMISSION_KEYS.length + 2}>
-                      <div className="empty-state">{jobRoles.length === 0 ? t.permissions.emptyJobRoles : t.permissions.noResults}</div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          {jobRoles.length === 0 ? (
+            <div className="empty-state">{t.permissions.emptyJobRoles}</div>
+          ) : (
+            <>
+              <div className="form-row">
+                <div className="field">
+                  <label>{t.permissions.department}</label>
+                  <select
+                    value={selectedDeptId}
+                    onChange={(e) => {
+                      setSelectedDeptId(e.target.value);
+                      setSelectedRoleId('');
+                    }}
+                  >
+                    <option value="">{t.permissions.selectDepartmentPlaceholder}</option>
+                    {departmentOptions.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {localized(d.name, d.name_en)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{t.permissions.jobRole}</label>
+                  <select
+                    value={selectedRoleId}
+                    onChange={(e) => setSelectedRoleId(e.target.value)}
+                    disabled={!selectedDeptId}
+                  >
+                    <option value="">{t.permissions.selectJobRolePlaceholder}</option>
+                    {rolesForSelectedDept.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {localized(r.name, r.name_en)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {!selectedRole && <div className="empty-state">{t.permissions.noRoleSelected}</div>}
+
+              {selectedRole && (
+                <>
+                  <div className="hr" />
+                  <div className="section-title-row">
+                    <div>
+                      <strong>{localized(selectedRole.name, selectedRole.name_en)}</strong>
+                      <div className="muted">{localized(selectedRole.department_name, selectedRole.department_name_en)}</div>
+                    </div>
+                  </div>
+                  <div className="permission-check-grid">
+                    {PERMISSION_KEYS.map((key) => {
+                      const keys = currentRoleKeys(selectedRole);
+                      return (
+                        <label key={key} className="permission-check-item">
+                          <input
+                            type="checkbox"
+                            checked={keys.includes(key)}
+                            onChange={() => toggleRole(selectedRole, key)}
+                          />
+                          {t.permissions.keys[key]}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    disabled={!(selectedRole.id in dirtyRoles) || savingRoleId === selectedRole.id}
+                    onClick={() => saveRole(selectedRole)}
+                  >
+                    {savingRoleId === selectedRole.id ? t.common.loading : t.permissions.savePermissions}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>
