@@ -25,6 +25,7 @@ import StockTransfersPage from './pages/StockTransfersPage';
 import LocationsPage from './pages/LocationsPage';
 import CostCentersPage from './pages/CostCentersPage';
 import ProjectsPage from './pages/ProjectsPage';
+import PeriodClosingPage from './pages/PeriodClosingPage';
 import ExpensesPage from './pages/ExpensesPage';
 import WasteRecordsPage from './pages/WasteRecordsPage';
 import PayrollPage from './pages/PayrollPage';
@@ -177,6 +178,14 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <ProjectsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/period-closing"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <PeriodClosingPage />
                 </RequireRole>
               }
             />

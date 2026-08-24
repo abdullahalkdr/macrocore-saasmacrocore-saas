@@ -52,6 +52,7 @@ import slaPoliciesRoutes from './routes/slaPolicies.routes';
 import policiesRoutes from './routes/policies.routes';
 import costCentersRoutes from './routes/costCenters.routes';
 import projectsRoutes from './routes/projects.routes';
+import periodClosingRoutes from './routes/periodClosing.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -173,6 +174,12 @@ app.use('/api/cost-centers', ...silver('Cost centers'), costCentersRoutes);
 // consumes budget and optionally rolls up to a cost center. Same Silver-tier
 // gate as Cost Centers -- back-office setup, not a core POS necessity.
 app.use('/api/projects', ...silver('Projects'), projectsRoutes);
+
+// Period Closing module (MIGRATION_053) -- financial governance: locks an
+// accounting period (year/month) so downstream modules can refuse retroactive
+// edits against it. Same Silver-tier gate as Cost Centers/Projects -- back-office
+// setup, not a core POS necessity.
+app.use('/api/period-closing', ...silver('Period closing'), periodClosingRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

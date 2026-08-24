@@ -5,13 +5,12 @@ export default function SetupSection() {
   const t = useT();
   const navigate = useNavigate();
 
-  // Cost Centers (MIGRATION_051) and Projects (MIGRATION_052) both graduated out
-  // of `placeholders` below and into their own active cards, same "manage" button +
-  // navigate() pattern as Branches above -- each now has a real page behind its own
-  // flat route instead of being a disabled "coming soon" tile.
-  const placeholders = [
-    { title: t.account.sections.periodStatusTitle, desc: t.account.sections.periodStatusDesc, icon: '🔒' },
-  ];
+  // Cost Centers (MIGRATION_051), Projects (MIGRATION_052) and Period Closing
+  // (MIGRATION_053) have all graduated out of `placeholders` below and into their
+  // own active cards, same "manage" button + navigate() pattern as Branches above
+  // -- each now has a real page behind its own flat route instead of being a
+  // disabled "coming soon" tile. Nothing left to gate behind a placeholder today.
+  const placeholders: { title: string; desc: string; icon: string }[] = [];
 
   return (
     <div>
@@ -53,6 +52,20 @@ export default function SetupSection() {
         <div className="card-body">
           <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
             {t.account.sections.projectsDesc}
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2>{t.account.sections.periodStatusTitle}</h2>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/period-closing')}>
+            {t.account.setup.managePeriodClosing}
+          </button>
+        </div>
+        <div className="card-body">
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            {t.account.sections.periodStatusDesc}
           </p>
         </div>
       </div>
