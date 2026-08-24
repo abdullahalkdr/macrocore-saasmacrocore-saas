@@ -23,6 +23,7 @@ import RawMaterialBatchesPage from './pages/RawMaterialBatchesPage';
 import InventoryOverviewPage from './pages/InventoryOverviewPage';
 import StockTransfersPage from './pages/StockTransfersPage';
 import LocationsPage from './pages/LocationsPage';
+import CostCentersPage from './pages/CostCentersPage';
 import ExpensesPage from './pages/ExpensesPage';
 import WasteRecordsPage from './pages/WasteRecordsPage';
 import PayrollPage from './pages/PayrollPage';
@@ -159,6 +160,14 @@ export default function App() {
               element={
                 <RequireRole roles={MANAGER_ROLES}>
                   <LocationsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/cost-centers"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <CostCentersPage />
                 </RequireRole>
               }
             />
