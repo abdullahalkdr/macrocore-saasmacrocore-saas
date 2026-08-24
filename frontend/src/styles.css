@@ -572,7 +572,11 @@ tr:hover .print-btn { opacity: 1; }
 }
 .nav-accordion-head.open { background: var(--amber-500); color: var(--stone-900); }
 .nav-accordion-head:hover:not(.open) { background: var(--stone-800); color: #fff; }
-.nav-accordion-chevron { margin-inline-start: auto; opacity: .8; display: inline-flex; }
+.nav-accordion-chevron { margin-inline-start: auto; opacity: .8; display: inline-flex; transition: transform .15s; }
+/* Generalized from the Sales-only flyout to every accordion group (Warehouses, HR,
+   Reports & Documents, Settings & Support) — the chevron rotates on the open state so
+   it reads as an expand/collapse indicator rather than a static decoration. */
+.nav-accordion-head.open .nav-accordion-chevron { transform: rotate(90deg); }
 
 .nav-flyout {
   /* position: fixed on purpose, not absolute — .sidebar has overflow-y: auto, and per

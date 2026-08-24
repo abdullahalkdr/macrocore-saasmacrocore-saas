@@ -47,8 +47,17 @@ interface NavGroup {
   label: string;
   items: NavItem[];
   accordion?: boolean;
+  // Stable identity for an accordion group, independent of `parentLabel` (which is a
+  // translated string that changes with `lang` — can't be used as a toggle/ref key).
+  key?: string;
   parentLabel?: string;
   parentIcon?: IconType;
+  // Sales-only visual detail preserved from the original single-group flyout: its last
+  // item (Sales Settings) reads as a distinct trailing action, separated by a divider,
+  // rather than just another item in the list. Off by default for the newly-converted
+  // groups below — none of their trailing items are a settings-style outlier the same
+  // way, so they render as one plain list.
+  dividerBeforeLast?: boolean;
 }
 
 export default function Layout() {
@@ -151,6 +160,8 @@ export default function Layout() {
     {
       label: '',
       accordion: true,
+      key: 'sales',
+      dividerBeforeLast: true,
       parentLabel: t.nav.groupSales,
       parentIcon: IconSales,
       items: [
@@ -168,8 +179,17 @@ export default function Layout() {
       label: t.nav.groupProducts,
       items: [{ to: '/products', label: t.nav.products, icon: IconProduct, managerOnly: true }],
     },
+    // Warehouses, HR, Reports & Documents, and Settings & Support — same accordion
+    // flyout treatment as Sales above, converted because each grew to 4-7 flat items
+    // and made the sidebar too long to scan at a glance (Abdullah's "too cluttered"
+    // feedback). Their small uppercase section label is dropped in favor of the
+    // clickable parentLabel header, exactly like Sales already worked.
     {
-      label: t.nav.groupWarehouses,
+      label: '',
+      accordion: true,
+      key: 'warehouses',
+      parentLabel: t.nav.groupWarehouses,
+      parentIcon: IconBuilding,
       items: [
         { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true, minPlan: 2 },
         { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true },
@@ -181,7 +201,11 @@ export default function Layout() {
       ],
     },
     {
-      label: t.nav.groupHR,
+      label: '',
+      accordion: true,
+      key: 'hr',
+      parentLabel: t.nav.groupHR,
+      parentIcon: IconEmployee,
       items: [
         { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true, minPlan: 2 },
         { to: '/departments', label: t.nav.departments, icon: IconEmployee, managerOnly: true },
@@ -195,7 +219,11 @@ export default function Layout() {
       ],
     },
     {
-      label: t.nav.groupReportsDocs,
+      label: '',
+      accordion: true,
+      key: 'reportsDocs',
+      parentLabel: t.nav.groupReportsDocs,
+      parentIcon: IconReports,
       items: [
         { to: '/reports', label: t.nav.reports, icon: IconReports },
         { to: '/official-documents', label: t.nav.officialDocuments, icon: IconReports, managerOnly: true, minPlan: 2 },
@@ -204,7 +232,11 @@ export default function Layout() {
       ],
     },
     {
-      label: t.nav.groupSettings,
+      label: '',
+      accordion: true,
+      key: 'settings',
+      parentLabel: t.nav.groupSettings,
+      parentIcon: IconSettings,
       items: [
         { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
         { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true, minPlan: 3 },
@@ -244,29 +276,37 @@ export default function Layout() {
     }))
     .filter((group) => group.items.length > 0);
 
-  // Flyout state for the "المبيعات" group — a separate floating panel beside the
-  // sidebar (per Abdullah's Wafeq reference), not an inline accordion that pushes the
-  // rest of the list down. Starts closed; clicking the parent toggles the panel, and
-  // clicking outside it or picking an item closes it again.
+  // Flyout state — a separate floating panel beside the sidebar (per Abdullah's Wafeq
+  // reference), not an inline accordion that pushes the rest of the list down. Started
+  // as a Sales-only special case; generalized so any accordion group (Sales,
+  // Warehouses, HR, Reports & Documents, Settings & Support) can use the same panel —
+  // only one open at a time (opening one closes whichever was open), keyed by each
+  // group's stable `key` since `parentLabel` is a translated string that changes with
+  // `lang`. Starts closed; clicking a parent toggles its panel, and clicking outside it
+  // or picking an item closes it again.
   const location = useLocation();
   useEffect(() => {
     setMobileNavOpen(false);
+    setExpandedGroupKey(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
-  const salesGroup = visibleGroups.find((g) => g.accordion);
-  const salesChildPaths = salesGroup?.items.map((i) => i.to) ?? [];
-  const [salesExpanded, setSalesExpanded] = useState(false);
-  // top/left/right computed from the button's own on-screen position when opened (see
-  // toggleSalesFlyout) — needed because the panel is `position: fixed` (see styles.css
-  // for why absolute positioning didn't work here) and has no CSS-only anchor to the
-  // button anymore.
+  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
+  // top/left/right computed from the clicked button's own on-screen position (see
+  // toggleFlyout) — needed because the panel is `position: fixed` (see styles.css for
+  // why absolute positioning didn't work here) and has no CSS-only anchor to the button.
   const [flyoutPos, setFlyoutPos] = useState<{ top: number; left?: number; right?: number }>({ top: 0 });
-  const salesButtonRef = useRef<HTMLButtonElement>(null);
-  const salesFlyoutRef = useRef<HTMLDivElement>(null);
+  const flyoutButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const flyoutRef = useRef<HTMLDivElement>(null);
 
-  function toggleSalesFlyout() {
-    if (!salesExpanded && salesButtonRef.current) {
-      const rect = salesButtonRef.current.getBoundingClientRect();
+  function toggleFlyout(key: string) {
+    if (expandedGroupKey === key) {
+      setExpandedGroupKey(null);
+      return;
+    }
+    const btn = flyoutButtonRefs.current[key];
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
       const gap = 8;
       setFlyoutPos(
         isRTL(lang)
@@ -274,25 +314,25 @@ export default function Layout() {
           : { top: rect.top, left: rect.right + gap }
       );
     }
-    setSalesExpanded((v) => !v);
+    setExpandedGroupKey(key);
   }
 
   useEffect(() => {
-    if (!salesExpanded) return;
+    if (!expandedGroupKey) return;
     function onOutside(e: MouseEvent) {
+      const btn = flyoutButtonRefs.current[expandedGroupKey!];
       if (
-        salesFlyoutRef.current &&
-        !salesFlyoutRef.current.contains(e.target as Node) &&
-        salesButtonRef.current &&
-        !salesButtonRef.current.contains(e.target as Node)
+        flyoutRef.current &&
+        !flyoutRef.current.contains(e.target as Node) &&
+        btn &&
+        !btn.contains(e.target as Node)
       ) {
-        setSalesExpanded(false);
+        setExpandedGroupKey(null);
       }
     }
     document.addEventListener('mousedown', onOutside);
     return () => document.removeEventListener('mousedown', onOutside);
-  }, [salesExpanded]);
-  const salesParentActive = salesExpanded || salesChildPaths.includes(location.pathname);
+  }, [expandedGroupKey]);
 
   function renderNavItem(l: NavItem) {
     const minPlan = 'minPlan' in l ? l.minPlan : undefined;
@@ -389,48 +429,59 @@ export default function Layout() {
           <h1>{company?.name || 'macrocore'}</h1>
           <NotificationsBell />
         </div>
-        {visibleGroups.map((group, gi) => (
-          <div key={group.accordion ? 'sales-accordion' : group.label || gi} style={{ padding: '10px 10px 4px' }}>
-            {!group.accordion && group.label && (
-              <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>
-                {group.label}
-              </div>
-            )}
-            {group.accordion ? (
-              <div className="nav-flyout-wrap">
-                <button
-                  ref={salesButtonRef}
-                  type="button"
-                  className={`nav-accordion-head${salesParentActive ? ' open' : ''}`}
-                  onClick={toggleSalesFlyout}
-                >
-                  {group.parentIcon ? <group.parentIcon /> : null}
-                  <span style={{ flex: 1 }}>{group.parentLabel}</span>
-                  <span className="nav-accordion-chevron">
-                    <IconChevronRight />
-                  </span>
-                </button>
-                {salesExpanded && (
-                  <div className="nav-flyout" ref={salesFlyoutRef} style={{ top: flyoutPos.top, left: flyoutPos.left, right: flyoutPos.right }}>
-                    <div className="nav-flyout-header">
-                      <span className="back">
-                        <IconChevronRight size={12} />
-                      </span>
-                      {group.parentLabel}
+        {visibleGroups.map((group, gi) => {
+          const groupActive = group.accordion && (expandedGroupKey === group.key || group.items.some((i) => i.to === location.pathname));
+          return (
+            <div key={group.key ?? group.label ?? gi} style={{ padding: '10px 10px 4px' }}>
+              {!group.accordion && group.label && (
+                <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>
+                  {group.label}
+                </div>
+              )}
+              {group.accordion ? (
+                <div className="nav-flyout-wrap">
+                  <button
+                    ref={(el) => {
+                      flyoutButtonRefs.current[group.key!] = el;
+                    }}
+                    type="button"
+                    className={`nav-accordion-head${groupActive ? ' open' : ''}`}
+                    onClick={() => toggleFlyout(group.key!)}
+                  >
+                    {group.parentIcon ? <group.parentIcon /> : null}
+                    <span style={{ flex: 1 }}>{group.parentLabel}</span>
+                    <span className="nav-accordion-chevron">
+                      <IconChevronRight />
+                    </span>
+                  </button>
+                  {expandedGroupKey === group.key && (
+                    <div className="nav-flyout" ref={flyoutRef} style={{ top: flyoutPos.top, left: flyoutPos.left, right: flyoutPos.right }}>
+                      <div className="nav-flyout-header">
+                        <span className="back">
+                          <IconChevronRight size={12} />
+                        </span>
+                        {group.parentLabel}
+                      </div>
+                      <nav onClick={() => setExpandedGroupKey(null)}>
+                        {group.dividerBeforeLast ? (
+                          <>
+                            {group.items.slice(0, -1).map((l) => renderNavItem(l))}
+                            <div className="nav-flyout-divider" />
+                            {renderNavItem(group.items[group.items.length - 1])}
+                          </>
+                        ) : (
+                          group.items.map((l) => renderNavItem(l))
+                        )}
+                      </nav>
                     </div>
-                    <nav onClick={() => setSalesExpanded(false)}>
-                      {group.items.slice(0, -1).map((l) => renderNavItem(l))}
-                      <div className="nav-flyout-divider" />
-                      {renderNavItem(group.items[group.items.length - 1])}
-                    </nav>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <nav>{group.items.map((l) => renderNavItem(l))}</nav>
-            )}
-          </div>
-        ))}
+                  )}
+                </div>
+              ) : (
+                <nav>{group.items.map((l) => renderNavItem(l))}</nav>
+              )}
+            </div>
+          );
+        })}
         <div style={{ marginTop: 'auto', padding: '10px 12px', display: 'flex', gap: 6 }}>
           <button className="btn btn-secondary btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={toggleLang}>
             {lang === 'ar' ? 'English' : 'العربية'}
