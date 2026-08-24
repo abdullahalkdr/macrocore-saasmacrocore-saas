@@ -14,19 +14,21 @@ import { IconEye } from '../components/Icon';
 // ITSM_TICKET's detail view is in-component state on SupportTicketsPage.tsx
 // (openId/detail), not a routed /support/tickets/:id page — /support?ticket=
 // is the deep-link query param that page reads on mount to auto-open it.
-// Payroll/PO/Expense have no dedicated single-record detail page yet (those
-// modules were explicitly left unwired this round), so their "view details"
-// falls back to the module's list page rather than a specific record.
+// MIGRATION_058 — Payroll/PO/Expense now get the same treatment: each page reads
+// its own ?record=<id> on mount and opens that record's existing edit modal
+// (reused as the "view" UI — the modal's Save button is itself disabled while
+// the record is pending, so this is safe to open even for a reviewer who can't
+// edit it).
 function resolveApprovalUrl(moduleType: string, referenceId: string): string {
   switch (moduleType) {
     case 'ITSM_TICKET':
       return `/support?ticket=${referenceId}`;
     case 'PAYROLL':
-      return '/payroll';
+      return `/payroll?record=${referenceId}`;
     case 'PURCHASE_ORDER':
-      return '/purchase-orders';
+      return `/purchase-orders?record=${referenceId}`;
     case 'EXPENSE':
-      return '/expenses';
+      return `/expenses?record=${referenceId}`;
     default:
       return '/approvals';
   }

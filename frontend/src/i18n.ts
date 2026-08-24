@@ -884,6 +884,12 @@ const en = {
     updateFailed: 'Failed to update expense',
     receiptReplaceHint: 'Uploading a new file replaces the existing receipt.',
     exportCsv: 'Export CSV',
+    // MIGRATION_058 — Maker-Checker gate, Gold+ companies only. status defaults to
+    // 'approved' for everyone else (grandfathered/below-Gold), so this tag only ever
+    // shows up for a company that actually has the gate on.
+    pendingApproval: 'Pending approval',
+    rejectedStatus: 'Rejected',
+    pendingApprovalNote: 'Awaiting approval — cannot be edited or deleted until a decision is made.',
   },
   waste: {
     title: 'Waste',
@@ -919,6 +925,11 @@ const en = {
     paid: 'Paid',
     unpaid: 'Unpaid',
     markPaid: 'Mark paid',
+    // MIGRATION_058 — set once pay() has been submitted and is awaiting approval
+    // (Gold+ only, see financialApprovals.ts). Shown instead of the plain "Unpaid"
+    // tag, and the Mark Paid button is disabled while this is true.
+    pendingApproval: 'Pending approval',
+    submittedForApproval: 'Submitted for approval — waiting on a second sign-off.',
     selectEmployee: 'Select employee...',
     empty: 'No payroll records yet.',
     loadFailed: 'Failed to load payroll',
@@ -1393,6 +1404,10 @@ const en = {
     receiveFailed: 'Failed to receive purchase order',
     deleteConfirm: 'Delete this draft purchase order?',
     deleteFailed: 'Failed to delete purchase order',
+    // MIGRATION_058 — set once "Send to Supplier" (draft -> ordered) has been
+    // submitted and is awaiting approval (Gold+ only, see financialApprovals.ts).
+    pendingApproval: 'Pending approval',
+    submittedForApproval: 'Submitted for approval — waiting on a second sign-off.',
     status: {
       label: 'Status',
       draft: 'Draft',
@@ -3022,6 +3037,9 @@ const ar: typeof en = {
     updateFailed: 'فشل تحديث المصروف',
     receiptReplaceHint: 'رفع ملف جديد يستبدل الفاتورة الحالية.',
     exportCsv: 'تصدير CSV',
+    pendingApproval: 'بانتظار الاعتماد',
+    rejectedStatus: 'مرفوض',
+    pendingApprovalNote: 'بانتظار الاعتماد — ما يقدر يتعدل ولا يتحذف لين يصير قرار.',
   },
   waste: {
     title: 'الهالك',
@@ -3057,6 +3075,8 @@ const ar: typeof en = {
     paid: 'مدفوع',
     unpaid: 'غير مدفوع',
     markPaid: 'تعليم كمدفوع',
+    pendingApproval: 'بانتظار الاعتماد',
+    submittedForApproval: 'اترسل للاعتماد — بانتظار توقيع ثاني.',
     selectEmployee: 'اختر الموظف...',
     empty: 'ما فيه سجلات رواتب بعد.',
     loadFailed: 'فشل تحميل الرواتب',
@@ -3515,6 +3535,8 @@ const ar: typeof en = {
     receiveFailed: 'فشل استلام أمر الشراء',
     deleteConfirm: 'حذف مسودة أمر الشراء هذا؟',
     deleteFailed: 'فشل حذف أمر الشراء',
+    pendingApproval: 'بانتظار الاعتماد',
+    submittedForApproval: 'اترسل للاعتماد — بانتظار توقيع ثاني.',
     status: {
       label: 'الحالة',
       draft: 'مسودة',

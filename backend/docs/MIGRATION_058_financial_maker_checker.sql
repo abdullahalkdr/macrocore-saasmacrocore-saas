@@ -1,0 +1,61 @@
+-- MIGRATION_058_financial_maker_checker.sql
+--
+-- Wires the existing single-step Approval Engine (MIGRATION_055) into the actual
+-- money-moving actions on Payroll, Purchase Orders, and Expenses — previously the
+-- engine supported these module_types (PAYROLL/PURCHASE_ORDER/EXPENSE via
+-- MODULE_APPROVER_PERMISSION in approvals.controller.ts) but nothing ever
+-- auto-fired a request; a client had to file one manually. This migration's
+-- accompanying backend changes make that automatic and mandatory.
+--
+-- Run with: node scripts/run-sql.js docs/MIGRATION_058_financial_maker_checker.sql
+--
+-- Design decisions:
+--   1. Gold+ ONLY, everywhere. /api/approvals is entirely Gold-gated (app.ts). But
+--      /api/purchase-orders is Silver-gated and /api/expenses has NO plan gate at
+--      all (open to Bronze) — so a company below Gold that got forced through this
+--      gate would create a permanently-stuck pending record with zero route to ever
+--      approve it (no access to /api/approvals whatsoever). Forcing the gate on
+--      Bronze/Silver would silently brick Purchase Orders/Expenses for most of the
+--      customer base. Every one of this migration's backend checks explicitly
+--      verifies planLevelOf(company.plan) >= 3 before requiring approval — a
+--      below-Gold company keeps its original instant-execute behavior completely
+--      untouched. Payroll needs no such check: /api/payroll is already 100%
+--      Gold-gated, so anyone who can reach pay() already has /api/approvals access.
+--      Same "never strand a below-tier company" principle supportTickets.controller.ts's
+--      ITSM chain already applies (see its create()'s own comment).
+--   2. Mandatory, not a toggle. Every Gold+ company gets this gate unconditionally —
+--      no per-company opt-out setting, matching the ITSM chain's own precedent
+--      (every Gold+ company gets the same 3-step ticket chain, no toggle either).
+--   3. What gets gated is the ACTUAL financial action, not record creation, for
+--      Payroll and Purchase Orders — payroll.controller.ts's pay() (money actually
+--      leaving) and purchaseOrders.controller.ts's update()'s draft -> ordered
+--      transition ("Send to Supplier", the real commitment to a supplier). Creating
+--      a payroll record or a draft PO is unchanged and instant; only the
+--      money-moving step requires approval first. No schema change needed for
+--      either table — approval_requests (generic, MIGRATION_055) already tracks
+--      this by (module_type, reference_id), looked up live via
+--      utils/financialApprovals.ts's getLatestApproval() rather than a status
+--      column on payroll/purchase_orders themselves.
+--   4. Expenses are different: there is no second "pay/reimburse" endpoint to gate
+--      (expenses.controller.ts only ever had create/update/remove) — the expense
+--      record ITSELF is the financial event. So Expenses alone needs an actual
+--      schema change: a status column, gated at create() instead of a later action.
+--      DEFAULT 'approved' grandfathers every existing row (and every write from a
+--      below-Gold company) to the original instant-recorded behavior — nothing
+--      already in the table is retroactively put on hold.
+--   5. Approving/rejecting an EXPENSE has a side effect the other two modules don't
+--      need: approvals.controller.ts's actionRequest() now also flips the expense's
+--      own `status` column when its approval_requests row resolves (there is no
+--      follow-up call for the submitter to make afterward, unlike payroll's pay()
+--      or the PO's own draft->ordered retry). Payroll/Purchase Orders deliberately
+--      do NOT get this treatment — same "approval = permission, not execution"
+--      philosophy already documented for ITSM tickets (see supportTickets.controller.ts's
+--      updateStatus() comment #4 in the project handoff): the maker still takes the
+--      real action (pay() / send-to-supplier) themselves once approved.
+--
+-- Run again after any migration: safe, IF NOT EXISTS / idempotent throughout.
+
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'
+  CHECK (status IN ('pending_approval', 'approved', 'rejected'));
+
+CREATE INDEX IF NOT EXISTS idx_expenses_status ON expenses (company_id, status);

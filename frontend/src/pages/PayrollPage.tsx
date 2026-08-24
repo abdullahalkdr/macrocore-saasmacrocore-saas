@@ -1,4 +1,5 @@
 import { FormEvent, Fragment, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
@@ -25,6 +26,10 @@ interface PayrollRecord {
   total_paid: number;
   status?: 'pending' | 'paid';
   paid_date: string | null;
+  // MIGRATION_058 — latest approval_requests status for this record's PAYROLL
+  // module_type, or null if it was never submitted (below-Gold company, or a
+  // Gold+ record that hasn't had "Mark paid" clicked yet).
+  approval_status?: 'pending' | 'approved' | 'rejected' | null;
 }
 interface Employee {
   id: string;
@@ -135,9 +140,25 @@ export default function PayrollPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterMonth]);
 
+  // "View Details" deep-link from ApprovalsInboxPage.tsx: /payroll?record=<id> opens
+  // that record's edit modal once the list has loaded — same pattern
+  // SupportTicketsPage.tsx uses for /support?ticket=. openEdit is a function
+  // declaration further down, hoisted within this component's scope.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const recordId = searchParams.get('record');
+    if (!recordId) return;
+    const match = items.find((p) => p.id === recordId);
+    if (match) openEdit(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
   const employeeName = (id: string) => employees.find((e) => e.id === id)?.name || id;
   const selectedEmployee = employees.find((e) => e.id === employeeId);
   const visibleItems = filterEmployee ? items.filter((p) => p.employee_id === filterEmployee) : items;
+  // MIGRATION_058 — the record currently open in the edit modal is locked (Save
+  // disabled) while its own pay() submission is awaiting approval.
+  const editingRecordPending = !!editingId && items.find((p) => p.id === editingId)?.approval_status === 'pending';
 
   const hourlyWage =
     selectedEmployee?.wage_type === 'hourly'
@@ -423,13 +444,29 @@ export default function PayrollPage() {
                       {Number(p.attendance_deduction || 0).toFixed(3)} KD
                     </td>
                     <td className="num" style={{ fontWeight: 700 }}>{Number(p.total_paid).toFixed(3)} KD</td>
-                    <td>{p.paid_date ? <Tag color="green">{t.payroll.paid}</Tag> : <Tag color="amber">{t.payroll.unpaid}</Tag>}</td>
+                    <td>
+                      {p.approval_status === 'pending' ? (
+                        <Tag color="amber">{t.payroll.pendingApproval}</Tag>
+                      ) : p.paid_date ? (
+                        <Tag color="green">{t.payroll.paid}</Tag>
+                      ) : (
+                        <Tag color="amber">{t.payroll.unpaid}</Tag>
+                      )}
+                    </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); printPayslip(p); }}>
                         {t.payroll.payslip}
                       </button>{' '}
+                      {/* MIGRATION_058 — disabled while awaiting approval so the
+                          submitter can't re-trigger pay() and re-file a second
+                          request; "prevent tampering while pending" per spec. */}
                       {!p.paid_date && (
-                        <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); markPaid(p.id); }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          disabled={p.approval_status === 'pending'}
+                          title={p.approval_status === 'pending' ? t.payroll.submittedForApproval : undefined}
+                          onClick={(e) => { e.stopPropagation(); markPaid(p.id); }}
+                        >
                           {t.payroll.markPaid}
                         </button>
                       )}{' '}
@@ -486,7 +523,7 @@ export default function PayrollPage() {
           }}
           actions={(requestClose) => (
             <>
-              <button className="btn btn-primary" type="submit" form="payroll-form" disabled={loading}>
+              <button className="btn btn-primary" type="submit" form="payroll-form" disabled={loading || editingRecordPending}>
                 {loading ? t.common.loading : editingId ? t.common.save : t.payroll.generate}
               </button>
               <button className="btn btn-secondary" type="button" onClick={requestClose}>
@@ -495,6 +532,7 @@ export default function PayrollPage() {
             </>
           )}
         >
+          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.payroll.submittedForApproval}</p>}
           <form id="payroll-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.payroll.month}</label>

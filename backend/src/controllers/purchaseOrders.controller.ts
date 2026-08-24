@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { isCompanyGoldPlus, getLatestApproval, fileApprovalRequest } from '../utils/financialApprovals';
 
 interface ItemInput {
   raw_material_id: string;
@@ -60,10 +61,17 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     where += ` AND po.status = $${params.length}`;
   }
 
+  // MIGRATION_058 — approval_status resolved live from the latest approval_requests
+  // row for this PO (module_type = 'PURCHASE_ORDER'), null for one never submitted
+  // (below-Gold company, or a draft that hasn't hit "Send to Supplier" yet). Drives
+  // PurchaseOrdersPage.tsx's "Pending approval" badge and disables its actions.
   const result = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
             po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
-            COALESCE(SUM(poi.qty * poi.unit_price), 0)::float AS total
+            COALESCE(SUM(poi.qty * poi.unit_price), 0)::float AS total,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
      FROM purchase_orders po
      LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
      LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
@@ -82,7 +90,10 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
-            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at
+            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
      FROM purchase_orders po
      LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
      LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
@@ -159,6 +170,35 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     throw new AppError(400, 'Only draft purchase orders can be edited — cancel and create a new one instead');
   }
 
+  // MIGRATION_058 — Maker-Checker gate on "Send to Supplier" (draft -> ordered): the
+  // real commitment point (money owed to a supplier), gated the same way payroll's
+  // pay() is — but ONLY for Gold+ companies. /api/purchase-orders itself is
+  // Silver-gated (app.ts) while /api/approvals is Gold-gated, so a Silver company
+  // forced through this gate would have no route to ever approve its own PO — see
+  // financialApprovals.ts's header. A below-Gold company keeps the original instant
+  // draft->ordered transition untouched. This intentionally does NOT touch
+  // draft->cancelled or ordered->cancelled — cancelling isn't a new financial
+  // commitment, only placing the order is.
+  if (status === 'ordered' && currentStatus === 'draft' && (await isCompanyGoldPlus(companyId))) {
+    const latest = await getLatestApproval(companyId, 'PURCHASE_ORDER', id as string);
+    if (latest?.status === 'pending') {
+      throw new AppError(400, 'This purchase order is already awaiting approval.');
+    }
+    if (latest?.status !== 'approved') {
+      await fileApprovalRequest(companyId, 'PURCHASE_ORDER', id as string, req.auth!.userId);
+      await logAudit({
+        companyId,
+        userId: req.auth!.userId,
+        action: 'purchase_order_submitted_for_approval',
+        entityType: 'purchase_orders',
+        entityId: id as string,
+        req,
+      });
+      res.status(200).json({ success: true, submitted_for_approval: true });
+      return;
+    }
+  }
+
   if (supplier_id !== undefined && supplier_id) {
     const sup = await pool.query('SELECT id FROM suppliers WHERE id = $1 AND company_id = $2', [supplier_id, companyId]);
     if (sup.rows.length === 0) throw new AppError(400, 'supplier_id not found');
@@ -210,7 +250,10 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const full = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
-            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at
+            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
      FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
      WHERE po.id = $1`,
     [id]

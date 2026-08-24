@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
+import Tag from '../components/Tag';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
 interface Supplier {
@@ -39,6 +41,10 @@ interface PurchaseOrder {
   notes: string | null;
   created_at: string;
   total: number;
+  // MIGRATION_058 — latest approval_requests status for this PO's PURCHASE_ORDER
+  // module_type, or null if never submitted (below-Gold company, or a draft that
+  // hasn't hit "Send to Supplier" yet).
+  approval_status?: 'pending' | 'approved' | 'rejected' | null;
 }
 interface ItemRow {
   rawMaterialId: string;
@@ -83,6 +89,19 @@ export default function PurchaseOrdersPage() {
     get<{ raw_materials: RawMaterial[] }>('/raw-materials').then((r) => setRawMaterials(r.raw_materials)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "View Details" deep-link from ApprovalsInboxPage.tsx: /purchase-orders?record=<id>
+  // opens that PO's edit modal once the list has loaded — same pattern
+  // SupportTicketsPage.tsx uses for /support?ticket=. openEdit is a function
+  // declaration further down, hoisted within this component's scope.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const recordId = searchParams.get('record');
+    if (!recordId) return;
+    const match = items.find((po) => po.id === recordId);
+    if (match) openEdit(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   function resetForm() {
     setSupplierId('');
@@ -216,6 +235,10 @@ export default function PurchaseOrdersPage() {
     }
   }
 
+  // MIGRATION_058 — the PO currently open in the edit modal is locked (Save
+  // disabled) while its own "Send to Supplier" submission is awaiting approval.
+  const editingRecordPending = !!editingId && items.find((po) => po.id === editingId)?.approval_status === 'pending';
+
   function statusLabel(s: PurchaseOrder['status']) {
     return t.purchaseOrders.status[s];
   }
@@ -255,12 +278,23 @@ export default function PurchaseOrdersPage() {
                   <td style={{ fontWeight: 700 }}>{po.supplier_name || '—'}</td>
                   <td>
                     <span className={`badge ${po.status}`}>{statusLabel(po.status)}</span>
+                    {po.approval_status === 'pending' && (
+                      <div style={{ marginTop: 4 }}>
+                        <Tag color="amber">{t.purchaseOrders.pendingApproval}</Tag>
+                      </div>
+                    )}
                   </td>
                   <td className="num">{po.order_date ? po.order_date.slice(0, 10) : '—'}</td>
                   <td className="num">{po.expected_date ? po.expected_date.slice(0, 10) : '—'}</td>
                   <td className="num">{po.total.toFixed(3)} KD</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {po.status === 'draft' && (
+                    {/* MIGRATION_058 — a draft awaiting approval to be sent locks out
+                        Edit/Send to Supplier/Delete entirely (prevent tampering while
+                        pending, per spec) instead of just disabling them. */}
+                    {po.status === 'draft' && po.approval_status === 'pending' && (
+                      <span className="muted" style={{ fontSize: 12 }}>{t.purchaseOrders.submittedForApproval}</span>
+                    )}
+                    {po.status === 'draft' && po.approval_status !== 'pending' && (
                       <>
                         <button className="icon-btn" title={t.purchaseOrders.editItem} onClick={() => openEdit(po)}>
                           <IconEdit />
@@ -304,7 +338,7 @@ export default function PurchaseOrdersPage() {
           onClose={() => setOpen(false)}
           actions={(requestClose) => (
             <>
-              <button className="btn btn-primary" type="submit" form="po-form" disabled={loading}>
+              <button className="btn btn-primary" type="submit" form="po-form" disabled={loading || editingRecordPending}>
                 {loading ? t.common.loading : t.common.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={requestClose}>
@@ -313,6 +347,7 @@ export default function PurchaseOrdersPage() {
             </>
           )}
         >
+          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.purchaseOrders.submittedForApproval}</p>}
           <form id="po-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.purchaseOrders.supplier}</label>

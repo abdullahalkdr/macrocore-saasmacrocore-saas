@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { assertPeriodOpen } from '../utils/periodGuard';
 import { hasPermission } from '../utils/permissions';
+import { getLatestApproval, fileApprovalRequest } from '../utils/financialApprovals';
 
 // list()/getOne() are reachable by any authenticated user (see payroll.routes.ts) — a
 // plain employee with no 'manage_payroll' grant only ever sees their OWN payroll rows
@@ -61,21 +62,29 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const ownEmployeeId = await ownEmployeeIdFilter(req);
 
   const params: unknown[] = [companyId];
-  let where = 'company_id = $1';
+  let where = 'p.company_id = $1';
   if (typeof month === 'string') {
     if (!/^\d{4}-\d{2}$/.test(month)) throw new AppError(400, 'month must be YYYY-MM');
     params.push(month);
-    where += ` AND month_year = $${params.length}`;
+    where += ` AND p.month_year = $${params.length}`;
   }
   if (ownEmployeeId !== undefined) {
     params.push(ownEmployeeId);
-    where += ` AND employee_id = $${params.length}`;
+    where += ` AND p.employee_id = $${params.length}`;
   }
 
+  // MIGRATION_058 — approval_status is resolved live from the latest approval_requests
+  // row for this payroll record (module_type = 'PAYROLL'), not a column on payroll
+  // itself — null for a record that was never submitted for approval (below-Gold
+  // company, or a Gold+ record that hasn't had "Pay" clicked yet). Drives the
+  // PayrollPage.tsx "Pending approval" badge and disables its Mark Paid button.
   const result = await pool.query(
-    `SELECT id, employee_id, month_year, base_salary, attendance_bonus, other_deductions,
-            wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date
-     FROM payroll WHERE ${where} ORDER BY month_year DESC`,
+    `SELECT p.id, p.employee_id, p.month_year, p.base_salary, p.attendance_bonus, p.other_deductions,
+            p.wage_type, p.hourly_rate, p.hours_worked, p.attendance_deduction, p.total_paid, p.status, p.paid_date,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = p.company_id AND ar.module_type = 'PAYROLL' AND ar.reference_id = p.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
+     FROM payroll p WHERE ${where} ORDER BY p.month_year DESC`,
     params
   );
   res.status(200).json({ success: true, payroll: result.rows });
@@ -88,16 +97,19 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const ownEmployeeId = await ownEmployeeIdFilter(req);
 
   const params: unknown[] = [id, companyId];
-  let where = 'id = $1 AND company_id = $2';
+  let where = 'p.id = $1 AND p.company_id = $2';
   if (ownEmployeeId !== undefined) {
     params.push(ownEmployeeId);
-    where += ` AND employee_id = $${params.length}`;
+    where += ` AND p.employee_id = $${params.length}`;
   }
 
   const result = await pool.query(
-    `SELECT id, employee_id, month_year, base_salary, attendance_bonus, other_deductions,
-            wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date
-     FROM payroll WHERE ${where}`,
+    `SELECT p.id, p.employee_id, p.month_year, p.base_salary, p.attendance_bonus, p.other_deductions,
+            p.wage_type, p.hourly_rate, p.hours_worked, p.attendance_deduction, p.total_paid, p.status, p.paid_date,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = p.company_id AND ar.module_type = 'PAYROLL' AND ar.reference_id = p.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
+     FROM payroll p WHERE ${where}`,
     params
   );
   if (!result.rows[0]) throw new AppError(404, 'Payroll record not found');
@@ -410,6 +422,33 @@ export const pay = asyncHandler(async (req: Request, res: Response) => {
   {
     const [guardYear, guardMonth] = (existing.rows[0].month_year as string).split('-').map(Number);
     await assertPeriodOpen(companyId, guardYear, guardMonth);
+  }
+
+  // MIGRATION_058 — Maker-Checker gate. /api/payroll is entirely Gold-gated already
+  // (app.ts), so every company that can reach this endpoint also has access to
+  // /api/approvals — no below-Gold trap here (unlike Purchase Orders/Expenses, see
+  // financialApprovals.ts's own header), no extra plan check needed. Paying out is
+  // the real money-moving step, not generating the record, so that's what's gated —
+  // the record's own `status` stays 'pending' (unpaid) until this actually resolves.
+  const latest = await getLatestApproval(companyId, 'PAYROLL', id as string);
+  if (latest?.status === 'pending') {
+    throw new AppError(400, 'This payroll record is already awaiting approval.');
+  }
+  if (latest?.status !== 'approved') {
+    // No approval yet, or the previous one was rejected — file a fresh request and
+    // stop here. The maker (whoever clicked Pay) cannot also be the one who
+    // resolves it — enforced in approvals.controller.ts's actionRequest(), not here.
+    await fileApprovalRequest(companyId, 'PAYROLL', id as string, req.auth!.userId);
+    await logAudit({
+      companyId,
+      userId: req.auth!.userId,
+      action: 'payroll_pay_submitted_for_approval',
+      entityType: 'payroll',
+      entityId: id as string,
+      req,
+    });
+    res.status(200).json({ success: true, submitted_for_approval: true });
+    return;
   }
 
   const result = await pool.query(

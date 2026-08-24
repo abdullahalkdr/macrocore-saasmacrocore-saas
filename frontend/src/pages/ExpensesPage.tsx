@@ -1,4 +1,5 @@
 import { Fragment, FormEvent, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
@@ -20,6 +21,10 @@ interface Expense {
   expense_date: string | null;
   created_at: string;
   created_by_name: string | null;
+  // MIGRATION_058 — 'approved' for everyone below Gold tier (grandfathered/instant,
+  // see financialApprovals.ts) and for every pre-existing row. Only a Gold+ company's
+  // NEW expenses ever start as 'pending_approval'.
+  status?: 'pending_approval' | 'approved' | 'rejected';
 }
 
 interface Location {
@@ -91,6 +96,19 @@ export default function ExpensesPage() {
       .then((r) => setCategories(Array.isArray(r.expense_categories) ? r.expense_categories : []))
       .catch(() => {});
   }, []);
+
+  // "View Details" deep-link from ApprovalsInboxPage.tsx: /expenses?record=<id>
+  // opens that expense's edit modal once the list has loaded — same pattern
+  // SupportTicketsPage.tsx uses for /support?ticket=. openEdit is a function
+  // declaration further down, hoisted within this component's scope.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const recordId = searchParams.get('record');
+    if (!recordId) return;
+    const match = items.find((x) => x.id === recordId);
+    if (match) openEdit(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   function resetForm() {
     setLocationId('');
@@ -260,6 +278,10 @@ export default function ExpensesPage() {
   }
 
   const colCount = isManager ? 7 : 6;
+  // MIGRATION_058 — the expense currently open in the edit modal is locked (Save
+  // disabled) while awaiting approval — reached via the Approvals Inbox's "View
+  // Details" deep-link, since the Edit button itself is hidden for a pending row.
+  const editingRecordPending = !!editingId && items.find((x) => x.id === editingId)?.status === 'pending_approval';
 
   return (
     <div>
@@ -327,6 +349,16 @@ export default function ExpensesPage() {
                     <tr key={x.id}>
                       <td>
                         <Tag color="amber">{x.category}</Tag>
+                        {x.status === 'pending_approval' && (
+                          <div style={{ marginTop: 4 }}>
+                            <Tag color="amber">{t.expenses.pendingApproval}</Tag>
+                          </div>
+                        )}
+                        {x.status === 'rejected' && (
+                          <div style={{ marginTop: 4 }}>
+                            <Tag color="red">{t.expenses.rejectedStatus}</Tag>
+                          </div>
+                        )}
                       </td>
                       <td>{x.created_by_name || '—'}</td>
                       <td>{x.location_name || '—'}</td>
@@ -345,14 +377,21 @@ export default function ExpensesPage() {
                       </td>
                       {isManager && (
                         <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
-                              <IconEdit />
-                            </button>
-                            <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(x.id)}>
-                              <IconTrash />
-                            </button>
-                          </div>
+                          {/* MIGRATION_058 — locked out entirely while awaiting approval
+                              (prevent tampering with what an approver is about to
+                              review), not just visually disabled. */}
+                          {x.status === 'pending_approval' ? (
+                            <span className="muted" style={{ fontSize: 12 }}>{t.expenses.pendingApprovalNote}</span>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
+                                <IconEdit />
+                              </button>
+                              <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(x.id)}>
+                                <IconTrash />
+                              </button>
+                            </div>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -377,7 +416,7 @@ export default function ExpensesPage() {
           onClose={() => setOpen(false)}
           actions={(requestClose) => (
             <>
-              <button className="btn btn-primary" type="submit" form="expense-form" disabled={loading}>
+              <button className="btn btn-primary" type="submit" form="expense-form" disabled={loading || editingRecordPending}>
                 {loading ? t.common.loading : editingId ? t.expenses.saveEdit : t.common.save}
               </button>
               <button className="btn btn-secondary" type="button" onClick={requestClose}>
@@ -386,6 +425,7 @@ export default function ExpensesPage() {
             </>
           )}
         >
+          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.expenses.pendingApprovalNote}</p>}
           <form id="expense-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.expenses.location}</label>

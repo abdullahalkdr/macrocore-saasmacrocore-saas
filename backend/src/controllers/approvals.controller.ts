@@ -3,18 +3,21 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
-import { hasPermission, effectivePermissions, usersWithPermission } from '../utils/permissions';
+import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
-import { notifyRoles, notifyUsers } from '../utils/notifications';
+import { MODULE_APPROVER_PERMISSION, fileApprovalRequest } from '../utils/financialApprovals';
 
-// MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) — Core
-// Enterprise Approval Workflow Engine (Maker-Checker).
+// MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
+// (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
 //
 // Two kinds of module_type now coexist:
-//   - Single-step (PAYROLL, PURCHASE_ORDER, EXPENSE — MODULE_APPROVER_PERMISSION
-//     below): one approve/reject resolves the request immediately. Untouched by the
-//     MIGRATION_056 upgrade, per that migration's own decision #4 — still explicitly
-//     NOT wired into payroll/purchase-orders/expenses' own create/pay endpoints.
+//   - Single-step (PAYROLL, PURCHASE_ORDER, EXPENSE — MODULE_APPROVER_PERMISSION,
+//     now in utils/financialApprovals.ts): one approve/reject resolves the request
+//     immediately. As of MIGRATION_058 these ARE auto-filed by their own module
+//     controllers (payroll.controller.ts's pay(), purchaseOrders.controller.ts's
+//     update() draft->ordered transition, expenses.controller.ts's create()) —
+//     this endpoint (createRequest below) still also accepts a manually-filed
+//     request for the same module_types, unchanged.
 //   - Multi-step (ITSM_TICKET, so far the only one — approval_workflow_steps table):
 //     current_step advances on each approval until the final step, only THEN does
 //     status flip to 'approved'. A rejection at any step stops the whole chain
@@ -23,16 +26,6 @@ import { notifyRoles, notifyUsers } from '../utils/notifications';
 //     static permission-key check, since "who approves" depends on the specific
 //     ticket (its requester's department, its current assignee) not just the module.
 
-// Which permission key (on top of admin/manager, who can always act) lets someone act
-// as an approver for a given SINGLE-STEP module. Kept here rather than in
-// permissions.controller.ts since these are existing PERMISSION_KEYS being reused for
-// a second purpose (approving someone else's request), not new keys — extend this map
-// when a new single-step module_type is wired up, no schema change needed.
-const MODULE_APPROVER_PERMISSION: Record<string, string> = {
-  PAYROLL: 'manage_payroll',
-  PURCHASE_ORDER: 'approve_purchase_orders',
-  EXPENSE: 'edit_expenses',
-};
 // Manually-filed requests only ever go through these — ITSM_TICKET is intentionally
 // excluded: its chain is only ever spawned automatically by
 // supportTickets.controller.ts's create() (see createItsmApprovalChain), tied to a
@@ -40,21 +33,15 @@ const MODULE_APPROVER_PERMISSION: Record<string, string> = {
 // spin up an orphaned approval chain pointing at an arbitrary/nonexistent reference_id.
 const VALID_MODULES = Object.keys(MODULE_APPROVER_PERMISSION);
 
-// Bilingual labels for the notification body — the notifications table has a single
-// title/body column (MIGRATION_025), not per-language ones, so both languages are
-// combined into one string, same convention notifyItsmStepPending() uses.
-const MODULE_LABEL: Record<string, { ar: string; en: string }> = {
-  PAYROLL: { ar: 'الرواتب', en: 'Payroll' },
-  PURCHASE_ORDER: { ar: 'أمر شراء', en: 'Purchase order' },
-  EXPENSE: { ar: 'مصروف', en: 'Expense' },
-};
-
 async function myEmployeeId(userId: string): Promise<string | null> {
   const result = await pool.query('SELECT employee_id FROM users WHERE id = $1', [userId]);
   return result.rows[0]?.employee_id ?? null;
 }
 
-// POST /api/approvals/request — any authenticated employee-linked user can file one.
+// POST /api/approvals/request — any authenticated employee-linked user can file one
+// manually. MIGRATION_058's own module controllers call fileApprovalRequest()
+// directly instead of hitting this route internally, but this route stays exactly
+// as it was for a manual/ad-hoc filing of the same module_types.
 export const createRequest = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { module_type, reference_id } = req.body ?? {};
@@ -64,44 +51,18 @@ export const createRequest = asyncHandler(async (req: Request, res: Response) =>
   }
   if (!reference_id) throw new AppError(400, 'reference_id is required');
 
-  const requesterId = await myEmployeeId(req.auth!.userId);
-  if (!requesterId) {
-    throw new AppError(400, 'Your account is not linked to an employee record — approval requests require a linked employee.');
-  }
-
-  const result = await pool.query(
-    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [companyId, module_type, reference_id, requesterId]
-  );
-
-  // Notify everyone eligible to act on this single-step request right now: every
-  // admin/manager (who can always act, per MODULE_APPROVER_PERMISSION's own comment),
-  // plus anyone individually or by-job-role holding the module's permission key.
-  const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
-  const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
-  const label = MODULE_LABEL[module_type];
-  const title = 'مطلوب اعتماد جديد / New Approval Required';
-  const body = label ? `${label.ar} من ${requesterName} / ${label.en} from ${requesterName}` : requesterName;
-  const link = '/approvals';
-  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: req.auth!.userId });
-  const permissionKey = MODULE_APPROVER_PERMISSION[module_type];
-  if (permissionKey) {
-    usersWithPermission(companyId, permissionKey)
-      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId: req.auth!.userId }))
-      .catch(() => {});
-  }
+  const request = await fileApprovalRequest(companyId, module_type, reference_id, req.auth!.userId);
 
   await logAudit({
     companyId,
     userId: req.auth!.userId,
     action: 'approval_request_created',
     entityType: 'approval_requests',
-    entityId: result.rows[0].id,
+    entityId: request.id,
     req,
   });
 
-  res.status(201).json({ success: true, request: result.rows[0] });
+  res.status(201).json({ success: true, request });
 });
 
 // GET /api/approvals/pending — requests this logged-in user is eligible to act on:
@@ -244,6 +205,19 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
         [id, request.current_step, myId, action, comments || null]
       );
       await client.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [action, id]);
+
+      // MIGRATION_058 — EXPENSE is the one single-step module with a side effect
+      // here: unlike Payroll (pay()) or Purchase Orders (the draft->ordered retry),
+      // there's no follow-up call for the submitter to make once approved — the
+      // expense record IS the financial event, so this decision must flip its own
+      // `status` column directly. Payroll/Purchase Orders deliberately do NOT get
+      // this treatment (same "approval = permission, not execution" principle
+      // already applied to ITSM tickets) — their maker still takes the real action
+      // themselves after seeing 'approved'.
+      if (request.module_type === 'EXPENSE') {
+        await client.query(`UPDATE expenses SET status = $1 WHERE id = $2 AND company_id = $3`, [action, request.reference_id, companyId]);
+      }
+
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
