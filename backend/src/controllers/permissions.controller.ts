@@ -60,11 +60,18 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   // job_role_id comes along (via employees, may be NULL for pure logins with no linked
   // employee record) so the By Employee UI can show which permissions this person
   // already inherits from their job role — same MIGRATION_054 two-layer model as
-  // effectivePermissions()/hasPermission() in utils/permissions.ts.
+  // effectivePermissions()/hasPermission() in utils/permissions.ts. department_id/name
+  // and job_role name (bilingual, both via job_roles/departments) are also pulled here
+  // so the frontend can group the employee picker by department without a second
+  // round-trip — same LEFT JOIN chain listJobRoles() below already uses.
   const usersResult = await pool.query(
-    `SELECT u.id, u.full_name, u.email, u.role, e.job_role_id
+    `SELECT u.id, u.full_name, u.email, u.role, e.job_role_id,
+            jr.name AS job_role_name, jr.name_en AS job_role_name_en,
+            d.id AS department_id, d.name AS department_name, d.name_en AS department_name_en
      FROM users u
      LEFT JOIN employees e ON e.id = u.employee_id
+     LEFT JOIN job_roles jr ON jr.id = e.job_role_id
+     LEFT JOIN departments d ON d.id = jr.department_id AND d.company_id = jr.company_id
      WHERE u.company_id = $1
      ORDER BY u.full_name`,
     [companyId]
@@ -106,6 +113,11 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     role: u.role,
     permission_keys: grantsByUser.get(u.id) ?? [],
     inherited_keys: u.job_role_id ? grantsByJobRole.get(u.job_role_id) ?? [] : [],
+    department_id: u.department_id,
+    department_name: u.department_name,
+    department_name_en: u.department_name_en,
+    job_role_name: u.job_role_name,
+    job_role_name_en: u.job_role_name_en,
   }));
 
   res.status(200).json({ success: true, permission_keys: PERMISSION_KEYS, employees });

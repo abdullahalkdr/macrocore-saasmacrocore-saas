@@ -1431,6 +1431,7 @@ const en = {
     noEmployeeSelected: 'Search and select an employee above to manage their individual permissions.',
     inheritedHint: 'Highlighted permissions are already granted through this employee’s job role — checking a box below adds an individual exception on top, it never removes a job-role grant.',
     inheritedBadge: 'From job role',
+    unassignedDepartment: 'Unassigned',
   },
   customers: {
     title: 'Customers',
@@ -3509,6 +3510,7 @@ const ar: typeof en = {
     noEmployeeSelected: 'دوّر واختر موظف فوق عشان تدير صلاحياته الفردية.',
     inheritedHint: 'الصلاحيات المميّزة ممنوحة أصلاً من خلال المسمى الوظيفي لهذا الموظف — تفعيل أي صلاحية تحت يضيف استثناء فردي فوقها، وما يلغي صلاحية المسمى الوظيفي.',
     inheritedBadge: 'من المسمى الوظيفي',
+    unassignedDepartment: 'غير محدد',
   },
   customers: {
     title: 'العملاء',

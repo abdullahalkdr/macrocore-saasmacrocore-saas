@@ -15,6 +15,13 @@ interface EmployeeRow {
   // employees.job_role_id). Read-only here: individual grants below can only ADD on
   // top of this, never remove it — same rule the backend enforces.
   inherited_keys: string[];
+  // For the grouped employee picker — null for users with no linked employee record
+  // or no job role assigned yet (grouped under "Unassigned" in the dropdown).
+  department_id: string | null;
+  department_name: string | null;
+  department_name_en: string | null;
+  job_role_name: string | null;
+  job_role_name_en: string | null;
 }
 
 // MIGRATION_054 — a job_roles row (across all departments), with its currently-granted
@@ -90,10 +97,46 @@ export default function PermissionsPage() {
   // Client-side only — the employee list is already scoped to one company (small enough
   // to filter in the browser, no need for a server round-trip per keystroke).
   const [userSearch, setUserSearch] = useState('');
-  const filteredEmployees = employees.filter((e) =>
-    (e.full_name || e.email).toLowerCase().includes(userSearch.trim().toLowerCase())
-  );
+  const filteredEmployees = employees
+    .filter((e) => {
+      const q = userSearch.trim().toLowerCase();
+      if (!q) return true;
+      const jobRoleLabel = e.job_role_name ? localized(e.job_role_name, e.job_role_name_en) : '';
+      return (e.full_name || e.email).toLowerCase().includes(q) || jobRoleLabel.toLowerCase().includes(q);
+    })
+    .slice(0, 60);
   const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId) ?? null;
+
+  // Groups the (already search-filtered) employee list by department for the picker
+  // dropdown below — a flat 100+ row list of names/emails is unusable, department
+  // context makes it scannable. Employees with no linked employee record or no
+  // department assigned yet fall into an "Unassigned" bucket, always sorted last.
+  interface EmployeeGroup {
+    id: string;
+    label: string;
+    employees: EmployeeRow[];
+  }
+  const employeeGroups: EmployeeGroup[] = (() => {
+    const byId = new Map<string, EmployeeGroup>();
+    for (const emp of filteredEmployees) {
+      const key = emp.department_id ?? '__unassigned__';
+      if (!byId.has(key)) {
+        byId.set(key, {
+          id: key,
+          label: emp.department_id ? localized(emp.department_name || '', emp.department_name_en) : t.permissions.unassignedDepartment,
+          employees: [],
+        });
+      }
+      byId.get(key)!.employees.push(emp);
+    }
+    const groups = Array.from(byId.values());
+    groups.sort((a, b) => {
+      if (a.id === '__unassigned__') return 1;
+      if (b.id === '__unassigned__') return -1;
+      return a.label.localeCompare(b.label);
+    });
+    return groups;
+  })();
 
   // Departments derived from the job_roles list itself (each role row already carries
   // its department id/name/name_en) — no separate departments fetch needed.
@@ -243,19 +286,32 @@ export default function PermissionsPage() {
                     {showEmployeeSuggestions && (
                       <div className="autocomplete-list">
                         {filteredEmployees.length === 0 && <div className="autocomplete-item muted">{t.permissions.noResults}</div>}
-                        {filteredEmployees.slice(0, 8).map((emp) => (
-                          <div
-                            key={emp.id}
-                            className="autocomplete-item"
-                            onMouseDown={(ev) => {
-                              ev.preventDefault();
-                              setSelectedEmployeeId(emp.id);
-                              setUserSearch('');
-                              setShowEmployeeSuggestions(false);
-                            }}
-                          >
-                            <div style={{ fontWeight: 700 }}>{emp.full_name || emp.email}</div>
-                            {emp.full_name && <div className="muted" style={{ fontSize: 11 }}>{emp.email}</div>}
+                        {employeeGroups.map((group) => (
+                          <div key={group.id}>
+                            <div className="autocomplete-group-header">{group.label}</div>
+                            {group.employees.map((emp) => (
+                              <div
+                                key={emp.id}
+                                className="autocomplete-item"
+                                onMouseDown={(ev) => {
+                                  ev.preventDefault();
+                                  setSelectedEmployeeId(emp.id);
+                                  setUserSearch('');
+                                  setShowEmployeeSuggestions(false);
+                                }}
+                              >
+                                <div style={{ fontWeight: 700 }}>
+                                  {emp.full_name || emp.email}
+                                  {emp.job_role_name && (
+                                    <span className="muted" style={{ fontWeight: 400 }}>
+                                      {' '}
+                                      ({localized(emp.job_role_name, emp.job_role_name_en)})
+                                    </span>
+                                  )}
+                                </div>
+                                {emp.full_name && <div className="muted" style={{ fontSize: 11 }}>{emp.email}</div>}
+                              </div>
+                            ))}
                           </div>
                         ))}
                       </div>
