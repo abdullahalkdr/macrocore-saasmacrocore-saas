@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .env
+
+# Vite dev-server temp config files (auto-generated on every dev/build run)
+vite.config.*.timestamp-*.mjs
