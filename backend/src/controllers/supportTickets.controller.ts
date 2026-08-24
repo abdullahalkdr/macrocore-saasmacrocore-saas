@@ -4,6 +4,8 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission } from '../utils/permissions';
+import { createItsmApprovalChain, getBlockingApproval, getItsmApprovalSummary } from '../utils/itsmApprovals';
+import { planLevelOf } from '../config/planFeatures';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
@@ -258,6 +260,21 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   );
   const ticket = result.rows[0];
 
+  // MIGRATION_056 — spawn the 3-step ITSM approval chain (department manager -> IT
+  // agent -> IT manager) for every new ticket. Gated on the company's LIVE plan level
+  // being Gold (3) or higher, checked here rather than via the route-level
+  // requirePlanLevel gate — /support/tickets itself stays available on every plan,
+  // only the approval sub-feature is conditional. This matters: /api/approvals is
+  // gold-gated (app.ts), so a Bronze/Silver company would have no way to ever act on
+  // a chain if one were spawned for them — updateStatus() below would then block
+  // their tickets from ever being resolved/closed with no route to fix it. Never
+  // creating the chain for a below-Gold company avoids that trap entirely; their
+  // tickets behave exactly as before this migration.
+  const companyPlan = await pool.query('SELECT plan FROM companies WHERE id = $1', [companyId]);
+  if (planLevelOf(companyPlan.rows[0]?.plan) >= 3) {
+    await createItsmApprovalChain(companyId, ticket.id, req.auth!.userId);
+  }
+
   await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_created', entityType: 'support_tickets', entityId: ticket.id, req });
 
   res.status(201).json({ success: true, ticket });
@@ -306,7 +323,12 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   // own /ticket-categories fetch).
   const { category_is_hr_sensitive, request_type_is_hr_sensitive, ...publicTicket } = ticket;
 
-  res.status(200).json({ success: true, ticket: publicTicket, replies });
+  // MIGRATION_056 — null for a ticket with no chain (legacy ticket, or the company
+  // was below Gold tier when it was created). The frontend's "Approval Workflow
+  // Status" block simply doesn't render when this is null.
+  const approval = await getItsmApprovalSummary(companyId, id as string, req.auth!);
+
+  res.status(200).json({ success: true, ticket: publicTicket, replies, approval });
 });
 
 export const reply = asyncHandler(async (req: Request, res: Response) => {
@@ -433,6 +455,22 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
 
   const closing = status === 'resolved' || status === 'closed';
   const stampResolved = closing && !existing.rows[0].resolved_at;
+
+  // MIGRATION_056 — a ticket with an open (pending or rejected) ITSM approval chain
+  // cannot be resolved/closed until it completes. No-op for a ticket with no chain at
+  // all (getBlockingApproval returns null) — legacy tickets and below-Gold companies
+  // are completely unaffected, see create()'s own comment for why that matters.
+  if (closing) {
+    const blocking = await getBlockingApproval(companyId, id as string);
+    if (blocking) {
+      throw new AppError(
+        400,
+        blocking.status === 'rejected'
+          ? 'This ticket cannot be resolved — its approval chain was rejected.'
+          : `This ticket cannot be resolved until its approval chain is complete (currently at step ${blocking.current_step}).`
+      );
+    }
+  }
 
   const result = await pool.query(
     `UPDATE support_tickets

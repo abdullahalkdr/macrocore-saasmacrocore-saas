@@ -4,31 +4,39 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
+import { getWorkflowSteps, resolveItsmStepEligibility, isEligible } from '../utils/itsmApprovals';
 
-// MIGRATION_055 — Core Enterprise Approval Workflow Engine (Maker-Checker).
+// MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) — Core
+// Enterprise Approval Workflow Engine (Maker-Checker).
 //
-// Scope of this file, deliberately: a single-step approve/reject engine plus the audit
-// trail. There is no chain-of-approvers config table yet (see the migration's decision
-// #3), so `current_step` never advances past 1 here — approving a request resolves it
-// immediately rather than moving it to a next tier. Multi-tier chains are a real,
-// planned extension (the schema was shaped to carry it), just not built yet; don't
-// read `current_step` as meaningful beyond "which step this one action was logged
-// against".
-//
-// Also deliberately NOT done here: wiring this into payroll/purchase-orders/expenses'
-// own create/pay endpoints so THEY require an approval before taking effect. This file
-// is the standalone engine + inbox only — a follow-up integration task per module.
+// Two kinds of module_type now coexist:
+//   - Single-step (PAYROLL, PURCHASE_ORDER, EXPENSE — MODULE_APPROVER_PERMISSION
+//     below): one approve/reject resolves the request immediately. Untouched by the
+//     MIGRATION_056 upgrade, per that migration's own decision #4 — still explicitly
+//     NOT wired into payroll/purchase-orders/expenses' own create/pay endpoints.
+//   - Multi-step (ITSM_TICKET, so far the only one — approval_workflow_steps table):
+//     current_step advances on each approval until the final step, only THEN does
+//     status flip to 'approved'. A rejection at any step stops the whole chain
+//     immediately. Eligibility per step is resolved live via
+//     utils/itsmApprovals.ts's resolveItsmStepEligibility()/isEligible() — never a
+//     static permission-key check, since "who approves" depends on the specific
+//     ticket (its requester's department, its current assignee) not just the module.
 
 // Which permission key (on top of admin/manager, who can always act) lets someone act
-// as an approver for a given module. Kept here rather than in permissions.controller.ts
-// since these are existing PERMISSION_KEYS being reused for a second purpose (approving
-// someone else's request), not new keys — extend this map when a new module_type is
-// wired up, no schema change needed.
+// as an approver for a given SINGLE-STEP module. Kept here rather than in
+// permissions.controller.ts since these are existing PERMISSION_KEYS being reused for
+// a second purpose (approving someone else's request), not new keys — extend this map
+// when a new single-step module_type is wired up, no schema change needed.
 const MODULE_APPROVER_PERMISSION: Record<string, string> = {
   PAYROLL: 'manage_payroll',
   PURCHASE_ORDER: 'approve_purchase_orders',
   EXPENSE: 'edit_expenses',
 };
+// Manually-filed requests only ever go through these — ITSM_TICKET is intentionally
+// excluded: its chain is only ever spawned automatically by
+// supportTickets.controller.ts's create() (see createItsmApprovalChain), tied to a
+// real ticket row that's already been validated. Accepting it here would let a client
+// spin up an orphaned approval chain pointing at an arbitrary/nonexistent reference_id.
 const VALID_MODULES = Object.keys(MODULE_APPROVER_PERMISSION);
 
 async function myEmployeeId(userId: string): Promise<string | null> {
@@ -90,12 +98,34 @@ export const listPending = asyncHandler(async (req: Request, res: Response) => {
     [companyId]
   );
 
-  const requests = result.rows.filter((r) => {
-    if (myId && r.requester_id === myId) return false;
-    if (isManager) return true;
+  // Fetched once, reused per-row below — the ITSM chain has exactly one step
+  // sequence company-wide (MIGRATION_056 decision #1), no need to re-query per row.
+  const itsmSteps = await getWorkflowSteps('ITSM_TICKET');
+
+  const requests: (typeof result.rows[number] & { current_step_label?: string; current_step_label_en?: string | null })[] = [];
+  for (const r of result.rows) {
+    if (myId && r.requester_id === myId) continue; // maker-checker, applies to every module_type
+
+    if (r.module_type === 'ITSM_TICKET') {
+      const step = itsmSteps.find((s) => s.step_number === r.current_step);
+      if (!step) continue; // defensive — no step defined for this stage, shouldn't happen
+      const eligibility = await resolveItsmStepEligibility(companyId, r.requester_id, r.reference_id, step);
+      if (isEligible(req.auth!, eligibility)) {
+        requests.push({ ...r, current_step_label: step.step_label, current_step_label_en: step.step_label_en });
+      }
+      continue;
+    }
+
+    // Single-step modules (unchanged from MIGRATION_055).
+    if (isManager) {
+      requests.push(r);
+      continue;
+    }
     const requiredPermission = MODULE_APPROVER_PERMISSION[r.module_type];
-    return !!requiredPermission && !!myPermissions && myPermissions.includes(requiredPermission);
-  });
+    if (requiredPermission && myPermissions && myPermissions.includes(requiredPermission)) {
+      requests.push(r);
+    }
+  }
 
   res.status(200).json({ success: true, requests });
 });
@@ -124,29 +154,66 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   }
 
   const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
-  if (!isManager) {
-    const requiredPermission = MODULE_APPROVER_PERMISSION[request.module_type];
-    const allowed = !!requiredPermission && (await hasPermission(req.auth!.userId, requiredPermission));
-    if (!allowed) throw new AppError(403, 'You do not have permission to act on this approval request.');
-  }
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(
-      `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, request.current_step, myId, action, comments || null]
-    );
-    // Single-step engine for now (see file header) — approve or reject both resolve
-    // the request immediately, current_step is not advanced.
-    await client.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [action, id]);
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+  if (request.module_type === 'ITSM_TICKET') {
+    const steps = await getWorkflowSteps('ITSM_TICKET');
+    const step = steps.find((s) => s.step_number === request.current_step);
+    if (!step) throw new AppError(500, 'No workflow step is defined for this stage — contact support.');
+
+    const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, request.reference_id, step);
+    if (!isEligible(req.auth!, eligibility)) {
+      throw new AppError(403, 'You are not the pending approver for this step.');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, request.current_step, myId, action, comments || null]
+      );
+      if (action === 'rejected') {
+        // A rejection at ANY step stops the whole chain immediately — see
+        // MIGRATION_056 decision #3.
+        await client.query(`UPDATE approval_requests SET status = 'rejected', updated_at = now() WHERE id = $1`, [id]);
+      } else if (request.current_step < steps.length) {
+        await client.query(`UPDATE approval_requests SET current_step = current_step + 1, updated_at = now() WHERE id = $1`, [id]);
+      } else {
+        await client.query(`UPDATE approval_requests SET status = 'approved', updated_at = now() WHERE id = $1`, [id]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    // Single-step modules (unchanged from MIGRATION_055) — approve or reject both
+    // resolve the request immediately, current_step is not advanced.
+    if (!isManager) {
+      const requiredPermission = MODULE_APPROVER_PERMISSION[request.module_type];
+      const allowed = !!requiredPermission && (await hasPermission(req.auth!.userId, requiredPermission));
+      if (!allowed) throw new AppError(403, 'You do not have permission to act on this approval request.');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, request.current_step, myId, action, comments || null]
+      );
+      await client.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [action, id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   await logAudit({

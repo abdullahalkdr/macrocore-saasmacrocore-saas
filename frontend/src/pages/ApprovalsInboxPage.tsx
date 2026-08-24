@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 
 // MIGRATION_055 — mirrors approval_requests + the requester_name/requester_job_role
 // projection approvals.controller.ts's listPending() adds via its employees JOIN.
+// MIGRATION_056 — current_step_label/_en are present only for multi-step rows
+// (ITSM_TICKET today), naming which stage of the chain is currently pending.
 interface ApprovalRequest {
   id: string;
-  module_type: 'PAYROLL' | 'PURCHASE_ORDER' | 'EXPENSE' | string;
+  module_type: 'PAYROLL' | 'PURCHASE_ORDER' | 'EXPENSE' | 'ITSM_TICKET' | string;
   reference_id: string;
   requester_id: string;
   requester_name: string | null;
@@ -17,10 +20,13 @@ interface ApprovalRequest {
   status: string;
   current_step: number;
   created_at: string;
+  current_step_label?: string;
+  current_step_label_en?: string | null;
 }
 
 export default function ApprovalsInboxPage() {
   const t = useT();
+  const lang = useLangStore((s) => s.lang);
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
@@ -107,7 +113,14 @@ export default function ApprovalsInboxPage() {
             <tbody>
               {requests.map((r) => (
                 <tr key={r.id}>
-                  <td style={{ fontWeight: 700 }}>{moduleLabel(r.module_type)}</td>
+                  <td style={{ fontWeight: 700 }}>
+                    {moduleLabel(r.module_type)}
+                    {r.current_step_label && (
+                      <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+                        {lang === 'ar' ? r.current_step_label : r.current_step_label_en || r.current_step_label}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     {r.requester_name || '—'}
                     {r.requester_job_role && (

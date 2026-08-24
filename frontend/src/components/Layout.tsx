@@ -277,6 +277,18 @@ export default function Layout() {
         { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
         { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true, minPlan: 3 },
         { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
+      ],
+    },
+    // MIGRATION_056 — Helpdesk/Service Catalog moved out of Settings & Support into
+    // its own accordion group, per the ITSM multi-step approval upgrade request.
+    // Same three routes as before (unchanged), just regrouped.
+    {
+      label: '',
+      accordion: true,
+      key: 'itSupport',
+      parentLabel: t.nav.groupItSupport,
+      parentIcon: IconSettings,
+      items: [
         { to: '/support', label: t.nav.support, icon: IconSettings },
         { to: '/service-catalog', label: t.nav.serviceCatalog, icon: IconSettings, managerOnly: true },
         { to: '/sla-management', label: t.nav.slaManagement, icon: IconSettings, managerOnly: true, minPlan: 3 },

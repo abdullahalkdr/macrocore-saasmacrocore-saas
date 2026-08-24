@@ -1,0 +1,190 @@
+import { pool } from '../db/pool';
+
+// MIGRATION_056 — the ITSM/Helpdesk ticketing module's 3-step approval chain, shared
+// between approvals.controller.ts (the generic inbox: listPending/actionRequest) and
+// supportTickets.controller.ts (spawning the chain on ticket creation, embedding its
+// status on GET /support/tickets/:id, and blocking resolve/close until it completes).
+// Kept in one file specifically so the "who can act on this step" logic is defined
+// exactly once — approvals.controller.ts's actionRequest() enforcement and
+// SupportTicketsPage.tsx's "show me Approve/Reject" decision must never drift apart.
+
+export interface WorkflowStepDef {
+  step_number: number;
+  approver_type: 'department_manager' | 'ticket_assignee' | 'job_role';
+  approver_value: string | null;
+  step_label: string;
+  step_label_en: string | null;
+}
+
+export async function getWorkflowSteps(moduleType: string): Promise<WorkflowStepDef[]> {
+  const result = await pool.query(
+    `SELECT step_number, approver_type, approver_value, step_label, step_label_en
+     FROM approval_workflow_steps WHERE module_type = $1 ORDER BY step_number ASC`,
+    [moduleType]
+  );
+  return result.rows;
+}
+
+export interface StepEligibility {
+  // Specific user accounts (users.id) eligible to act at this step.
+  userIds: string[];
+  // True when this step couldn't resolve a specific person (no department manager
+  // set, ticket unassigned, nobody holds the named job role) — any admin/manager may
+  // act instead, so an understaffed step never permanently strands a request.
+  allowAnyManager: boolean;
+}
+
+// Resolves eligibility for ONE step of the ITSM_TICKET workflow, live at call time
+// (never cached/frozen onto the approval_requests row) — see MIGRATION_056's header
+// for why each of the three approver_type strategies is resolved this way.
+export async function resolveItsmStepEligibility(
+  companyId: string,
+  requesterEmployeeId: string,
+  ticketId: string,
+  step: WorkflowStepDef
+): Promise<StepEligibility> {
+  if (step.approver_type === 'department_manager') {
+    const dept = await pool.query(
+      'SELECT department_id FROM employees WHERE id = $1 AND company_id = $2',
+      [requesterEmployeeId, companyId]
+    );
+    const departmentId = dept.rows[0]?.department_id;
+    if (!departmentId) return { userIds: [], allowAnyManager: true };
+
+    const mgr = await pool.query(
+      'SELECT manager_id FROM departments WHERE id = $1 AND company_id = $2',
+      [departmentId, companyId]
+    );
+    const managerEmployeeId = mgr.rows[0]?.manager_id;
+    if (!managerEmployeeId) return { userIds: [], allowAnyManager: true };
+
+    const mgrUser = await pool.query(
+      'SELECT id FROM users WHERE employee_id = $1 AND company_id = $2',
+      [managerEmployeeId, companyId]
+    );
+    if (mgrUser.rows.length === 0) return { userIds: [], allowAnyManager: true };
+    return { userIds: mgrUser.rows.map((r) => r.id), allowAnyManager: false };
+  }
+
+  if (step.approver_type === 'ticket_assignee') {
+    const ticket = await pool.query(
+      'SELECT assigned_to FROM support_tickets WHERE id = $1 AND company_id = $2',
+      [ticketId, companyId]
+    );
+    const assignedTo = ticket.rows[0]?.assigned_to;
+    if (!assignedTo) return { userIds: [], allowAnyManager: true };
+    return { userIds: [assignedTo], allowAnyManager: false };
+  }
+
+  // 'job_role' — approver_value names a job_roles.name_en/name to match, resolved via
+  // employees.job_role_id (MIGRATION_054), not the free-text employees.job_role column
+  // (same "linked FK, not string matching" rule job_role_permissions itself follows).
+  const jr = await pool.query(
+    `SELECT u.id FROM users u
+     JOIN employees e ON e.id = u.employee_id
+     JOIN job_roles jr ON jr.id = e.job_role_id AND jr.company_id = u.company_id
+     WHERE u.company_id = $1 AND (jr.name_en = $2 OR jr.name = $2)`,
+    [companyId, step.approver_value]
+  );
+  return { userIds: jr.rows.map((r) => r.id), allowAnyManager: true };
+}
+
+// Admin can always act, on any step, regardless of resolution — universal safety
+// valve. Otherwise: a specifically-resolved approver must match by user id, or (when
+// nobody specific was resolved) any admin/manager may stand in.
+export function isEligible(auth: { userId: string; role: string }, eligibility: StepEligibility): boolean {
+  if (auth.role === 'admin') return true;
+  if (eligibility.userIds.includes(auth.userId)) return true;
+  if (eligibility.allowAnyManager && auth.role === 'manager') return true;
+  return false;
+}
+
+// Spawns the 3-step chain for a brand-new ticket. Silently no-ops if the creator has
+// no linked employee record (a pure admin/owner account filing their own ticket) —
+// ticket creation must never fail over this, same tolerance
+// approvals.controller.ts's createRequest() applies to a manually-filed request.
+export async function createItsmApprovalChain(companyId: string, ticketId: string, creatorUserId: string): Promise<void> {
+  const employeeRes = await pool.query('SELECT employee_id FROM users WHERE id = $1', [creatorUserId]);
+  const requesterId = employeeRes.rows[0]?.employee_id;
+  if (!requesterId) return;
+  await pool.query(
+    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id) VALUES ($1, 'ITSM_TICKET', $2, $3)`,
+    [companyId, ticketId, requesterId]
+  );
+}
+
+// Ticket-resolution lock (Step 2 of the upgrade): returns the still-open
+// approval_requests row for this ticket, or null when there's nothing blocking it
+// (no chain was ever spawned — a legacy ticket, or a company below Gold tier at
+// creation time — or the chain already reached 'approved'). 'rejected' still blocks:
+// a rejected chain needs a human decision (re-request, or an admin override via direct
+// SQL/support), not a silent path to closing the ticket anyway.
+export async function getBlockingApproval(companyId: string, ticketId: string) {
+  const result = await pool.query(
+    `SELECT * FROM approval_requests
+     WHERE company_id = $1 AND module_type = 'ITSM_TICKET' AND reference_id = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [companyId, ticketId]
+  );
+  const row = result.rows[0];
+  if (!row || row.status === 'approved') return null;
+  return row;
+}
+
+export interface ItsmApprovalSummary {
+  id: string;
+  status: string;
+  current_step: number;
+  total_steps: number;
+  steps: { step_number: number; step_label: string; step_label_en: string | null }[];
+  log: { step_number: number; action: string; comments: string | null; action_at: string; approver_name: string | null }[];
+  is_pending_approver: boolean;
+}
+
+// Full status block for SupportTicketsPage.tsx's ticket detail — the step list, the
+// action history, and whether the CURRENTLY LOGGED IN user is the pending approver
+// right now (drives whether the Approve/Reject buttons render at all). Returns null
+// when no chain exists for this ticket (nothing to show).
+export async function getItsmApprovalSummary(
+  companyId: string,
+  ticketId: string,
+  currentUser: { userId: string; role: string }
+): Promise<ItsmApprovalSummary | null> {
+  const result = await pool.query(
+    `SELECT * FROM approval_requests
+     WHERE company_id = $1 AND module_type = 'ITSM_TICKET' AND reference_id = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [companyId, ticketId]
+  );
+  const request = result.rows[0];
+  if (!request) return null;
+
+  const steps = await getWorkflowSteps('ITSM_TICKET');
+  const logResult = await pool.query(
+    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, e.name AS approver_name
+     FROM approval_steps_log asl
+     LEFT JOIN employees e ON e.id = asl.approver_id
+     WHERE asl.approval_request_id = $1
+     ORDER BY asl.action_at ASC`,
+    [request.id]
+  );
+
+  let isPendingApproverForMe = false;
+  if (request.status === 'pending') {
+    const step = steps.find((s) => s.step_number === request.current_step);
+    if (step) {
+      const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, ticketId, step);
+      isPendingApproverForMe = isEligible(currentUser, eligibility);
+    }
+  }
+
+  return {
+    id: request.id,
+    status: request.status,
+    current_step: request.current_step,
+    total_steps: steps.length,
+    steps: steps.map((s) => ({ step_number: s.step_number, step_label: s.step_label, step_label_en: s.step_label_en })),
+    log: logResult.rows,
+    is_pending_approver: isPendingApproverForMe,
+  };
+}

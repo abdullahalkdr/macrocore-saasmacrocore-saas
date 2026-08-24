@@ -32,11 +32,37 @@ interface Reply {
   is_internal_note: boolean;
   created_at: string;
 }
+// MIGRATION_056 — mirrors backend/src/utils/itsmApprovals.ts's ItsmApprovalSummary.
+// Present (non-null) only for a ticket that has a spawned ITSM approval chain — a
+// legacy ticket, or one created while the company was below Gold tier, simply has
+// `approval: null` and the whole status block below doesn't render.
+interface ApprovalStepDef {
+  step_number: number;
+  step_label: string;
+  step_label_en: string | null;
+}
+interface ApprovalLogEntry {
+  step_number: number;
+  action: string;
+  comments: string | null;
+  action_at: string;
+  approver_name: string | null;
+}
+interface ItsmApprovalSummary {
+  id: string;
+  status: string;
+  current_step: number;
+  total_steps: number;
+  steps: ApprovalStepDef[];
+  log: ApprovalLogEntry[];
+  is_pending_approver: boolean;
+}
 interface TicketDetail extends Ticket {
   description: string;
   replies: Reply[];
   request_type_name?: string;
   request_type_name_en?: string;
+  approval?: ItsmApprovalSummary | null;
 }
 interface CompanyUser {
   id: string;
@@ -306,6 +332,43 @@ export default function SupportTicketsPage() {
     }
   }
 
+  // --- MIGRATION_056: Approval Workflow Status block ---
+  // Reuses the SAME endpoint the Approvals Inbox uses (POST /approvals/:id/action) —
+  // no separate ticket-scoped approval endpoint, this page is just another caller.
+  // Approve goes through a small optional-comment modal; Reject is a one-click
+  // confirm(), matching ApprovalsInboxPage.tsx's own UX split.
+  const [approvalCommentOpen, setApprovalCommentOpen] = useState(false);
+  const [approvalComment, setApprovalComment] = useState('');
+  const [approvalActing, setApprovalActing] = useState(false);
+
+  async function submitTicketApproval(action: 'approved' | 'rejected', comments?: string) {
+    if (!detail?.approval) return;
+    setApprovalActing(true);
+    setError(null);
+    try {
+      await post(`/approvals/${detail.approval.id}/action`, { action, comments: comments?.trim() || undefined });
+      setApprovalCommentOpen(false);
+      setApprovalComment('');
+      if (openId) openTicket(openId);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.approvals.actionFailed);
+    } finally {
+      setApprovalActing(false);
+    }
+  }
+
+  function handleTicketApprovalReject() {
+    if (!confirm(t.approvals.rejectConfirm)) return;
+    submitTicketApproval('rejected');
+  }
+
+  function approvalStatusTag(status: string) {
+    if (status === 'approved') return <Tag color="green">{t.approvals.statusApproved}</Tag>;
+    if (status === 'rejected') return <Tag color="red">{t.approvals.statusRejected}</Tag>;
+    return <Tag color="amber">{t.approvals.statusPending}</Tag>;
+  }
+
   // dynamic_data key -> the field's own definition, when it still exists
   // (a field can be deleted after tickets were filed against it — the value
   // stays on the ticket, just falls back to the raw key as its label).
@@ -412,6 +475,71 @@ export default function SupportTicketsPage() {
             <h2>{detail.subject}</h2>
           </div>
           <div className="card-body">
+            {/* MIGRATION_056 — Approval Workflow Status, top of the ticket per spec.
+                Absent entirely (detail.approval is null) for a legacy ticket or one
+                created while the company was below Gold tier. */}
+            {detail.approval && (
+              <div className="card" style={{ background: 'var(--surface-alt)', marginBottom: 14 }}>
+                <div className="card-body" style={{ padding: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span style={{ fontWeight: 800, fontSize: 13 }}>{t.support.approvalTitle}</span>
+                    {approvalStatusTag(detail.approval.status)}
+                  </div>
+
+                  {detail.approval.status === 'pending' &&
+                    (() => {
+                      const step = detail.approval!.steps.find((s) => s.step_number === detail.approval!.current_step);
+                      if (!step) return null;
+                      const stepLabel = lang === 'ar' ? step.step_label : step.step_label_en || step.step_label;
+                      return (
+                        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                          {t.support.approvalStepOf(detail.approval!.current_step, detail.approval!.total_steps)} — {stepLabel}
+                        </div>
+                      );
+                    })()}
+
+                  {detail.approval.log.length > 0 && (
+                    <div style={{ marginBottom: detail.approval.is_pending_approver ? 10 : 0 }}>
+                      <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>
+                        {t.support.approvalHistoryTitle}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {detail.approval.log.map((entry, i) => (
+                          <div key={i} className="muted" style={{ fontSize: 12 }}>
+                            {entry.approver_name || '—'} — {approvalStatusTag(entry.action)}
+                            {entry.comments && <span> — {entry.comments}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {detail.approval.status === 'pending' && detail.approval.is_pending_approver && (
+                    <>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 8, fontWeight: 600 }}>
+                        {t.support.approvalYourTurn}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          disabled={approvalActing}
+                          onClick={() => {
+                            setApprovalComment('');
+                            setApprovalCommentOpen(true);
+                          }}
+                        >
+                          {t.approvals.approve}
+                        </button>
+                        <button className="btn btn-danger btn-sm" disabled={approvalActing} onClick={handleTicketApprovalReject}>
+                          {t.approvals.reject}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="muted" style={{ marginBottom: 14 }}>
               {detail.description}
             </div>
@@ -657,6 +785,28 @@ export default function SupportTicketsPage() {
               })}
             </form>
           )}
+        </Modal>
+      )}
+
+      {approvalCommentOpen && (
+        <Modal
+          title={t.approvals.commentModalTitle}
+          onClose={() => setApprovalCommentOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="button" disabled={approvalActing} onClick={() => submitTicketApproval('approved', approvalComment)}>
+                {approvalActing ? t.common.loading : t.approvals.confirmApprove}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setApprovalCommentOpen(false)}>
+                {t.common.cancel}
+              </button>
+            </>
+          }
+        >
+          <div className="field">
+            <label>{t.approvals.commentLabel}</label>
+            <textarea rows={3} value={approvalComment} onChange={(e) => setApprovalComment(e.target.value)} placeholder={t.approvals.commentPlaceholder} />
+          </div>
         </Modal>
       )}
     </div>

@@ -114,6 +114,7 @@ const en = {
     serviceCatalog: 'Service Catalog',
     departments: 'Corporate Departments',
     approvals: 'Approvals',
+    groupItSupport: 'IT & Tech Support',
   },
   auth: {
     loginSubtitle: 'Log in to your kiosk',
@@ -1093,6 +1094,12 @@ const en = {
     slaBreached: 'Breached',
     slaOnTrack: 'On track',
     slaNotSet: '—',
+    // MIGRATION_056 — Approval Workflow Status block, top of the ticket detail.
+    approvalTitle: 'Approval workflow',
+    approvalStepOf: (n: number, total: number) => `Step ${n} of ${total}`,
+    approvalYourTurn: 'You are the pending approver for this step.',
+    approvalWaitingOnPrefix: 'Waiting on:',
+    approvalHistoryTitle: 'History',
   },
   serviceCatalog: {
     title: 'Service Catalog',
@@ -1401,6 +1408,7 @@ const en = {
       PAYROLL: 'Payroll',
       PURCHASE_ORDER: 'Purchase order',
       EXPENSE: 'Expense',
+      ITSM_TICKET: 'IT support ticket',
     },
     statusPending: 'Pending',
     statusApproved: 'Approved',
@@ -2238,6 +2246,7 @@ const ar: typeof en = {
     serviceCatalog: 'كتالوج الخدمات',
     departments: 'إدارات الشركة',
     approvals: 'الموافقات',
+    groupItSupport: 'تقنية المعلومات والدعم',
   },
   auth: {
     loginSubtitle: 'سجّل دخولك للكشك',
@@ -3207,6 +3216,11 @@ const ar: typeof en = {
     slaBreached: 'متجاوز',
     slaOnTrack: 'ضمن الوقت',
     slaNotSet: '—',
+    approvalTitle: 'سير الموافقات',
+    approvalStepOf: (n: number, total: number) => `الخطوة ${n} من ${total}`,
+    approvalYourTurn: 'أنت المعتمد المطلوب لهذه الخطوة الآن.',
+    approvalWaitingOnPrefix: 'بانتظار:',
+    approvalHistoryTitle: 'السجل',
   },
   serviceCatalog: {
     title: 'كتالوج الخدمات',
@@ -3510,6 +3524,7 @@ const ar: typeof en = {
       PAYROLL: 'الرواتب',
       PURCHASE_ORDER: 'أمر شراء',
       EXPENSE: 'مصروف',
+      ITSM_TICKET: 'تذكرة دعم تقني',
     },
     statusPending: 'معلّق',
     statusApproved: 'معتمد',
