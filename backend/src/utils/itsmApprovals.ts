@@ -1,4 +1,5 @@
 import { pool } from '../db/pool';
+import { notifyRoles, notifyUsers } from './notifications';
 
 // MIGRATION_056 — the ITSM/Helpdesk ticketing module's 3-step approval chain, shared
 // between approvals.controller.ts (the generic inbox: listPending/actionRequest) and
@@ -99,6 +100,47 @@ export function isEligible(auth: { userId: string; role: string }, eligibility: 
   return false;
 }
 
+// Fires the "New Approval Required" in-app notification for whichever step is now
+// current — called right after a chain is spawned (step 1) and right after an
+// approval advances current_step (the new step). Never called on rejection/final
+// approval, there's no new pending approver to tell in either case.
+//
+// Notification-noise decision: always notify the specifically resolved userIds
+// (department manager / ticket assignee / named job-role holders). Only ALSO notify
+// every admin/manager when userIds came back empty — i.e. the step genuinely
+// couldn't resolve anyone (see resolveItsmStepEligibility's own "understaffed step"
+// comment). admin can still always ACT on any step regardless (isEligible's
+// universal safety valve) — this only governs who gets proactively pinged, so a
+// company with 20 managers doesn't get 20 notifications for every single ticket.
+// Best-effort: swallows its own errors, must never break ticket creation or the
+// approve/reject action that called it.
+export async function notifyItsmStepPending(
+  companyId: string,
+  ticketId: string,
+  requesterId: string,
+  step: WorkflowStepDef
+): Promise<void> {
+  try {
+    const eligibility = await resolveItsmStepEligibility(companyId, requesterId, ticketId, step);
+    const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
+    const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
+
+    const title = 'مطلوب اعتماد جديد / New Approval Required';
+    const body = `تذكرة دعم تقني من ${requesterName} — ${step.step_label} / IT support ticket from ${requesterName} — ${
+      step.step_label_en || step.step_label
+    }`;
+    const link = '/approvals';
+
+    if (eligibility.userIds.length > 0) {
+      await notifyUsers({ companyId, userIds: eligibility.userIds, type: 'approval_pending', title, body, link });
+    } else if (eligibility.allowAnyManager) {
+      await notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link });
+    }
+  } catch {
+    // Best-effort — never let a notification failure break ticket creation or an approval action.
+  }
+}
+
 // Spawns the 3-step chain for a brand-new ticket. Silently no-ops if the creator has
 // no linked employee record (a pure admin/owner account filing their own ticket) —
 // ticket creation must never fail over this, same tolerance
@@ -111,6 +153,10 @@ export async function createItsmApprovalChain(companyId: string, ticketId: strin
     `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id) VALUES ($1, 'ITSM_TICKET', $2, $3)`,
     [companyId, ticketId, requesterId]
   );
+
+  const steps = await getWorkflowSteps('ITSM_TICKET');
+  const step1 = steps.find((s) => s.step_number === 1);
+  if (step1) await notifyItsmStepPending(companyId, ticketId, requesterId, step1);
 }
 
 // Ticket-resolution lock (Step 2 of the upgrade): returns the still-open

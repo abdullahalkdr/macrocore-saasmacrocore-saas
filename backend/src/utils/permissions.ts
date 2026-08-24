@@ -40,6 +40,27 @@ export async function hasPermission(userId: string, permissionKey: string): Prom
   }
 }
 
+// Reverse of hasPermission — every active user in the company who holds this
+// permission key, via either layer. Used by the Approval Engine to notify the
+// right people the moment a single-step request (Payroll/PO/Expense) is filed,
+// without having to loop effectivePermissions() over every user in the company.
+export async function usersWithPermission(companyId: string, permissionKey: string): Promise<string[]> {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT u.id FROM users u
+       LEFT JOIN user_permissions up ON up.user_id = u.id AND up.permission_key = $2
+       LEFT JOIN employees e ON e.id = u.employee_id
+       LEFT JOIN job_role_permissions jrp ON jrp.job_role_id = e.job_role_id AND jrp.permission_key = $2
+       WHERE u.company_id = $1 AND u.status = 'active' AND (up.user_id IS NOT NULL OR jrp.job_role_id IS NOT NULL)`,
+      [companyId, permissionKey]
+    );
+    return result.rows.map((r) => r.id);
+  } catch (err) {
+    if ((err as { code?: string })?.code === UNDEFINED_TABLE) return [];
+    throw err;
+  }
+}
+
 // Full effective set for a user (used by GET /permissions/my-permissions) — same two
 // layers as hasPermission, deduped, same pre-migration fallback.
 export async function effectivePermissions(userId: string): Promise<string[]> {

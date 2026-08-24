@@ -3,8 +3,9 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
-import { hasPermission, effectivePermissions } from '../utils/permissions';
-import { getWorkflowSteps, resolveItsmStepEligibility, isEligible } from '../utils/itsmApprovals';
+import { hasPermission, effectivePermissions, usersWithPermission } from '../utils/permissions';
+import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
+import { notifyRoles, notifyUsers } from '../utils/notifications';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) — Core
 // Enterprise Approval Workflow Engine (Maker-Checker).
@@ -39,6 +40,15 @@ const MODULE_APPROVER_PERMISSION: Record<string, string> = {
 // spin up an orphaned approval chain pointing at an arbitrary/nonexistent reference_id.
 const VALID_MODULES = Object.keys(MODULE_APPROVER_PERMISSION);
 
+// Bilingual labels for the notification body — the notifications table has a single
+// title/body column (MIGRATION_025), not per-language ones, so both languages are
+// combined into one string, same convention notifyItsmStepPending() uses.
+const MODULE_LABEL: Record<string, { ar: string; en: string }> = {
+  PAYROLL: { ar: 'الرواتب', en: 'Payroll' },
+  PURCHASE_ORDER: { ar: 'أمر شراء', en: 'Purchase order' },
+  EXPENSE: { ar: 'مصروف', en: 'Expense' },
+};
+
 async function myEmployeeId(userId: string): Promise<string | null> {
   const result = await pool.query('SELECT employee_id FROM users WHERE id = $1', [userId]);
   return result.rows[0]?.employee_id ?? null;
@@ -64,6 +74,23 @@ export const createRequest = asyncHandler(async (req: Request, res: Response) =>
      VALUES ($1, $2, $3, $4) RETURNING *`,
     [companyId, module_type, reference_id, requesterId]
   );
+
+  // Notify everyone eligible to act on this single-step request right now: every
+  // admin/manager (who can always act, per MODULE_APPROVER_PERMISSION's own comment),
+  // plus anyone individually or by-job-role holding the module's permission key.
+  const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
+  const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
+  const label = MODULE_LABEL[module_type];
+  const title = 'مطلوب اعتماد جديد / New Approval Required';
+  const body = label ? `${label.ar} من ${requesterName} / ${label.en} from ${requesterName}` : requesterName;
+  const link = '/approvals';
+  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: req.auth!.userId });
+  const permissionKey = MODULE_APPROVER_PERMISSION[module_type];
+  if (permissionKey) {
+    usersWithPermission(companyId, permissionKey)
+      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId: req.auth!.userId }))
+      .catch(() => {});
+  }
 
   await logAudit({
     companyId,
@@ -188,6 +215,16 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       throw err;
     } finally {
       client.release();
+    }
+
+    // Chain moved on to a new pending step (not rejected, not the final approval) —
+    // tell whoever's eligible for THAT step now. No-op for reject/final-approve,
+    // there's no new pending approver in either case.
+    if (action === 'approved' && request.current_step < steps.length) {
+      const nextStep = steps.find((s) => s.step_number === request.current_step + 1);
+      if (nextStep) {
+        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, nextStep).catch(() => {});
+      }
     }
   } else {
     // Single-step modules (unchanged from MIGRATION_055) — approve or reject both
