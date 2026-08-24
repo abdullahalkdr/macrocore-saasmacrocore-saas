@@ -5,12 +5,11 @@ export default function SetupSection() {
   const t = useT();
   const navigate = useNavigate();
 
-  // Cost Centers (MIGRATION_051) graduated out of `placeholders` below and into its
-  // own active card, same "manage" button + navigate() pattern as Branches above --
-  // it now has a real page (CostCentersPage.tsx) behind /cost-centers instead of
-  // being a disabled "coming soon" tile.
+  // Cost Centers (MIGRATION_051) and Projects (MIGRATION_052) both graduated out
+  // of `placeholders` below and into their own active cards, same "manage" button +
+  // navigate() pattern as Branches above -- each now has a real page behind its own
+  // flat route instead of being a disabled "coming soon" tile.
   const placeholders = [
-    { title: t.account.sections.projectsTitle, desc: t.account.sections.projectsDesc, icon: '📁' },
     { title: t.account.sections.periodStatusTitle, desc: t.account.sections.periodStatusDesc, icon: '🔒' },
   ];
 
@@ -40,6 +39,20 @@ export default function SetupSection() {
         <div className="card-body">
           <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
             {t.account.sections.costCentersDesc}
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2>{t.account.sections.projectsTitle}</h2>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/projects')}>
+            {t.account.setup.manageProjects}
+          </button>
+        </div>
+        <div className="card-body">
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            {t.account.sections.projectsDesc}
           </p>
         </div>
       </div>

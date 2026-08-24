@@ -51,6 +51,7 @@ import performanceScoresRoutes from './routes/performanceScores.routes';
 import slaPoliciesRoutes from './routes/slaPolicies.routes';
 import policiesRoutes from './routes/policies.routes';
 import costCentersRoutes from './routes/costCenters.routes';
+import projectsRoutes from './routes/projects.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -168,6 +169,10 @@ app.use('/api/policies', ...silver('Policies & Procedures'), policiesRoutes);
 // stored as free-text tags. Gated the same tier as Suppliers/Employees/Customers
 // (Silver+) -- back-office setup, not a core POS necessity like Locations/Shifts.
 app.use('/api/cost-centers', ...silver('Cost centers'), costCentersRoutes);
+// Projects module (MIGRATION_052) -- the tier above Cost Centers: a project
+// consumes budget and optionally rolls up to a cost center. Same Silver-tier
+// gate as Cost Centers -- back-office setup, not a core POS necessity.
+app.use('/api/projects', ...silver('Projects'), projectsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
