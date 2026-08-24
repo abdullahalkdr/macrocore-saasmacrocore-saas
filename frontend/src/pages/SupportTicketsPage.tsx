@@ -310,8 +310,24 @@ export default function SupportTicketsPage() {
   function openTicket(id: string) {
     setOpenId(id);
     setDetail(null);
-    get<TicketDetail>(`/support/tickets/${id}`)
-      .then(setDetail)
+    // BUG FIX: the backend wraps ticket-level fields in a `ticket` envelope
+    // alongside sibling replies/approval/can_manage_status (see
+    // supportTickets.controller.ts's getOne() — `res.json({ ticket: publicTicket,
+    // replies, approval, can_manage_status })`). This previously cast that raw
+    // envelope straight to TicketDetail without unwrapping it, so every
+    // ticket-level field (subject, description, status, priority, ticket_number,
+    // dynamic_data, assigned_to...) silently read as `undefined` here — only the
+    // three top-level siblings (replies/approval/can_manage_status) ever actually
+    // came through. That's why the description card always fell back to "no
+    // description entered" and the status <select> always defaulted to its first
+    // option (Open) regardless of the ticket's real status.
+    get<{
+      ticket: Ticket & { description: string; request_type_name?: string; request_type_name_en?: string };
+      replies: Reply[];
+      approval: ItsmApprovalSummary | null;
+      can_manage_status: boolean;
+    }>(`/support/tickets/${id}`)
+      .then((r) => setDetail({ ...r.ticket, replies: r.replies, approval: r.approval, can_manage_status: r.can_manage_status }))
       .catch((err) => setError(err instanceof ApiError ? err.message : t.support.ticketLoadFailed));
   }
 
