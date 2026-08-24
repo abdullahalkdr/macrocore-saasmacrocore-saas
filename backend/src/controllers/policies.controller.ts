@@ -109,23 +109,53 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
     [companyId, id]
   );
 
-  // total_acknowledged / last_acknowledged_at only — a real compliance percentage
-  // ("X of Y required employees acknowledged") needs a role on `employees`, and
-  // this schema doesn't have one: only the linked `users` row carries `role`
-  // (users.role), and that link (users.employee_id) is optional/nullable
-  // (MIGRATION_040). Wire up a real ratio once every required employee is
-  // guaranteed a linked user account, or once employees carry their own role.
+  // total_acknowledged / last_acknowledged_at (raw counters) plus a real
+  // compliance ratio. required_count = DISTINCT employees reachable via
+  // `users WHERE role IN role_policy_requirements.role AND company_id = $1
+  // AND employee_id IS NOT NULL`, joined back to `employees` — resolved in
+  // one CTE so both counts share the exact same "who's required" definition.
+  // This closes the TODO this endpoint shipped with in MIGRATION_044 (Aug 22
+  // commit 693112b) — nothing added the join until now (Governance Phase 3,
+  // see PP_Governance_Framework.docx §6). required_count = 0 means no
+  // linked-user account currently carries a role this policy requires;
+  // compliance_percentage is null in that case rather than 100 — 0 required
+  // is not the same as 100% acknowledged.
   const ackSummary = await pool.query(
     `SELECT COUNT(*)::int AS total_acknowledged, MAX(acknowledged_at) AS last_acknowledged_at
      FROM policy_acknowledgments WHERE company_id = $1 AND policy_id = $2`,
     [companyId, id]
   );
 
+  const complianceResult = await pool.query(
+    `WITH required_employees AS (
+       SELECT DISTINCT u.employee_id
+       FROM users u
+       JOIN role_policy_requirements rpr ON rpr.role = u.role AND rpr.company_id = u.company_id
+       WHERE u.company_id = $1 AND rpr.policy_id = $2 AND u.employee_id IS NOT NULL
+     )
+     SELECT
+       (SELECT COUNT(*)::int FROM required_employees) AS required_count,
+       (SELECT COUNT(*)::int FROM required_employees re
+          JOIN policy_acknowledgments pa
+            ON pa.employee_id = re.employee_id AND pa.company_id = $1 AND pa.policy_id = $2
+       ) AS acknowledged_required_count`,
+    [companyId, id]
+  );
+  const { required_count, acknowledged_required_count } = complianceResult.rows[0];
+  const compliance_percentage = required_count > 0
+    ? Math.round((acknowledged_required_count / required_count) * 1000) / 10
+    : null;
+
   res.status(200).json({
     success: true,
     policy,
     linked_roles: rolesResult.rows.map((r) => r.role),
-    acknowledgment_summary: ackSummary.rows[0],
+    acknowledgment_summary: {
+      ...ackSummary.rows[0],
+      required_count,
+      acknowledged_required_count,
+      compliance_percentage,
+    },
   });
 });
 
