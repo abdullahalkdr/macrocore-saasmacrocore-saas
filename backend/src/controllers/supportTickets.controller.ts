@@ -36,7 +36,7 @@ const DEFAULT_SLA_MINUTES: Record<string, { response: number; resolution: number
 // the existing category/category_id pair, not replacing them yet — a ticket
 // can carry both the legacy category and the new request_type_id at once
 // during the transition (see MIGRATION_047's own header, decision 1).
-const TICKET_FIELDS = `id, ticket_number, subject, description, status, priority, category, category_id, request_type_id, dynamic_data,
+const TICKET_FIELDS = `id, ticket_number, subject, description, status, priority, category, category_id, request_type_id, dynamic_data, attachments,
        assigned_to, created_by,
        first_response_at, resolved_at, sla_response_due_at, sla_resolution_due_at,
        sla_response_breached, sla_resolution_breached, escalation_level, escalated_to, escalated_at,
@@ -130,6 +130,48 @@ async function canAccessTicket(
 // has no "options" column yet (MIGRATION_047 didn't add one), so any
 // non-empty string passes for that type; a real known gap, not something
 // silently skipped without a trace.
+// MIGRATION_059 — shared shape/size validator for the `attachments` array on
+// both a ticket (create()) and a reply (reply()). Each item is a plain
+// {file_name, file_base64} object, file_base64 a full data: URL (same
+// convention the frontend's readFileAsBase64() helper already produces for
+// company_files/employee documents elsewhere in this app). Caps exist because
+// this all lands inside one JSON request body — express.json() itself is
+// capped at 10mb (app.ts), and multiple uncapped attachments could blow past
+// that with a confusing "request too large" error instead of a clear one.
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB decoded, per file
+
+interface TicketAttachment {
+  file_name: string;
+  file_base64: string;
+}
+
+function validateAttachments(input: unknown): TicketAttachment[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new AppError(400, 'attachments must be an array');
+  if (input.length > MAX_ATTACHMENTS) throw new AppError(400, `You can attach at most ${MAX_ATTACHMENTS} files`);
+
+  return input.map((item) => {
+    if (!item || typeof item !== 'object') throw new AppError(400, 'Each attachment must be an object');
+    const { file_name, file_base64 } = item as Record<string, unknown>;
+    if (typeof file_name !== 'string' || file_name.trim().length < 1) {
+      throw new AppError(400, 'Each attachment needs a file_name');
+    }
+    if (typeof file_base64 !== 'string' || !file_base64.startsWith('data:')) {
+      throw new AppError(400, `${file_name} — file_base64 must be a data: URL`);
+    }
+    // Rough decoded-size estimate from the base64 payload length (after the
+    // "data:<mime>;base64," prefix) — exact enough for a sanity cap, no need
+    // to actually decode the buffer just to reject an oversized file.
+    const commaIndex = file_base64.indexOf(',');
+    const encodedLength = commaIndex >= 0 ? file_base64.length - commaIndex - 1 : file_base64.length;
+    if (encodedLength * 0.75 > MAX_ATTACHMENT_BYTES) {
+      throw new AppError(400, `${file_name} is too large — attachments are capped at 5MB each`);
+    }
+    return { file_name: file_name.trim(), file_base64 };
+  });
+}
+
 async function validateDynamicData(companyId: string, requestTypeId: string, dynamicData: Record<string, unknown>): Promise<void> {
   const fields = await pool.query(
     `SELECT field_key, field_label, field_type, is_required
@@ -198,11 +240,12 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { subject, description, priority, category, category_id, request_type_id, dynamic_data } = req.body ?? {};
+  const { subject, description, priority, category, category_id, request_type_id, dynamic_data, attachments } = req.body ?? {};
 
   if (typeof subject !== 'string' || subject.trim().length < 1) throw new AppError(400, 'subject is required');
   if (typeof description !== 'string' || description.trim().length < 1) throw new AppError(400, 'description is required');
   const finalPriority = typeof priority === 'string' && PRIORITIES.includes(priority) ? priority : 'medium';
+  const finalAttachments = validateAttachments(attachments);
   // Legacy string category — kept exactly as before as a fallback for clients
   // (older mobile builds, etc.) that don't send category_id/request_type_id yet.
   const finalCategory = typeof category === 'string' && CATEGORIES.includes(category) ? category : 'general';
@@ -281,9 +324,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
     `INSERT INTO support_tickets
        (company_id, created_by, ticket_number, subject, description, priority, category, category_id, request_type_id, dynamic_data,
-        sla_response_due_at, sla_resolution_due_at)
+        attachments, sla_response_due_at, sla_resolution_due_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
-             NOW() + ($11::int * INTERVAL '1 minute'), NOW() + ($12::int * INTERVAL '1 minute'))
+             $11::jsonb, NOW() + ($12::int * INTERVAL '1 minute'), NOW() + ($13::int * INTERVAL '1 minute'))
      RETURNING ${TICKET_FIELDS}`,
     [
       companyId,
@@ -296,6 +339,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       finalCategoryId,
       finalRequestTypeId,
       JSON.stringify(finalDynamicData),
+      JSON.stringify(finalAttachments),
       responseMinutes,
       resolutionMinutes,
     ]
@@ -344,7 +388,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   if (!(await canAccessTicket(req.auth!, ticket))) throw new AppError(404, 'Ticket not found');
 
   const repliesResult = await pool.query(
-    `SELECT id, user_id, message, is_admin_reply, is_internal_note, created_at FROM ticket_replies WHERE ticket_id = $1 ORDER BY created_at ASC`,
+    `SELECT id, user_id, message, is_admin_reply, is_internal_note, attachments, created_at FROM ticket_replies WHERE ticket_id = $1 ORDER BY created_at ASC`,
     [id]
   );
 
@@ -372,18 +416,30 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 
   // Drives whether SupportTicketsPage.tsx renders the status field as an editable
   // <select> or a read-only tag — see canManageTicketStatus()'s own comment above.
+  // can_manage_priority is the exact same computed value under its own name — the
+  // Priority field is governed by the identical rule (IT/managers/admin only, per
+  // this feature's own spec), just exposed separately so the frontend never has to
+  // assume "status permission == priority permission" itself if that ever diverges.
   const canManageStatus = await canManageTicketStatus(req.auth!);
 
-  res.status(200).json({ success: true, ticket: publicTicket, replies, approval, can_manage_status: canManageStatus });
+  res.status(200).json({
+    success: true,
+    ticket: publicTicket,
+    replies,
+    approval,
+    can_manage_status: canManageStatus,
+    can_manage_priority: canManageStatus,
+  });
 });
 
 export const reply = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { message, is_internal_note } = req.body ?? {};
+  const { message, is_internal_note, attachments } = req.body ?? {};
 
   if (typeof message !== 'string' || message.trim().length < 1) throw new AppError(400, 'message is required');
   if (is_internal_note !== undefined && typeof is_internal_note !== 'boolean') throw new AppError(400, 'is_internal_note must be a boolean');
+  const finalAttachments = validateAttachments(attachments);
 
   const ticket = await pool.query(
     `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id,
@@ -411,10 +467,10 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
   const finalIsInternalNote = isAdminReply && is_internal_note === true;
 
   const result = await pool.query(
-    `INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin_reply, is_internal_note)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, user_id, message, is_admin_reply, is_internal_note, created_at`,
-    [id, req.auth!.userId, message.trim(), isAdminReply, finalIsInternalNote]
+    `INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin_reply, is_internal_note, attachments)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+     RETURNING id, user_id, message, is_admin_reply, is_internal_note, attachments, created_at`,
+    [id, req.auth!.userId, message.trim(), isAdminReply, finalIsInternalNote, JSON.stringify(finalAttachments)]
   );
 
   // Correctness fix while touching this: an internal note is never seen by the
@@ -436,13 +492,16 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
 export const updateStatus = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { status, category_id, assigned_to } = req.body ?? {};
+  const { status, priority, category_id, assigned_to } = req.body ?? {};
 
-  if (status === undefined && category_id === undefined && assigned_to === undefined) {
-    throw new AppError(400, 'Provide at least one of: status, category_id, assigned_to');
+  if (status === undefined && priority === undefined && category_id === undefined && assigned_to === undefined) {
+    throw new AppError(400, 'Provide at least one of: status, priority, category_id, assigned_to');
   }
   if (status !== undefined && !STATUSES.includes(status)) {
     throw new AppError(400, `status must be one of ${STATUSES.join(', ')}`);
+  }
+  if (priority !== undefined && !PRIORITIES.includes(priority)) {
+    throw new AppError(400, `priority must be one of ${PRIORITIES.join(', ')}`);
   }
 
   const existing = await pool.query(
@@ -459,15 +518,18 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   if (!existing.rows[0]) throw new AppError(404, 'Ticket not found');
   if (!(await canAccessTicket(req.auth!, existing.rows[0]))) throw new AppError(404, 'Ticket not found');
 
-  // Status is the one field here that a ticket's own requester must not be able to
-  // move themselves — see canManageTicketStatus()'s own comment. Unlike
-  // assigned_to's silent-ignore-if-unauthorized convention below, this is a hard
-  // 403: the status dropdown is now hidden client-side for anyone without this
-  // right, so a request that still sends `status` past that point is either a
-  // stale UI or a direct API call, and either way deserves a real error, not a
-  // silent no-op that looks like success.
-  if (status !== undefined && !(await canManageTicketStatus(req.auth!))) {
-    throw new AppError(403, 'Only IT staff, managers, and admins can change a ticket status.');
+  // Status AND Priority are both fields a ticket's own requester must not be able
+  // to move themselves — see canManageTicketStatus()'s own comment. Priority is
+  // governed by the exact same rule (this feature's own spec: "apply the exact
+  // same can_manage_status UI logic to the Priority dropdown"), so it's checked
+  // against the same function rather than a separate one. Unlike assigned_to's
+  // silent-ignore-if-unauthorized convention below, this is a hard 403: both
+  // fields are hidden client-side for anyone without this right, so a request
+  // that still sends them past that point is either a stale UI or a direct API
+  // call, and either way deserves a real error, not a silent no-op that looks
+  // like success.
+  if ((status !== undefined || priority !== undefined) && !(await canManageTicketStatus(req.auth!))) {
+    throw new AppError(403, 'Only IT staff, managers, and admins can change a ticket status or priority.');
   }
 
   // category_id is explicit-null-vs-omitted aware (unlike most COALESCE-on-
@@ -532,19 +594,23 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   const result = await pool.query(
     `UPDATE support_tickets
      SET status = COALESCE($1, status),
-         category_id = CASE WHEN $2 THEN $3::uuid ELSE category_id END,
-         assigned_to = CASE WHEN $4 THEN $5::uuid ELSE assigned_to END,
-         resolved_at = CASE WHEN $6 THEN NOW() ELSE resolved_at END,
-         sla_resolution_breached = CASE WHEN $6 THEN (NOW() > sla_resolution_due_at) ELSE sla_resolution_breached END,
+         priority = COALESCE($2, priority),
+         category_id = CASE WHEN $3 THEN $4::uuid ELSE category_id END,
+         assigned_to = CASE WHEN $5 THEN $6::uuid ELSE assigned_to END,
+         resolved_at = CASE WHEN $7 THEN NOW() ELSE resolved_at END,
+         sla_resolution_breached = CASE WHEN $7 THEN (NOW() > sla_resolution_due_at) ELSE sla_resolution_breached END,
          updated_at = NOW()
-     WHERE id = $7 AND company_id = $8
+     WHERE id = $8 AND company_id = $9
      RETURNING ${TICKET_FIELDS}`,
-    [status ?? null, touchesCategory, nextCategoryId, touchesAssignment, nextAssignedTo, stampResolved, id, companyId]
+    [status ?? null, priority ?? null, touchesCategory, nextCategoryId, touchesAssignment, nextAssignedTo, stampResolved, id, companyId]
   );
   if (!result.rows[0]) throw new AppError(404, 'Ticket not found');
 
   if (status !== undefined) {
     await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_status_updated', entityType: 'support_tickets', entityId: id as string, req });
+  }
+  if (priority !== undefined) {
+    await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_priority_updated', entityType: 'support_tickets', entityId: id as string, req });
   }
   if (touchesCategory) {
     await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_category_reassigned', entityType: 'support_tickets', entityId: id as string, req });

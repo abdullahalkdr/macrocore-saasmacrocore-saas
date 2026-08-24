@@ -8,8 +8,15 @@ import { useServiceCatalogStore, ServiceCategory, ServiceRequestType, ServiceCus
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
-import { IconPlus, IconChevronRight } from '../components/Icon';
+import { IconPlus, IconChevronRight, IconClose, IconPaperclip, IconFile } from '../components/Icon';
 
+// MIGRATION_059 — a single uploaded file, stored as a data: URL (same
+// convention as company_files.file_base64 elsewhere in this app — no S3/
+// object storage in this project).
+interface Attachment {
+  file_name: string;
+  file_base64: string;
+}
 interface Ticket {
   id: string;
   // MIGRATION_057 — Smart Numbering, [DEPT]-[YYMM]-[XXXX] e.g. IT-2608-0001. Null
@@ -22,6 +29,7 @@ interface Ticket {
   category_id: string | null;
   request_type_id: string | null;
   dynamic_data: Record<string, unknown>;
+  attachments: Attachment[];
   assigned_to: string | null;
   created_by: string;
   sla_resolution_due_at: string | null;
@@ -34,6 +42,7 @@ interface Reply {
   message: string;
   is_admin_reply: boolean;
   is_internal_note: boolean;
+  attachments: Attachment[];
   created_at: string;
 }
 // MIGRATION_056 — mirrors backend/src/utils/itsmApprovals.ts's ItsmApprovalSummary.
@@ -72,6 +81,8 @@ interface TicketDetail extends Ticket {
   // supportTickets.controller.ts's canManageTicketStatus()). Drives whether the
   // status field below renders as an editable <select> or a read-only tag.
   can_manage_status: boolean;
+  // Same computed value, same rule — governs the Priority field the same way.
+  can_manage_priority: boolean;
 }
 interface CompanyUser {
   id: string;
@@ -92,10 +103,71 @@ interface CompanyUser {
 // this is purely the deepest legacy fallback now, not a form option anymore.
 const LEGACY_CATEGORIES = ['general', 'leave', 'grievance', 'document_request', 'payroll', 'it', 'other'] as const;
 
+// MIGRATION_059 — same helper/convention as CompanyFilesPage.tsx's own
+// readFileAsBase64(): reads the whole file as a data: URL, which the backend
+// stores as-is and this page later uses directly as an <img src>/<a href>.
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS = 5;
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
+const PRIORITIES = ['low', 'medium', 'high'];
 const statusTagColor = (s: string): 'green' | 'red' | 'amber' | 'gray' =>
   s === 'open' ? 'green' : s === 'closed' ? 'gray' : s === 'resolved' ? 'green' : 'amber';
 const priorityTagColor = (p: string): 'green' | 'red' | 'amber' | 'gray' => (p === 'high' ? 'red' : p === 'medium' ? 'amber' : 'gray');
+
+// MIGRATION_059 — shared render for an Attachment[] array, used both under the
+// original ticket description and inside each reply bubble. Images render as
+// an actual clickable thumbnail (opens the full data: URL in a new tab);
+// anything else renders as a small document chip that downloads on click.
+function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
+  if (!attachments || attachments.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+      {attachments.map((a, i) =>
+        a.file_base64.startsWith('data:image/') ? (
+          <a key={`${a.file_name}-${i}`} href={a.file_base64} target="_blank" rel="noreferrer" title={a.file_name}>
+            <img
+              src={a.file_base64}
+              alt={a.file_name}
+              style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }}
+            />
+          </a>
+        ) : (
+          <a
+            key={`${a.file_name}-${i}`}
+            href={a.file_base64}
+            download={a.file_name}
+            title={a.file_name}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 10px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              fontSize: 12,
+              maxWidth: 180,
+              textDecoration: 'none',
+              color: 'inherit',
+            }}
+          >
+            <IconFile size={14} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.file_name}</span>
+          </a>
+        )
+      )}
+    </div>
+  );
+}
 
 // ITSM pivot Step 3 — hard cutover (Principal Architect decision: no parallel
 // old/new UI). The old flat ticket-create modal + ticket_categories admin
@@ -235,6 +307,29 @@ export default function SupportTicketsPage() {
   const [priority, setPriority] = useState('medium');
   const [dynamicValues, setDynamicValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // MIGRATION_059 — staged files for the New Ticket form, converted to base64
+  // only at submit time (not on selection) so a user who picks a huge file by
+  // mistake and removes it again never pays the FileReader cost for nothing.
+  const [newTicketFiles, setNewTicketFiles] = useState<File[]>([]);
+
+  function addNewTicketFiles(files: FileList | null) {
+    if (!files) return;
+    setError(null);
+    const picked = Array.from(files);
+    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig) return setError(t.support.attachmentTooLarge(tooBig.name));
+    setNewTicketFiles((prev) => {
+      const combined = [...prev, ...picked];
+      if (combined.length > MAX_ATTACHMENTS) {
+        setError(t.support.tooManyAttachments(MAX_ATTACHMENTS));
+        return prev;
+      }
+      return combined;
+    });
+  }
+  function removeNewTicketFile(index: number) {
+    setNewTicketFiles((prev) => prev.filter((_, i) => i !== index));
+  }
 
   function openPortal() {
     setPortalOpen(true);
@@ -245,6 +340,7 @@ export default function SupportTicketsPage() {
     setDescription('');
     setPriority('medium');
     setDynamicValues({});
+    setNewTicketFiles([]);
     setError(null);
   }
 
@@ -286,10 +382,14 @@ export default function SupportTicketsPage() {
         if (raw === undefined || raw === '') continue;
         dynamic_data[f.field_key] = f.field_type === 'number' ? Number(raw) : raw;
       }
+      const attachments = await Promise.all(
+        newTicketFiles.map(async (file) => ({ file_name: file.name, file_base64: await readFileAsBase64(file) }))
+      );
       await post('/support/tickets', {
         subject,
         description,
         priority,
+        attachments,
         ...(portalRequestTypeId ? { request_type_id: portalRequestTypeId, dynamic_data } : {}),
       });
       setPortalOpen(false);
@@ -306,6 +406,27 @@ export default function SupportTicketsPage() {
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [replyMsg, setReplyMsg] = useState('');
   const [markInternal, setMarkInternal] = useState(false);
+  // MIGRATION_059 — staged files for the reply box, same pattern as newTicketFiles.
+  const [replyFiles, setReplyFiles] = useState<File[]>([]);
+
+  function addReplyFiles(files: FileList | null) {
+    if (!files) return;
+    setError(null);
+    const picked = Array.from(files);
+    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig) return setError(t.support.attachmentTooLarge(tooBig.name));
+    setReplyFiles((prev) => {
+      const combined = [...prev, ...picked];
+      if (combined.length > MAX_ATTACHMENTS) {
+        setError(t.support.tooManyAttachments(MAX_ATTACHMENTS));
+        return prev;
+      }
+      return combined;
+    });
+  }
+  function removeReplyFile(index: number) {
+    setReplyFiles((prev) => prev.filter((_, i) => i !== index));
+  }
 
   function openTicket(id: string) {
     setOpenId(id);
@@ -326,8 +447,17 @@ export default function SupportTicketsPage() {
       replies: Reply[];
       approval: ItsmApprovalSummary | null;
       can_manage_status: boolean;
+      can_manage_priority: boolean;
     }>(`/support/tickets/${id}`)
-      .then((r) => setDetail({ ...r.ticket, replies: r.replies, approval: r.approval, can_manage_status: r.can_manage_status }))
+      .then((r) =>
+        setDetail({
+          ...r.ticket,
+          replies: r.replies,
+          approval: r.approval,
+          can_manage_status: r.can_manage_status,
+          can_manage_priority: r.can_manage_priority,
+        })
+      )
       .catch((err) => setError(err instanceof ApiError ? err.message : t.support.ticketLoadFailed));
   }
 
@@ -335,12 +465,17 @@ export default function SupportTicketsPage() {
     e.preventDefault();
     if (!openId || !replyMsg.trim()) return;
     try {
+      const attachments = await Promise.all(
+        replyFiles.map(async (file) => ({ file_name: file.name, file_base64: await readFileAsBase64(file) }))
+      );
       await post(`/support/tickets/${openId}/reply`, {
         message: replyMsg,
+        attachments,
         ...(isManager ? { is_internal_note: markInternal } : {}),
       });
       setReplyMsg('');
       setMarkInternal(false);
+      setReplyFiles([]);
       openTicket(openId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.support.replyFailed);
@@ -355,6 +490,19 @@ export default function SupportTicketsPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.support.statusUpdateFailed);
+    }
+  }
+
+  // MIGRATION_059 — mirrors changeStatus(); gated by can_manage_priority on the
+  // frontend and by the identical canManageTicketStatus() check server-side.
+  async function changePriority(priority: string) {
+    if (!openId) return;
+    try {
+      await patch(`/support/tickets/${openId}`, { priority });
+      openTicket(openId);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.support.priorityUpdateFailed);
     }
   }
 
@@ -540,6 +688,7 @@ export default function SupportTicketsPage() {
                 <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'break-word', lineHeight: 1.6 }}>
                   {detail.description || <span className="muted">{t.support.noDescription}</span>}
                 </div>
+                <AttachmentGallery attachments={detail.attachments} />
                 <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
                   {t.support.requestType}: {ticketTypeLabel(detail)}
                 </div>
@@ -659,6 +808,24 @@ export default function SupportTicketsPage() {
                   </div>
                 )}
               </div>
+              <div className="field" style={{ maxWidth: 200 }}>
+                <label>{t.support.priority}</label>
+                {detail.can_manage_priority ? (
+                  <select value={detail.priority} onChange={(e) => changePriority(e.target.value)}>
+                    {PRIORITIES.map((p) => (
+                      <option key={p} value={p}>
+                        {priorityLabel[p]}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  // Same rule as Status — the ticket's own requester (and anyone
+                  // outside IT/managers/admin) cannot change Priority, only view it.
+                  <div style={{ paddingTop: 4 }}>
+                    <Tag color={priorityTagColor(detail.priority)}>{priorityLabel[detail.priority] || detail.priority}</Tag>
+                  </div>
+                )}
+              </div>
               {isManager && (
                 <div className="field" style={{ maxWidth: 220 }}>
                   <label>{t.support.assignee}</label>
@@ -691,6 +858,7 @@ export default function SupportTicketsPage() {
                     {r.is_internal_note && <Tag color="amber">{t.support.internalNote}</Tag>}
                   </div>
                   <div>{r.message}</div>
+                  <AttachmentGallery attachments={r.attachments} />
                 </div>
               ))}
               {detail.replies.length === 0 && <div className="empty-state">{t.support.noReplies}</div>}
@@ -701,12 +869,33 @@ export default function SupportTicketsPage() {
                 <div className="field" style={{ flex: 3 }}>
                   <input value={replyMsg} onChange={(e) => setReplyMsg(e.target.value)} placeholder={t.support.writeReply} />
                 </div>
+                <div className="field" style={{ flex: 0 }}>
+                  {/* MIGRATION_059 — paperclip attach button next to the reply input,
+                      mirrors the New Ticket form's file input but as an icon trigger
+                      since the reply row is a single-line composer, not a full form. */}
+                  <label className="icon-btn" title={t.support.attachments} style={{ cursor: 'pointer' }}>
+                    <IconPaperclip size={16} />
+                    <input type="file" multiple style={{ display: 'none' }} onChange={(e) => addReplyFiles(e.target.files)} />
+                  </label>
+                </div>
                 <div className="field" style={{ justifyContent: 'flex-end' }}>
                   <button className="btn btn-primary" type="submit">
                     {t.support.reply}
                   </button>
                 </div>
               </div>
+              {replyFiles.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                  {replyFiles.map((f, i) => (
+                    <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                      <button type="button" className="icon-btn" title={t.support.removeAttachment} onClick={() => removeReplyFile(i)}>
+                        <IconClose size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {isManager && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 8 }}>
                   <input type="checkbox" checked={markInternal} onChange={(e) => setMarkInternal(e.target.checked)} style={{ width: 'auto' }} />
@@ -821,6 +1010,25 @@ export default function SupportTicketsPage() {
               <div className="field" style={{ gridColumn: '1 / -1' }}>
                 <label>{t.support.description}</label>
                 <textarea value={description} onChange={(e) => setDescription(e.target.value)} required />
+              </div>
+
+              {/* MIGRATION_059 — attachments, staged as plain File objects and only
+                  converted to base64 at submit time (see handleSubmit above). */}
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>{t.support.attachments}</label>
+                <input type="file" multiple onChange={(e) => addNewTicketFiles(e.target.files)} />
+                {newTicketFiles.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                    {newTicketFiles.map((f, i) => (
+                      <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                        <button type="button" className="icon-btn" title={t.support.removeAttachment} onClick={() => removeNewTicketFile(i)}>
+                          <IconClose size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Form Renderer — one input per service_custom_fields row for

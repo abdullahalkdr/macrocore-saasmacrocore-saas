@@ -1112,6 +1112,12 @@ const en = {
     approvalYourTurn: 'You are the pending approver for this step.',
     approvalWaitingOnPrefix: 'Waiting on:',
     approvalHistoryTitle: 'History',
+    // MIGRATION_059 — ticket/reply file attachments + Priority RBAC.
+    attachments: 'Attachments',
+    removeAttachment: 'Remove attachment',
+    attachmentTooLarge: (name: string) => `${name} is too large — attachments are capped at 5MB each`,
+    tooManyAttachments: (max: number) => `You can attach at most ${max} files`,
+    priorityUpdateFailed: 'Failed to update priority',
   },
   serviceCatalog: {
     title: 'Service Catalog',
@@ -3248,6 +3254,12 @@ const ar: typeof en = {
     approvalYourTurn: 'أنت المعتمد المطلوب لهذه الخطوة الآن.',
     approvalWaitingOnPrefix: 'بانتظار:',
     approvalHistoryTitle: 'السجل',
+    // MIGRATION_059 — مرفقات التذاكر/الردود + صلاحيات الأولوية.
+    attachments: 'المرفقات',
+    removeAttachment: 'حذف المرفق',
+    attachmentTooLarge: (name: string) => `${name} حجمه كبير — الحد الأقصى لكل مرفق 5 ميجا`,
+    tooManyAttachments: (max: number) => `أقصى عدد مرفقات تقدر ترفعها ${max}`,
+    priorityUpdateFailed: 'فشل تحديث الأولوية',
   },
   serviceCatalog: {
     title: 'كتالوج الخدمات',
