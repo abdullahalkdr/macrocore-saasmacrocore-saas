@@ -169,3 +169,13 @@ export const IconEyeOff = ({ size = 14 }: IconProps) => (
     <path d="M1 1l22 22" />
   </svg>
 );
+
+// Approval Workflow Engine (MIGRATION_055) — a check-in-a-shield reads as "governance /
+// sign-off" better than a plain checkmark, matching Payroll/Settings' use of a
+// recognizable pictogram rather than a generic icon.
+export const IconApproval = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />
+    <path d="M9 12l2 2 4-4" />
+  </svg>
+);

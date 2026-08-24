@@ -47,6 +47,7 @@ import ShiftSchedulePage from './pages/ShiftSchedulePage';
 import SuppliersPage from './pages/SuppliersPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import PermissionsPage from './pages/PermissionsPage';
+import ApprovalsInboxPage from './pages/ApprovalsInboxPage';
 import CustomersPage from './pages/CustomersPage';
 import SalesQuotesPage from './pages/SalesQuotesPage';
 import SalesInvoicesPage from './pages/SalesInvoicesPage';
@@ -210,6 +211,14 @@ export default function App() {
               element={
                 <RequireRole roles={ADMIN_ROLES}>
                   <PermissionsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/approvals"
+              element={
+                <RequireRole roles={MANAGER_ROLES}>
+                  <ApprovalsInboxPage />
                 </RequireRole>
               }
             />

@@ -53,6 +53,7 @@ import policiesRoutes from './routes/policies.routes';
 import costCentersRoutes from './routes/costCenters.routes';
 import projectsRoutes from './routes/projects.routes';
 import periodClosingRoutes from './routes/periodClosing.routes';
+import approvalsRoutes from './routes/approvals.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -156,6 +157,12 @@ app.use('/api/customer-receipts', ...silver('Customer receipts'), customerReceip
 app.use('/api/recurring-invoices', ...silver('Recurring invoices'), recurringInvoicesRoutes);
 app.use('/api/credit-notes', ...silver('Credit notes'), creditNotesRoutes);
 app.use('/api/notifications', ...guarded, notificationsRoutes);
+// MIGRATION_055 — Enterprise Approval Workflow Engine (Maker-Checker). Gold-tier, same
+// governance-feature bracket as Payroll/Audit log/Granular permissions. Layout.tsx's
+// pending-count polling only fires once companyPlanLevel >= 3 specifically so this gate
+// never triggers the global upgrade-modal popup for lower-tier companies on background
+// requests — see the my-permissions split above for why that matters.
+app.use('/api/approvals', ...gold('Approval workflows'), approvalsRoutes);
 
 // Enterprise HR expansion (Performance & KPI, 360 feedback, HR helpdesk SLA) — Gold
 // tier, same bracket as Payroll/Audit log/API access. /api/support/tickets itself

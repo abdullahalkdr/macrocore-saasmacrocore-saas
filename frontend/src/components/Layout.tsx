@@ -27,6 +27,7 @@ import {
   IconChevronRight,
   IconMenu,
   IconClose,
+  IconApproval,
 } from './Icon';
 
 type IconType = ComponentType<{ size?: number }>;
@@ -135,6 +136,28 @@ export default function Layout() {
     return () => clearInterval(interval);
   }, [isManagerRole]);
 
+  // MIGRATION_055 — pending approval-workflow count for the sidebar badge. Gated on
+  // BOTH isManagerRole and the live plan level (gold, same as the /api/approvals route
+  // gate in app.ts) — polling a gold-gated route in the background for a Bronze/Silver
+  // company would 403 with PLAN_UPGRADE_REQUIRED every 60s and auto-pop the global
+  // upgrade modal unprompted (api/client.ts's interceptor does this for ANY 403 with
+  // that code, not just user-initiated navigation) — the exact bug already caught and
+  // fixed once for /permissions/my-permissions earlier in this project; not repeating
+  // it here for a second endpoint.
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  useEffect(() => {
+    if (!isManagerRole) return;
+    if (planLevelOf(livePlan ?? company?.plan) < 3) return;
+    function loadPendingApprovals() {
+      get<{ requests: unknown[] }>('/approvals/pending')
+        .then((r) => setPendingApprovals(r.requests.length))
+        .catch(() => {});
+    }
+    loadPendingApprovals();
+    const interval = setInterval(loadPendingApprovals, 60000);
+    return () => clearInterval(interval);
+  }, [isManagerRole, livePlan, company?.plan]);
+
   // Grouped like CornLab's activeNavStructure(): a labelled section per work area
   // instead of one flat list.
   //
@@ -148,7 +171,20 @@ export default function Layout() {
   // comment on why POS sales and this new B2B invoicing suite are two independent
   // systems, not one.
   const navGroups: NavGroup[] = [
-    { label: t.nav.groupGeneral, items: [{ to: '/dashboard', label: t.nav.dashboard, icon: IconDashboard }] },
+    {
+      label: t.nav.groupGeneral,
+      items: [
+        { to: '/dashboard', label: t.nav.dashboard, icon: IconDashboard },
+        // MIGRATION_055 — kept flat (not folded into an accordion group) and right next
+        // to Dashboard on purpose: this is a daily action item for whoever holds it, not
+        // reference/config content — same prominence leave-requests already gets via
+        // its own badge. managerOnly for now; individual non-manager permission holders
+        // (MODULE_APPROVER_PERMISSION in approvals.controller.ts) can still act via the
+        // API/direct URL, they just don't get a sidebar entry yet — a real but small gap,
+        // flagged rather than silently left.
+        { to: '/approvals', label: t.nav.approvals, icon: IconApproval, managerOnly: true, minPlan: 3 },
+      ],
+    },
     {
       label: t.nav.groupDailyOps,
       items: [
@@ -404,6 +440,26 @@ export default function Layout() {
             }}
           >
             {pendingRequests}
+          </span>
+        )}
+        {l.to === '/approvals' && pendingApprovals > 0 && (
+          <span
+            style={{
+              minWidth: 18,
+              height: 18,
+              padding: '0 5px',
+              borderRadius: 999,
+              background: '#dc2626',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+            }}
+          >
+            {pendingApprovals}
           </span>
         )}
       </NavLink>
