@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post, patch, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
@@ -149,6 +150,18 @@ export default function SupportTicketsPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : t.support.loadFailed));
   }
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deep-link from ApprovalsInboxPage.tsx's "View details" action — the ticket
+  // detail view is in-component state (openId/detail), not a routed page, so
+  // /support?ticket=<id> is how an outside page opens a specific ticket here.
+  // openTicket() is declared further down but function declarations are
+  // hoisted within this component's scope, so this is safe to run first.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const ticketId = searchParams.get('ticket');
+    if (ticketId) openTicket(ticketId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Company users — only fetched for admin/manager, used for the Reporter
   // column (resolving created_by) and the Assignee picker/column. A plain

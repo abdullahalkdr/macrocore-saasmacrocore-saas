@@ -1,10 +1,36 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
+import { IconEye } from '../components/Icon';
+
+// "Blind Approvals" fix — resolves module_type + reference_id to the frontend
+// route that shows the actual underlying document, so a reviewer can read it
+// before approving/rejecting instead of acting on the row's summary alone.
+// ITSM_TICKET's detail view is in-component state on SupportTicketsPage.tsx
+// (openId/detail), not a routed /support/tickets/:id page — /support?ticket=
+// is the deep-link query param that page reads on mount to auto-open it.
+// Payroll/PO/Expense have no dedicated single-record detail page yet (those
+// modules were explicitly left unwired this round), so their "view details"
+// falls back to the module's list page rather than a specific record.
+function resolveApprovalUrl(moduleType: string, referenceId: string): string {
+  switch (moduleType) {
+    case 'ITSM_TICKET':
+      return `/support?ticket=${referenceId}`;
+    case 'PAYROLL':
+      return '/payroll';
+    case 'PURCHASE_ORDER':
+      return '/purchase-orders';
+    case 'EXPENSE':
+      return '/expenses';
+    default:
+      return '/approvals';
+  }
+}
 
 // MIGRATION_055 — mirrors approval_requests + the requester_name/requester_job_role
 // projection approvals.controller.ts's listPending() adds via its employees JOIN.
@@ -27,6 +53,7 @@ interface ApprovalRequest {
 export default function ApprovalsInboxPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
+  const navigate = useNavigate();
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
@@ -114,7 +141,15 @@ export default function ApprovalsInboxPage() {
               {requests.map((r) => (
                 <tr key={r.id}>
                   <td style={{ fontWeight: 700 }}>
-                    {moduleLabel(r.module_type)}
+                    <button
+                      type="button"
+                      className="link-button"
+                      style={{ fontWeight: 700, padding: 0 }}
+                      onClick={() => navigate(resolveApprovalUrl(r.module_type, r.reference_id))}
+                      title={t.approvals.viewDetails}
+                    >
+                      {moduleLabel(r.module_type)}
+                    </button>
                     {r.current_step_label && (
                       <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
                         {lang === 'ar' ? r.current_step_label : r.current_step_label_en || r.current_step_label}
@@ -133,6 +168,13 @@ export default function ApprovalsInboxPage() {
                   <td>{statusTag(r.status)}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        title={t.approvals.viewDetails}
+                        onClick={() => navigate(resolveApprovalUrl(r.module_type, r.reference_id))}
+                      >
+                        <IconEye size={14} />
+                      </button>
                       <button
                         className="btn btn-primary btn-sm"
                         disabled={actingId === r.id}

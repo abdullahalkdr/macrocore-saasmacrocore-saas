@@ -336,6 +336,18 @@ textarea:focus {
 .btn-danger { background: var(--red-50); color: var(--red-600); }
 .btn-sm { padding: 6px 11px; font-size: 12px; }
 
+/* ApprovalsInboxPage.tsx's clickable module/Type cell — "View details" without
+   looking like a full button, matches inline text but signals it's actionable. */
+.link-button {
+  background: none;
+  border: none;
+  color: var(--amber-600);
+  cursor: pointer;
+  text-align: inherit;
+  font: inherit;
+}
+.link-button:hover { text-decoration: underline; }
+
 .table-wrap { overflow-x: auto; }
 table.data-table th { font-size: 11px; }
 
