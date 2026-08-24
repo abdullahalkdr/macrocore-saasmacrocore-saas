@@ -488,6 +488,26 @@ export default function SupportTicketsPage() {
             <h2>{detail.subject}</h2>
           </div>
           <div className="card-body">
+            {/* Original ticket content — subject is already the card-head <h2> above;
+                this is the description/body the requester actually typed. Rendered
+                first, in its own visually distinct card, so an approver can read
+                what's actually being asked BEFORE the Approval Workflow block below —
+                previously this rendered as a single unstyled muted <div> further down
+                the page (past the approval block), easy to miss entirely. */}
+            <div className="card" style={{ background: 'var(--surface-alt)', border: '1px solid var(--border)', marginBottom: 14 }}>
+              <div className="card-body" style={{ padding: 14 }}>
+                <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                  {t.support.description}
+                </div>
+                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'break-word', lineHeight: 1.6 }}>
+                  {detail.description || <span className="muted">{t.support.noDescription}</span>}
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                  {t.support.requestType}: {ticketTypeLabel(detail)}
+                </div>
+              </div>
+            </div>
+
             {/* MIGRATION_056 — Approval Workflow Status, top of the ticket per spec.
                 Absent entirely (detail.approval is null) for a legacy ticket or one
                 created while the company was below Gold tier. */}
@@ -552,14 +572,6 @@ export default function SupportTicketsPage() {
                 </div>
               </div>
             )}
-
-            <div className="muted" style={{ marginBottom: 14 }}>
-              {detail.description}
-            </div>
-
-            <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
-              {t.support.requestType}: {ticketTypeLabel(detail)}
-            </div>
 
             {/* dynamic_data — shown above the reply thread, per the ITSM
                 portal spec. Falls back to the raw key/value when a field's
