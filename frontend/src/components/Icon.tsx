@@ -146,6 +146,12 @@ export const IconPrinter = ({ size = 14 }: IconProps) => (
   </svg>
 );
 
+export const IconWarning = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01" />
+  </svg>
+);
+
 export const IconEyeOff = ({ size = 14 }: IconProps) => (
   <svg {...base(size)} strokeLinecap="round" strokeLinejoin="round">
     <path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-8-11-8a19.7 19.7 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a19.6 19.6 0 01-2.16 3.19M14.12 14.12a3 3 0 11-4.24-4.24" />
