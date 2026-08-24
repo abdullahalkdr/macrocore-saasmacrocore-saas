@@ -82,7 +82,7 @@ export const listPending = asyncHandler(async (req: Request, res: Response) => {
   const myPermissions = isManager ? null : await effectivePermissions(req.auth!.userId);
 
   const result = await pool.query(
-    `SELECT ar.*, e.full_name AS requester_name, e.job_role AS requester_job_role
+    `SELECT ar.*, e.name AS requester_name, e.job_role AS requester_job_role
      FROM approval_requests ar
      JOIN employees e ON e.id = ar.requester_id
      WHERE ar.company_id = $1 AND ar.status = 'pending'
