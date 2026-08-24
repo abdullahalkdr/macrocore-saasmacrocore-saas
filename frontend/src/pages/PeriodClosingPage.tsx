@@ -5,7 +5,7 @@ import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ClosePeriodModal from '../components/ClosePeriodModal';
-import { IconPlus, IconTrash } from '../components/Icon';
+import { IconPlus, IconUnlock } from '../components/Icon';
 
 export interface ClosedPeriod {
   id: string;
@@ -102,7 +102,7 @@ export default function PeriodClosingPage() {
                   <td>{formatDate(cp.closed_at)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="icon-btn" title={t.periodClosing.reopenAction} onClick={() => setConfirmReopenId(cp.id)}>
-                      <IconTrash />
+                      <IconUnlock />
                     </button>
                   </td>
                 </tr>
@@ -122,7 +122,13 @@ export default function PeriodClosingPage() {
       {open && <ClosePeriodModal onClose={() => setOpen(false)} onSaved={load} />}
 
       {confirmReopenId && (
-        <ConfirmDialog message={t.periodClosing.reopenConfirm} onConfirm={handleReopen} onCancel={() => setConfirmReopenId(null)} />
+        <ConfirmDialog
+          title={t.periodClosing.reopenTitle}
+          message={t.periodClosing.reopenConfirm}
+          confirmLabel={t.periodClosing.reopenAction}
+          onConfirm={handleReopen}
+          onCancel={() => setConfirmReopenId(null)}
+        />
       )}
     </div>
   );

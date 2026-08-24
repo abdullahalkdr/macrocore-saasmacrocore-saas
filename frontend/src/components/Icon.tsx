@@ -32,6 +32,17 @@ export const IconTrash = ({ size = 14 }: IconProps) => (
   </svg>
 );
 
+// Reopening a closed accounting period (PeriodClosingPage.tsx) is a distinct
+// action from deleting a row -- reusing IconTrash there read as "delete this
+// period record" to accountants, when it actually un-locks retroactive edits.
+// Same lucide "unlock" glyph shape as the rest of this stroke-based set.
+export const IconUnlock = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)}>
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 019.9-1" />
+  </svg>
+);
+
 export const IconBuilding = ({ size = 26 }: IconProps) => (
   <svg {...base(size)}>
     <path d="M3 21h18M6 21V7l6-4 6 4v14M10 21v-6h4v6" />
