@@ -185,7 +185,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
             lr.attachment_base64, lr.status, lr.manager_note,
             lr.reviewed_by, lr.reviewed_at, lr.created_at
      FROM leave_requests lr
-     JOIN employees e ON e.id = lr.employee_id
+     JOIN employees e ON e.id = lr.employee_id AND e.company_id = lr.company_id
      WHERE ${where} ORDER BY lr.created_at DESC`,
     params
   );
@@ -343,7 +343,7 @@ export const calendar = asyncHandler(async (req: Request, res: Response) => {
     `SELECT lr.id, lr.employee_id, e.name AS employee_name, lr.category, lr.type, lr.permission_reason,
             lr.start_date, lr.end_date, lr.start_time, lr.end_time
      FROM leave_requests lr
-     JOIN employees e ON e.id = lr.employee_id
+     JOIN employees e ON e.id = lr.employee_id AND e.company_id = lr.company_id
      WHERE ${where}
      ORDER BY lr.start_date ASC`,
     params

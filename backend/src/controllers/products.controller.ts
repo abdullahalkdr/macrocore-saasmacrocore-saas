@@ -100,9 +100,9 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
             `SELECT psi.product_size_id, psi.raw_material_id, psi.usage_qty, psi.usage_unit, psi.is_packaging,
                     rm.name AS raw_material_name, rm.name_en AS raw_material_name_en, rm.category AS raw_material_category
              FROM product_size_ingredients psi
-             JOIN raw_materials rm ON rm.id = psi.raw_material_id
+             JOIN raw_materials rm ON rm.id = psi.raw_material_id AND rm.company_id = $${sizeIds.length + 1}
              WHERE psi.product_size_id IN (${sizeIds.map((_, i) => `$${i + 1}`).join(', ')})`,
-            sizeIds
+            [...sizeIds, companyId]
           );
     const sizesWithIngredients = sizes.rows.map((s) => ({
       ...s,
@@ -116,9 +116,9 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
     `SELECT pi.raw_material_id, pi.usage_qty, pi.usage_unit, pi.is_packaging,
             rm.name AS raw_material_name, rm.name_en AS raw_material_name_en, rm.category AS raw_material_category
      FROM product_ingredients pi
-     JOIN raw_materials rm ON rm.id = pi.raw_material_id
+     JOIN raw_materials rm ON rm.id = pi.raw_material_id AND rm.company_id = $2
      WHERE pi.product_id = $1`,
-    [id]
+    [id, companyId]
   );
 
   res.status(200).json({ success: true, product: product.rows[0], ingredients: ingredients.rows });
@@ -449,9 +449,9 @@ export const getCost = asyncHandler(async (req: Request, res: Response) => {
         const ingredients = await pool.query(
           `SELECT psi.raw_material_id, psi.usage_qty, psi.usage_unit, rm.package_qty, rm.package_unit
            FROM product_size_ingredients psi
-           JOIN raw_materials rm ON rm.id = psi.raw_material_id
+           JOIN raw_materials rm ON rm.id = psi.raw_material_id AND rm.company_id = $2
            WHERE psi.product_size_id = $1`,
-          [size.id]
+          [size.id, companyId]
         );
         const rawCost = await sumRawCostWithCurrentPrices(client, companyId, ingredients.rows);
         const fullCost = rawCost + overheadPerOrder;
@@ -474,9 +474,9 @@ export const getCost = asyncHandler(async (req: Request, res: Response) => {
     const ingredients = await pool.query(
       `SELECT pi.raw_material_id, pi.usage_qty, pi.usage_unit, rm.package_qty, rm.package_unit
        FROM product_ingredients pi
-       JOIN raw_materials rm ON rm.id = pi.raw_material_id
+       JOIN raw_materials rm ON rm.id = pi.raw_material_id AND rm.company_id = $2
        WHERE pi.product_id = $1`,
-      [id]
+      [id, companyId]
     );
     const rawCost = await sumRawCostWithCurrentPrices(client, companyId, ingredients.rows);
     const fullCost = rawCost + overheadPerOrder;

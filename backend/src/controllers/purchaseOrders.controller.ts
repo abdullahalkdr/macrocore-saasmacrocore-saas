@@ -37,14 +37,14 @@ async function assertRawMaterialsInCompany(rawMaterialIds: string[], companyId: 
   }
 }
 
-async function fetchItems(poId: string) {
+async function fetchItems(poId: string, companyId: string) {
   const result = await pool.query(
     `SELECT poi.id, poi.raw_material_id, rm.name AS raw_material_name, rm.name_en AS raw_material_name_en,
             poi.qty, poi.unit_price
      FROM purchase_order_items poi
-     JOIN raw_materials rm ON rm.id = poi.raw_material_id
+     JOIN raw_materials rm ON rm.id = poi.raw_material_id AND rm.company_id = $2
      WHERE poi.purchase_order_id = $1`,
-    [poId]
+    [poId, companyId]
   );
   return result.rows;
 }
@@ -65,8 +65,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
             po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
             COALESCE(SUM(poi.qty * poi.unit_price), 0)::float AS total
      FROM purchase_orders po
-     LEFT JOIN suppliers s ON s.id = po.supplier_id
-     LEFT JOIN locations l ON l.id = po.location_id
+     LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
+     LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
      LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
      WHERE ${where}
      GROUP BY po.id, s.name, l.name
@@ -84,14 +84,14 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
             po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at
      FROM purchase_orders po
-     LEFT JOIN suppliers s ON s.id = po.supplier_id
-     LEFT JOIN locations l ON l.id = po.location_id
+     LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
+     LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
      WHERE po.id = $1 AND po.company_id = $2`,
     [id, companyId]
   );
   if (!result.rows[0]) throw new AppError(404, 'Purchase order not found');
 
-  const items = await fetchItems(id as string);
+  const items = await fetchItems(id as string, companyId);
   res.status(200).json({ success: true, purchase_order: result.rows[0], items });
 });
 
@@ -211,11 +211,11 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const full = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
             po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at
-     FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id LEFT JOIN locations l ON l.id = po.location_id
+     FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
      WHERE po.id = $1`,
     [id]
   );
-  const items2 = await fetchItems(id as string);
+  const items2 = await fetchItems(id as string, companyId);
   res.status(200).json({ success: true, purchase_order: full.rows[0], items: items2 });
 });
 
@@ -236,7 +236,7 @@ export const receive = asyncHandler(async (req: Request, res: Response) => {
   if (!po.rows[0]) throw new AppError(404, 'Purchase order not found');
   if (po.rows[0].status !== 'ordered') throw new AppError(400, 'Only an "ordered" purchase order can be received');
 
-  const items = await fetchItems(id as string);
+  const items = await fetchItems(id as string, companyId);
   if (items.length === 0) throw new AppError(400, 'Purchase order has no items');
 
   const client = await pool.connect();
