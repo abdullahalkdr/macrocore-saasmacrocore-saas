@@ -57,8 +57,16 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
   // Broadened from 'employee'-only: an admin/manager can now also be individually
   // granted 'view_hr_tickets', so they need to appear here as a grant target too.
+  // job_role_id comes along (via employees, may be NULL for pure logins with no linked
+  // employee record) so the By Employee UI can show which permissions this person
+  // already inherits from their job role — same MIGRATION_054 two-layer model as
+  // effectivePermissions()/hasPermission() in utils/permissions.ts.
   const usersResult = await pool.query(
-    `SELECT id, full_name, email, role FROM users WHERE company_id = $1 ORDER BY full_name`,
+    `SELECT u.id, u.full_name, u.email, u.role, e.job_role_id
+     FROM users u
+     LEFT JOIN employees e ON e.id = u.employee_id
+     WHERE u.company_id = $1
+     ORDER BY u.full_name`,
     [companyId]
   );
   const grantsResult = await pool.query(
@@ -73,12 +81,31 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     grantsByUser.set(row.user_id, list);
   }
 
+  // Same 42P01 (undefined_table) tolerance as utils/permissions.ts — if MIGRATION_054
+  // hasn't run yet on this database, inherited_keys just comes back empty for everyone
+  // instead of 500ing this whole page.
+  const grantsByJobRole = new Map<string, string[]>();
+  try {
+    const jobRoleGrantsResult = await pool.query(
+      `SELECT job_role_id, permission_key FROM job_role_permissions WHERE company_id = $1`,
+      [companyId]
+    );
+    for (const row of jobRoleGrantsResult.rows) {
+      const list = grantsByJobRole.get(row.job_role_id) ?? [];
+      list.push(row.permission_key);
+      grantsByJobRole.set(row.job_role_id, list);
+    }
+  } catch (err) {
+    if ((err as { code?: string })?.code !== '42P01') throw err;
+  }
+
   const employees = usersResult.rows.map((u) => ({
     id: u.id,
     full_name: u.full_name,
     email: u.email,
     role: u.role,
     permission_keys: grantsByUser.get(u.id) ?? [],
+    inherited_keys: u.job_role_id ? grantsByJobRole.get(u.job_role_id) ?? [] : [],
   }));
 
   res.status(200).json({ success: true, permission_keys: PERMISSION_KEYS, employees });

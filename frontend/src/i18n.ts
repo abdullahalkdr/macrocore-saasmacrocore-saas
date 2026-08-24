@@ -1428,6 +1428,9 @@ const en = {
     selectJobRolePlaceholder: 'Select job role...',
     noRoleSelected: 'Select a department and job role above to manage its permissions.',
     savePermissions: 'Save permissions',
+    noEmployeeSelected: 'Search and select an employee above to manage their individual permissions.',
+    inheritedHint: 'Highlighted permissions are already granted through this employee’s job role — checking a box below adds an individual exception on top, it never removes a job-role grant.',
+    inheritedBadge: 'From job role',
   },
   customers: {
     title: 'Customers',
@@ -3503,6 +3506,9 @@ const ar: typeof en = {
     selectJobRolePlaceholder: '- اختر المسمى الوظيفي -',
     noRoleSelected: 'اختر القسم والمسمى الوظيفي فوق عشان تدير صلاحياته.',
     savePermissions: 'حفظ الصلاحيات',
+    noEmployeeSelected: 'دوّر واختر موظف فوق عشان تدير صلاحياته الفردية.',
+    inheritedHint: 'الصلاحيات المميّزة ممنوحة أصلاً من خلال المسمى الوظيفي لهذا الموظف — تفعيل أي صلاحية تحت يضيف استثناء فردي فوقها، وما يلغي صلاحية المسمى الوظيفي.',
+    inheritedBadge: 'من المسمى الوظيفي',
   },
   customers: {
     title: 'العملاء',

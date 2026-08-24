@@ -378,6 +378,32 @@ table.data-table th { font-size: 11px; }
   cursor: pointer;
 }
 .permission-check-item:hover { background: var(--surface-alt); }
+/* PermissionsPage.tsx "by employee" tab — a permission already granted via the
+   employee's job role (MIGRATION_054 layer) renders checked+disabled here, with an
+   amber "From job role" tag, so the admin can see at a glance which boxes are
+   inherited vs. which represent an individual exception they're actively granting. */
+.permission-check-item.inherited { background: var(--amber-50); border-color: var(--amber-100); cursor: default; opacity: .85; }
+[data-theme='dark'] .permission-check-item.inherited { background: var(--stone-700); border-color: var(--amber-700); }
+
+/* Employee search-and-select autocomplete — By Employee tab (mirrors the By Job Role
+   tab's dropdowns, but employees are a long free-text-searchable list so a typeahead
+   fits better than a plain <select>). */
+.autocomplete-list {
+  position: absolute;
+  top: 100%;
+  inset-inline-start: 0;
+  inset-inline-end: 0;
+  z-index: 20;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+}
+.autocomplete-item { padding: 9px 12px; cursor: pointer; font-size: 13px; }
+.autocomplete-item:hover { background: var(--surface-alt); }
 
 .tag { display: inline-block; padding: 3px 9px; border-radius: 100px; font-size: 11px; font-weight: 700; }
 .tag.green { background: var(--emerald-50); color: var(--emerald-700); }

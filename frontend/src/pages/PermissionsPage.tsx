@@ -3,12 +3,18 @@ import { get, put, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
+import { IconClose } from '../components/Icon';
 
 interface EmployeeRow {
   id: string;
   full_name: string | null;
   email: string;
   permission_keys: string[];
+  // MIGRATION_054 layer — permission keys this user already has via their job role
+  // (job_role_permissions, resolved server-side through users.employee_id ->
+  // employees.job_role_id). Read-only here: individual grants below can only ADD on
+  // top of this, never remove it — same rule the backend enforces.
+  inherited_keys: string[];
 }
 
 // MIGRATION_054 — a job_roles row (across all departments), with its currently-granted
@@ -61,10 +67,13 @@ export default function PermissionsPage() {
     return lang === 'ar' ? name : nameEn || name;
   }
 
-  // --- By-employee tab (existing) ---
+  // --- By-employee tab: search-and-select (mirrors the By Job Role tab's cascading
+  // UX) — pick one employee via autocomplete instead of scrolling a 16-column matrix. ---
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [dirtyUsers, setDirtyUsers] = useState<Record<string, string[]>>({});
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [showEmployeeSuggestions, setShowEmployeeSuggestions] = useState(false);
 
   // --- By-job-role tab: cascading Department -> Job Role selection (replaces the old
   // full matrix table, which became unusable once there were dozens of roles x 16
@@ -84,6 +93,7 @@ export default function PermissionsPage() {
   const filteredEmployees = employees.filter((e) =>
     (e.full_name || e.email).toLowerCase().includes(userSearch.trim().toLowerCase())
   );
+  const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId) ?? null;
 
   // Departments derived from the job_roles list itself (each role row already carries
   // its department id/name/name_en) — no separate departments fetch needed.
@@ -193,59 +203,106 @@ export default function PermissionsPage() {
 
       {tab === 'user' && (
         <div className="card">
-          <div className="field" style={{ maxWidth: 320, marginBottom: 12 }}>
-            <input
-              type="text"
-              value={userSearch}
-              onChange={(e) => setUserSearch(e.target.value)}
-              placeholder={t.permissions.searchEmployee}
-            />
-          </div>
-          <div className="table-wrap permissions-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t.permissions.employee}</th>
-                  {PERMISSION_KEYS.map((key) => (
-                    <th key={key}>{t.permissions.keys[key]}</th>
-                  ))}
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEmployees.map((emp) => {
-                  const keys = currentUserKeys(emp);
-                  const isDirty = emp.id in dirtyUsers;
-                  return (
-                    <tr key={emp.id}>
-                      <td style={{ fontWeight: 700 }}>{emp.full_name || emp.email}</td>
-                      {PERMISSION_KEYS.map((key) => (
-                        <td key={key} style={{ textAlign: 'center' }}>
-                          <input type="checkbox" checked={keys.includes(key)} onChange={() => toggleUser(emp, key)} />
-                        </td>
-                      ))}
-                      <td>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          disabled={!isDirty || savingUserId === emp.id}
-                          onClick={() => saveUser(emp)}
-                        >
-                          {savingUserId === emp.id ? t.common.loading : t.common.save}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredEmployees.length === 0 && (
-                  <tr>
-                    <td colSpan={PERMISSION_KEYS.length + 2}>
-                      <div className="empty-state">{employees.length === 0 ? t.permissions.empty : t.permissions.noResults}</div>
-                    </td>
-                  </tr>
+          {employees.length === 0 ? (
+            <div className="empty-state">{t.permissions.empty}</div>
+          ) : (
+            <>
+              <div className="field" style={{ maxWidth: 420, marginBottom: 12, position: 'relative' }}>
+                <label>{t.permissions.employee}</label>
+                {selectedEmployee ? (
+                  <div className="invite-row" style={{ justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>{selectedEmployee.full_name || selectedEmployee.email}</div>
+                      {selectedEmployee.full_name && <div className="muted">{selectedEmployee.email}</div>}
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => {
+                        setSelectedEmployeeId('');
+                        setUserSearch('');
+                      }}
+                    >
+                      <IconClose size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={userSearch}
+                      onChange={(e) => {
+                        setUserSearch(e.target.value);
+                        setShowEmployeeSuggestions(true);
+                      }}
+                      onFocus={() => setShowEmployeeSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowEmployeeSuggestions(false), 150)}
+                      placeholder={t.permissions.searchEmployee}
+                      autoComplete="off"
+                    />
+                    {showEmployeeSuggestions && (
+                      <div className="autocomplete-list">
+                        {filteredEmployees.length === 0 && <div className="autocomplete-item muted">{t.permissions.noResults}</div>}
+                        {filteredEmployees.slice(0, 8).map((emp) => (
+                          <div
+                            key={emp.id}
+                            className="autocomplete-item"
+                            onMouseDown={(ev) => {
+                              ev.preventDefault();
+                              setSelectedEmployeeId(emp.id);
+                              setUserSearch('');
+                              setShowEmployeeSuggestions(false);
+                            }}
+                          >
+                            <div style={{ fontWeight: 700 }}>{emp.full_name || emp.email}</div>
+                            {emp.full_name && <div className="muted" style={{ fontSize: 11 }}>{emp.email}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+
+              {!selectedEmployee && <div className="empty-state">{t.permissions.noEmployeeSelected}</div>}
+
+              {selectedEmployee && (
+                <>
+                  <div className="hr" />
+                  <div className="muted" style={{ marginBottom: 10 }}>{t.permissions.inheritedHint}</div>
+                  <div className="permission-check-grid">
+                    {PERMISSION_KEYS.map((key) => {
+                      const keys = currentUserKeys(selectedEmployee);
+                      const isInherited = selectedEmployee.inherited_keys.includes(key);
+                      const isChecked = isInherited || keys.includes(key);
+                      return (
+                        <label
+                          key={key}
+                          className={`permission-check-item${isInherited ? ' inherited' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            disabled={isInherited}
+                            onChange={() => toggleUser(selectedEmployee, key)}
+                          />
+                          <span>{t.permissions.keys[key]}</span>
+                          {isInherited && <span className="tag amber" style={{ marginInlineStart: 'auto' }}>{t.permissions.inheritedBadge}</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    disabled={!(selectedEmployee.id in dirtyUsers) || savingUserId === selectedEmployee.id}
+                    onClick={() => saveUser(selectedEmployee)}
+                  >
+                    {savingUserId === selectedEmployee.id ? t.common.loading : t.permissions.savePermissions}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 
