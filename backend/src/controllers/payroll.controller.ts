@@ -4,6 +4,19 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { assertPeriodOpen } from '../utils/periodGuard';
+import { hasPermission } from '../utils/permissions';
+
+// list()/getOne() are reachable by any authenticated user (see payroll.routes.ts) — a
+// plain employee with no 'manage_payroll' grant only ever sees their OWN payroll rows
+// (salary/deduction amounts are personal financial data, same reasoning as the
+// attendance-list fix in MIGRATION_040). Returns the employee_id to filter by, or null
+// meaning "no filter, see everyone" for admin/manager or a manage_payroll grant.
+async function ownEmployeeIdFilter(req: Request): Promise<string | null | undefined> {
+  if (req.auth!.role === 'admin' || req.auth!.role === 'manager') return undefined;
+  if (await hasPermission(req.auth!.userId, 'manage_payroll')) return undefined;
+  const u = await pool.query('SELECT employee_id FROM users WHERE id = $1', [req.auth!.userId]);
+  return u.rows[0]?.employee_id ?? null; // null = linked to no employee -> sees nothing, not everyone
+}
 
 interface AdjustmentInput {
   type: 'bonus' | 'deduction';
@@ -45,12 +58,18 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { month } = req.query;
 
+  const ownEmployeeId = await ownEmployeeIdFilter(req);
+
   const params: unknown[] = [companyId];
   let where = 'company_id = $1';
   if (typeof month === 'string') {
     if (!/^\d{4}-\d{2}$/.test(month)) throw new AppError(400, 'month must be YYYY-MM');
     params.push(month);
     where += ` AND month_year = $${params.length}`;
+  }
+  if (ownEmployeeId !== undefined) {
+    params.push(ownEmployeeId);
+    where += ` AND employee_id = $${params.length}`;
   }
 
   const result = await pool.query(
@@ -66,11 +85,20 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
+  const ownEmployeeId = await ownEmployeeIdFilter(req);
+
+  const params: unknown[] = [id, companyId];
+  let where = 'id = $1 AND company_id = $2';
+  if (ownEmployeeId !== undefined) {
+    params.push(ownEmployeeId);
+    where += ` AND employee_id = $${params.length}`;
+  }
+
   const result = await pool.query(
     `SELECT id, employee_id, month_year, base_salary, attendance_bonus, other_deductions,
             wage_type, hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date
-     FROM payroll WHERE id = $1 AND company_id = $2`,
-    [id, companyId]
+     FROM payroll WHERE ${where}`,
+    params
   );
   if (!result.rows[0]) throw new AppError(404, 'Payroll record not found');
 

@@ -288,6 +288,11 @@ export default function EmployeesPage() {
         email: form.email || undefined,
         phone: form.phone || undefined,
         job_role: finalJobRole || undefined,
+        // MIGRATION_054 — the FK link permissions are keyed on. Only set when a real
+        // catalog role is picked (jobRoleSelect already resolves to the job_roles row's
+        // id — see resolveJobRoleSelect); the "Other" free-text fallback has no id to
+        // send, same nullable pattern as location_id/department_id above.
+        job_role_id: form.jobRoleSelect && form.jobRoleSelect !== JOB_ROLE_OTHER ? form.jobRoleSelect : null,
         salary_monthly: form.salary ? Number(form.salary) : undefined,
         photo_base64: form.photoBase64 || undefined,
         civil_id: form.civilId || undefined,

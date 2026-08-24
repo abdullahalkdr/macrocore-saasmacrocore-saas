@@ -36,7 +36,7 @@ import auditLogRoutes from './routes/auditLog.routes';
 import shiftSchedulesRoutes from './routes/shiftSchedules.routes';
 import suppliersRoutes from './routes/suppliers.routes';
 import purchaseOrdersRoutes from './routes/purchaseOrders.routes';
-import permissionsRoutes from './routes/permissions.routes';
+import permissionsRoutes, { myPermissionsRouter } from './routes/permissions.routes';
 import customersRoutes from './routes/customers.routes';
 import salesQuotesRoutes from './routes/salesQuotes.routes';
 import salesInvoicesRoutes from './routes/salesInvoices.routes';
@@ -142,6 +142,9 @@ app.use('/api/audit-log', ...gold('Audit log'), auditLogRoutes);
 app.use('/api/shift-schedules', ...silver('Shift scheduling'), shiftSchedulesRoutes);
 app.use('/api/suppliers', ...silver('Suppliers'), suppliersRoutes);
 app.use('/api/purchase-orders', ...silver('Purchase orders'), purchaseOrdersRoutes);
+// my-permissions is read-only, works on every plan (see permissions.routes.ts for why
+// it's a separate router instance rather than one route inside the gold-gated one below).
+app.use('/api/permissions', ...guarded, myPermissionsRouter);
 app.use('/api/permissions', ...gold('Granular permissions'), permissionsRoutes);
 app.use('/api/customers', ...silver('Customer / loyalty tracking'), customersRoutes);
 // New B2B sales suite ("المبيعات" — quotes/invoices, separate from POS/shift sales;

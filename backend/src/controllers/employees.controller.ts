@@ -18,7 +18,7 @@ interface Allowance {
   amount: number;
 }
 
-const SELECT_COLUMNS = `id, name, email, phone, job_role, salary_monthly, start_date, status,
+const SELECT_COLUMNS = `id, name, email, phone, job_role, job_role_id, salary_monthly, start_date, status,
   photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
   nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
   bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
@@ -123,6 +123,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     email,
     phone,
     job_role,
+    job_role_id,
     salary_monthly,
     start_date,
     photo_base64,
@@ -168,17 +169,25 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     const dept = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
     if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
   }
+  // MIGRATION_054 — job_role_id is the FK link EmployeesPage.tsx's dropdown resolves to
+  // (its "Other" free-text fallback simply omits this and only sends job_role text).
+  // Drives job-role-level permission grants (job_role_permissions), so it's validated
+  // the same tenant-scoped way as department_id/location_id above.
+  if (job_role_id) {
+    const role = await pool.query('SELECT id FROM job_roles WHERE id = $1 AND company_id = $2', [job_role_id, companyId]);
+    if (role.rows.length === 0) throw new AppError(400, 'job_role_id not found');
+  }
   const certList = validateCertificates(certificates);
   const allowanceList = validateAllowances(allowances);
 
   const result = await pool.query(
-    `INSERT INTO employees (company_id, name, email, phone, job_role, salary_monthly, start_date,
+    `INSERT INTO employees (company_id, name, email, phone, job_role, job_role_id, salary_monthly, start_date,
        photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
        nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
        bank_iban, emergency_contact_name, emergency_contact_phone, location_id, department_id, allowances,
        shift_start_time, late_grace_minutes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19, $20, $21,
-       $22, $23, $24, $25, $26, $27::jsonb, $28, $29)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $18, $19, $20, $21, $22,
+       $23, $24, $25, $26, $27, $28::jsonb, $29, $30)
      RETURNING ${SELECT_COLUMNS}`,
     [
       companyId,
@@ -186,6 +195,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       email ?? null,
       phone ?? null,
       job_role ?? null,
+      job_role_id ?? null,
       salary_monthly ?? null,
       start_date ?? null,
       photo_base64 ?? null,
@@ -229,6 +239,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     email,
     phone,
     job_role,
+    job_role_id,
     salary_monthly,
     start_date,
     status,
@@ -272,6 +283,13 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   if (email !== undefined) setField('email', email || null);
   if (phone !== undefined) setField('phone', phone || null);
   if (job_role !== undefined) setField('job_role', job_role || null);
+  if (job_role_id !== undefined) {
+    if (job_role_id) {
+      const role = await pool.query('SELECT id FROM job_roles WHERE id = $1 AND company_id = $2', [job_role_id, companyId]);
+      if (role.rows.length === 0) throw new AppError(400, 'job_role_id not found');
+    }
+    setField('job_role_id', job_role_id || null);
+  }
   if (salary_monthly !== undefined) {
     if (salary_monthly !== null && typeof salary_monthly !== 'number') throw new AppError(400, 'salary_monthly must be a number');
     setField('salary_monthly', salary_monthly);

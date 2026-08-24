@@ -7,6 +7,7 @@ import { useT } from '../i18n';
 import { get, post } from '../api/client';
 import { planLevelOf, PLAN_TIER_NAME } from '../planLevels';
 import { useUpgradeModalStore } from '../store/upgradeModalStore';
+import { usePermissionsStore } from '../store/usePermissionsStore';
 import Avatar from './Avatar';
 import NotificationsBell from './NotificationsBell';
 import AcknowledgmentModal from './AcknowledgmentModal';
@@ -36,6 +37,11 @@ interface NavItem {
   minPlan?: number;
   managerOnly?: boolean;
   adminOnly?: boolean;
+  // MIGRATION_054 — an employee individually or by-job-role granted this exact
+  // permission key sees the item even though managerOnly/adminOnly would otherwise hide
+  // it. Only ever WIDENS visibility on top of the role check below, never narrows it —
+  // an item with no `permission` set behaves exactly as before this existed.
+  permission?: string;
 }
 interface NavGroup {
   label: string;
@@ -96,6 +102,16 @@ export default function Layout() {
     get<{ plan: string }>('/company/me')
       .then((r) => setLivePlan(r.plan))
       .catch(() => {});
+  }, []);
+
+  // Own effective permission set (job-role + individual layers, MIGRATION_054) — fetched
+  // once per mount, same pattern as livePlan above. Layout mounts fresh on every
+  // login/page-load inside ProtectedRoute, so this is always current for the session.
+  const fetchMyPermissions = usePermissionsStore((s) => s.fetchMyPermissions);
+  const permissionKeys = usePermissionsStore((s) => s.permissionKeys);
+  useEffect(() => {
+    fetchMyPermissions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -169,7 +185,7 @@ export default function Layout() {
       items: [
         { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true, minPlan: 2 },
         { to: '/departments', label: t.nav.departments, icon: IconEmployee, managerOnly: true },
-        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true, minPlan: 3 },
+        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true, minPlan: 3, permission: 'manage_payroll' },
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
@@ -218,9 +234,13 @@ export default function Layout() {
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter(
-        (i) => (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin)
-      ),
+      items: group.items.filter((i) => {
+        const roleOk = (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin);
+        if (roleOk) return true;
+        // Permission override (MIGRATION_054): only fires when roleOk is false, so this
+        // can never hide an item the role check already shows — see NavItem.permission.
+        return !!i.permission && permissionKeys.includes(i.permission);
+      }),
     }))
     .filter((group) => group.items.length > 0);
 
