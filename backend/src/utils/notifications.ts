@@ -14,8 +14,17 @@ interface NotifyRolesInput {
 // throws. One row per matching user in the company (see MIGRATION_025 comment for why).
 export async function notifyRoles(input: NotifyRolesInput): Promise<void> {
   try {
+    // BUGFIX (notifications never arriving via notifyRoles — silently, since this
+    // whole function was one big try/catch with a bare `catch {}` until the logging
+    // added above) — `id != COALESCE($3, '00000000-...-0000')` left $3's type
+    // unresolved: with no other context to pin it down, Postgres inferred the
+    // COALESCE's result (and so the comparison) as text, and `uuid <> text` has no
+    // operator (error 42883) — this query has thrown that on every single call since
+    // the Approval Engine shipped, meaning notifyRoles() has NEVER successfully
+    // notified anyone, for any module, ever. Explicit ::uuid casts on both sides of
+    // COALESCE resolve the type before the comparison runs.
     const users = await pool.query(
-      `SELECT id FROM users WHERE company_id = $1 AND role = ANY($2::text[]) AND status = 'active' AND id != COALESCE($3, '00000000-0000-0000-0000-000000000000')`,
+      `SELECT id FROM users WHERE company_id = $1 AND role = ANY($2::text[]) AND status = 'active' AND id != COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)`,
       [input.companyId, input.roles, input.excludeUserId ?? null]
     );
     for (const row of users.rows) {
