@@ -58,6 +58,7 @@ const PERMISSION_KEYS = [
   'apply_custom_discount',
   'export_sensitive_reports',
   'manage_system_settings',
+  'view_audit_log',
 ] as const;
 type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
