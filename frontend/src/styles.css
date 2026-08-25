@@ -602,11 +602,16 @@ tr:hover .print-btn { opacity: 1; }
   /* position: fixed on purpose, not absolute — .sidebar has overflow-y: auto, and per
      the CSS overflow spec that silently forces overflow-x to clip too, so an
      absolutely-positioned panel anchored outside the sidebar's own box was being cut
-     off invisibly. Fixed positioning escapes that clipping (its containing block is
-     the viewport, not .sidebar); exact top/left/right come from the button's
-     getBoundingClientRect() in Layout.tsx, not from this stylesheet. */
+     off invisibly. Fixed positioning ALONE doesn't actually escape that on WebKit
+     though (see Layout.tsx's own comment on why this is now portaled to document.body
+     too) — exact top/left/right come from the button's getBoundingClientRect() in
+     Layout.tsx, not from this stylesheet.
+     z-index: 310 — deliberately above .sidebar (300) and .sidebar-backdrop (290)
+     below, so the flyout always renders on top of the open mobile drawer instead of
+     being sandwiched behind it (it used to be 60, which is how it ended up looking
+     "inside" the sidebar instead of over it). */
   position: fixed;
-  width: 230px; z-index: 60;
+  width: 230px; z-index: 310;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 12px 32px rgba(0,0,0,.22);
@@ -614,9 +619,14 @@ tr:hover .print-btn { opacity: 1; }
 }
 .nav-flyout-header {
   display: flex; align-items: center; gap: 6px;
-  padding: 8px 10px 6px; font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: .02em;
+  padding: 8px 6px 6px 10px; font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: .02em;
 }
 .nav-flyout-header .back { transform: scaleX(-1); }
+.nav-flyout-close {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  display: flex; align-items: center; padding: 4px; border-radius: 6px; flex-shrink: 0;
+}
+.nav-flyout-close:hover { background: var(--surface-alt); color: var(--text); }
 .nav-flyout nav { display: flex; flex-direction: column; gap: 1px; }
 .nav-flyout nav a, .nav-flyout nav button {
   color: var(--text); text-decoration: none; padding: 8px 10px; border-radius: 8px;

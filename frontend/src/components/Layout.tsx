@@ -1,4 +1,5 @@
 import { ComponentType, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useLangStore, isRTL } from '../store/langStore';
@@ -543,13 +544,35 @@ export default function Layout() {
                       <IconChevronRight />
                     </span>
                   </button>
-                  {expandedGroupKey === group.key && (
+                  {/* BUGFIX (flyout rendering "inside" the sidebar instead of beside it,
+                      on Safari/WebKit both desktop Mac and mobile) — same root cause as
+                      Modal.tsx/ConfirmDialog.tsx's own earlier fix this session: .sidebar
+                      has overflow-y: auto on a positioned ancestor, and WebKit wrongly
+                      treats that as the containing block for a `position: fixed`
+                      descendant instead of the viewport, so despite the comment in
+                      styles.css claiming .nav-flyout "escapes" the clipping, it never
+                      actually did on WebKit -- only on Chrome/Firefox, which get the spec
+                      right. Portaling to document.body sidesteps the ancestor entirely,
+                      the same fix as those two components. */}
+                  {expandedGroupKey === group.key && createPortal(
                     <div className="nav-flyout" ref={flyoutRef} style={{ top: flyoutPos.top, left: flyoutPos.left, right: flyoutPos.right }}>
                       <div className="nav-flyout-header">
                         <span className="back">
                           <IconChevronRight size={12} />
                         </span>
-                        {group.parentLabel}
+                        <span style={{ flex: 1 }}>{group.parentLabel}</span>
+                        {/* An explicit close button, not just tap-outside-to-dismiss --
+                            on a narrow phone the flyout can cover nearly the whole
+                            screen (see the 480px override below), leaving little "outside"
+                            area to tap; this makes closing it unambiguous either way. */}
+                        <button
+                          type="button"
+                          className="nav-flyout-close"
+                          onClick={() => setExpandedGroupKey(null)}
+                          title={t.common.close}
+                        >
+                          <IconClose size={14} />
+                        </button>
                       </div>
                       <nav onClick={() => setExpandedGroupKey(null)}>
                         {group.dividerBeforeLast ? (
@@ -562,7 +585,8 @@ export default function Layout() {
                           group.items.map((l) => renderNavItem(l))
                         )}
                       </nav>
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
               ) : (
