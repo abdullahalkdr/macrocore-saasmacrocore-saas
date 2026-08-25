@@ -7,6 +7,7 @@ import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
 import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
 import { notifyUsers } from '../utils/notifications';
+import { validateAttachments } from '../utils/attachments';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
 // (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
@@ -178,7 +179,7 @@ export const listPending = asyncHandler(async (req: Request, res: Response) => {
 export const actionRequest = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { action, comments } = req.body ?? {};
+  const { action, comments, attachments } = req.body ?? {};
 
   const VALID_ACTIONS = ['approved', 'rejected', 'returned', 'resubmitted'];
   if (!VALID_ACTIONS.includes(action)) {
@@ -189,6 +190,12 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   if (action === 'returned' && !String(comments ?? '').trim()) {
     throw new AppError(400, 'A comment is required when returning a request for changes.');
   }
+  // MIGRATION_062 -- lets a Return-for-Changes/Resubmit decision carry the actual
+  // fix (a corrected receipt photo, an updated document) instead of just a comment.
+  // Applies to every action, not just returned/resubmitted -- the column doesn't
+  // care which action it's attached to, it's just '[]' when nothing was sent.
+  const finalAttachments = validateAttachments(attachments);
+  const attachmentsJson = JSON.stringify(finalAttachments);
 
   const reqResult = await pool.query(`SELECT * FROM approval_requests WHERE id = $1 AND company_id = $2`, [id, companyId]);
   const request = reqResult.rows[0];
@@ -211,9 +218,9 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     }
 
     await pool.query(
-      `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
-       VALUES ($1, 1, $2, 'resubmitted', $3)`,
-      [id, myId, comments || null]
+      `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
+       VALUES ($1, 1, $2, 'resubmitted', $3, $4::jsonb)`,
+      [id, myId, comments || null, attachmentsJson]
     );
     // Resumes at step 1 exactly -- MIGRATION_061 decision #3: never a full restart
     // of an already-approved chain, always right back to the step that asked for
@@ -285,9 +292,9 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, request.current_step, myId, action, comments || null]
+        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [id, request.current_step, myId, action, comments || null, attachmentsJson]
       );
       if (action === 'rejected') {
         // A rejection at ANY step stops the whole chain immediately — see
@@ -345,9 +352,9 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, request.current_step, myId, action, comments || null]
+        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [id, request.current_step, myId, action, comments || null, attachmentsJson]
       );
 
       if (action === 'returned') {
@@ -557,7 +564,7 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
   }
 
   const logResult = await pool.query(
-    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, e.name AS approver_name
+    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
      FROM approval_steps_log asl
      LEFT JOIN employees e ON e.id = asl.approver_id
      WHERE asl.approval_request_id = $1

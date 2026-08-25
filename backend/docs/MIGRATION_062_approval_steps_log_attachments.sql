@@ -1,0 +1,31 @@
+-- MIGRATION_062_approval_steps_log_attachments.sql
+--
+-- Lets an approval decision (Approve/Reject/Return for Changes/Resubmit) carry
+-- attachments — same JSONB shape MIGRATION_059 already uses for support_tickets/
+-- ticket_replies, reusing the exact same shared validator (utils/attachments.ts).
+--
+-- Why this was needed: the "Return for Changes" feature (MIGRATION_061) only gave
+-- the approver a comment box to say what's wrong, and only gave the maker a bare
+-- "Resubmit" button with nowhere to actually attach the fix (a corrected receipt
+-- photo, an updated document) or explain what changed. The whole point of Modify
+-- vs. an outright Reject is that the maker gets a real chance to fix and reattach —
+-- without this column there was no way to carry that fix back into the workflow.
+--
+-- Run with: node scripts/run-sql.js docs/MIGRATION_062_approval_steps_log_attachments.sql
+--
+-- Design decisions:
+--   1. One JSONB array column, same shape as support_tickets.attachments
+--      ({file_name, file_base64} objects, capped at 5 files / 5MB each by
+--      utils/attachments.ts's validateAttachments()) — no new table, no new
+--      validator, this is deliberately not a new pattern.
+--   2. Applies to every approval_steps_log row, not just 'returned'/'resubmitted' —
+--      the column itself doesn't care which action it's attached to, it's just
+--      always '[]' when the caller doesn't send any (approve/reject today).
+--   3. Nullable-free: NOT NULL DEFAULT '[]'::jsonb, same as MIGRATION_059's own
+--      attachments columns — every existing row gets an empty array, never NULL,
+--      so the frontend never has to guard against attachments being absent.
+--
+-- Run again after any migration: safe, idempotent (IF NOT EXISTS).
+
+ALTER TABLE approval_steps_log
+  ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;

@@ -199,7 +199,7 @@ export interface ItsmApprovalSummary {
   current_step: number;
   total_steps: number;
   steps: { step_number: number; step_label: string; step_label_en: string | null }[];
-  log: { step_number: number; action: string; comments: string | null; action_at: string; approver_name: string | null }[];
+  log: { step_number: number; action: string; comments: string | null; action_at: string; attachments: { file_name: string; file_base64: string }[]; approver_name: string | null }[];
   is_pending_approver: boolean;
   can_resubmit: boolean;
 }
@@ -224,7 +224,7 @@ export async function getItsmApprovalSummary(
 
   const steps = await getWorkflowSteps('ITSM_TICKET');
   const logResult = await pool.query(
-    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, e.name AS approver_name
+    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
      FROM approval_steps_log asl
      LEFT JOIN employees e ON e.id = asl.approver_id
      WHERE asl.approval_request_id = $1

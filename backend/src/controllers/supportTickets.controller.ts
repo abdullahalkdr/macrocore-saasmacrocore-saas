@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
+import { validateAttachments, Attachment as TicketAttachment } from '../utils/attachments';
 import { logAudit } from '../utils/audit';
 import { hasPermission } from '../utils/permissions';
 import { createItsmApprovalChain, getBlockingApproval, getItsmApprovalSummary } from '../utils/itsmApprovals';
@@ -138,39 +139,10 @@ async function canAccessTicket(
 // this all lands inside one JSON request body — express.json() itself is
 // capped at 10mb (app.ts), and multiple uncapped attachments could blow past
 // that with a confusing "request too large" error instead of a clear one.
-const MAX_ATTACHMENTS = 5;
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB decoded, per file
-
-interface TicketAttachment {
-  file_name: string;
-  file_base64: string;
-}
-
-function validateAttachments(input: unknown): TicketAttachment[] {
-  if (input === undefined || input === null) return [];
-  if (!Array.isArray(input)) throw new AppError(400, 'attachments must be an array');
-  if (input.length > MAX_ATTACHMENTS) throw new AppError(400, `You can attach at most ${MAX_ATTACHMENTS} files`);
-
-  return input.map((item) => {
-    if (!item || typeof item !== 'object') throw new AppError(400, 'Each attachment must be an object');
-    const { file_name, file_base64 } = item as Record<string, unknown>;
-    if (typeof file_name !== 'string' || file_name.trim().length < 1) {
-      throw new AppError(400, 'Each attachment needs a file_name');
-    }
-    if (typeof file_base64 !== 'string' || !file_base64.startsWith('data:')) {
-      throw new AppError(400, `${file_name} — file_base64 must be a data: URL`);
-    }
-    // Rough decoded-size estimate from the base64 payload length (after the
-    // "data:<mime>;base64," prefix) — exact enough for a sanity cap, no need
-    // to actually decode the buffer just to reject an oversized file.
-    const commaIndex = file_base64.indexOf(',');
-    const encodedLength = commaIndex >= 0 ? file_base64.length - commaIndex - 1 : file_base64.length;
-    if (encodedLength * 0.75 > MAX_ATTACHMENT_BYTES) {
-      throw new AppError(400, `${file_name} is too large — attachments are capped at 5MB each`);
-    }
-    return { file_name: file_name.trim(), file_base64 };
-  });
-}
+// MIGRATION_062 — validateAttachments()/TicketAttachment moved to
+// utils/attachments.ts (renamed Attachment there) so approval_steps_log's own
+// attachments column (Return for Changes / Resubmit) can reuse the exact same
+// validator instead of a second copy. See that file for the full comment.
 
 async function validateDynamicData(companyId: string, requestTypeId: string, dynamicData: Record<string, unknown>): Promise<void> {
   const fields = await pool.query(
