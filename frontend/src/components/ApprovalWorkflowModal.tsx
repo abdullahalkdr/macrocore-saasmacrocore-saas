@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import Modal from './Modal';
+import ConfirmDialog from './ConfirmDialog';
 import Tag from './Tag';
 
 // Shared "Approval status" popup — opened by clicking any approval status tag in
@@ -93,6 +94,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   const [comment, setComment] = useState('');
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingReject, setConfirmingReject] = useState(false);
 
   function loadSummary() {
     setLoading(true);
@@ -128,7 +130,11 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   }
 
   function handleReject() {
-    if (!confirm(t.approvals.rejectConfirm)) return;
+    setConfirmingReject(true);
+  }
+
+  function confirmReject() {
+    setConfirmingReject(false);
     submitAction('rejected');
   }
 
@@ -187,6 +193,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   }
 
   return (
+    <Fragment>
     <Modal
       title={`${t.approvalWorkflow.title} — ${moduleLabel}`}
       onClose={onClose}
@@ -287,5 +294,15 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
         </>
       )}
     </Modal>
+    {confirmingReject && (
+      <ConfirmDialog
+        title={t.approvals.reject}
+        message={t.approvals.rejectConfirm}
+        confirmLabel={t.approvals.reject}
+        onConfirm={confirmReject}
+        onCancel={() => setConfirmingReject(false)}
+      />
+    )}
+    </Fragment>
   );
 }

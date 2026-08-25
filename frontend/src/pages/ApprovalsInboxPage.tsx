@@ -5,6 +5,7 @@ import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import Tag from '../components/Tag';
 import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import { IconEye } from '../components/Icon';
@@ -62,17 +63,23 @@ export default function ApprovalsInboxPage() {
   const [actingId, setActingId] = useState<string | null>(null);
 
   // Approve goes through a small comment modal (optional note for the audit trail);
-  // Reject is a one-click quick action per the UX spec — no modal, just a native
-  // confirm() the same way LeaveRequestsPage's own quick-status buttons work.
+  // Reject confirms through ConfirmDialog.tsx — the app's own styled confirmation,
+  // not the browser's native confirm() (see ConfirmDialog.tsx's own header comment).
   const [approveTarget, setApproveTarget] = useState<ApprovalRequest | null>(null);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<ApprovalRequest | null>(null);
 
   // Approval status popup (ApprovalWorkflowModal.tsx) — a quick peek at the workflow
-  // timeline without leaving the inbox (the eye icon/module link still navigate to
-  // the underlying record itself, unchanged). No detailLines here — the record's own
-  // fields aren't loaded on this page, and the popup's own "submitted by" node
-  // already covers the requester.
+  // timeline, with its own inline Approve/Reject, without leaving the inbox. The eye
+  // icon opens this too (see the "view details" button below) — it used to navigate to
+  // the underlying record's edit modal instead, which let a reviewer land on an "edit
+  // this expense" screen when what they actually wanted was to decide on it. The bold
+  // module-name link still navigates to the real record for whoever genuinely needs to
+  // inspect its full detail (e.g. a purchase order's line items) before deciding — that
+  // one's intentionally a different, explicit affordance. No detailLines here — the
+  // record's own fields aren't loaded on this page, and the popup's own "submitted by"
+  // node already covers the requester.
   const [approvalView, setApprovalView] = useState<ApprovalRequest | null>(null);
 
   function load() {
@@ -113,8 +120,10 @@ export default function ApprovalsInboxPage() {
     }
   }
 
-  async function handleReject(r: ApprovalRequest) {
-    if (!confirm(t.approvals.rejectConfirm)) return;
+  async function confirmReject() {
+    if (!rejectTarget) return;
+    const r = rejectTarget;
+    setRejectTarget(null);
     setError(null);
     setActingId(r.id);
     try {
@@ -190,8 +199,8 @@ export default function ApprovalsInboxPage() {
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       <button
                         className="btn btn-secondary btn-sm"
-                        title={t.approvals.viewDetails}
-                        onClick={() => navigate(resolveApprovalUrl(r.module_type, r.reference_id))}
+                        title={t.approvalWorkflow.title}
+                        onClick={() => setApprovalView(r)}
                       >
                         <IconEye size={14} />
                       </button>
@@ -205,7 +214,7 @@ export default function ApprovalsInboxPage() {
                       >
                         {t.approvals.approve}
                       </button>
-                      <button className="btn btn-danger btn-sm" disabled={actingId === r.id} onClick={() => handleReject(r)}>
+                      <button className="btn btn-danger btn-sm" disabled={actingId === r.id} onClick={() => setRejectTarget(r)}>
                         {t.approvals.reject}
                       </button>
                     </div>
@@ -253,6 +262,16 @@ export default function ApprovalsInboxPage() {
           detailLines={[]}
           onClose={() => setApprovalView(null)}
           onActioned={load}
+        />
+      )}
+
+      {rejectTarget && (
+        <ConfirmDialog
+          title={t.approvals.reject}
+          message={t.approvals.rejectConfirm}
+          confirmLabel={t.approvals.reject}
+          onConfirm={confirmReject}
+          onCancel={() => setRejectTarget(null)}
         />
       )}
     </div>
