@@ -7,6 +7,7 @@ import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
+import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import { IconPlus, IconSettings, IconTrash, IconEdit } from '../components/Icon';
 import { exportRowsToCsv } from '../utils/csv';
 
@@ -74,6 +75,11 @@ export default function ExpensesPage() {
   const [receiptFileName, setReceiptFileName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Approval status popup (ApprovalWorkflowModal.tsx) — opened by clicking the
+  // pending/rejected status tag on a row; read-only, so any user (including the
+  // employee who filed it, not just a manager) can see where their expense stands.
+  const [approvalView, setApprovalView] = useState<Expense | null>(null);
 
   const [manageOpen, setManageOpen] = useState(false);
   const [categoriesDraft, setCategoriesDraft] = useState<string[]>([]);
@@ -244,6 +250,18 @@ export default function ExpensesPage() {
     if (w) w.document.write(`<img src="${base64}" style="max-width:100%" />`);
   }
 
+  function expenseDetailLines(x: Expense): { label: string; value: string }[] {
+    const lines = [
+      { label: t.expenses.category, value: x.category },
+      { label: t.expenses.amount, value: `${Number(x.amount).toFixed(3)} KD` },
+      { label: t.expenses.date, value: dateKey(x) },
+    ];
+    if (x.location_name) lines.push({ label: t.expenses.location, value: x.location_name });
+    if (x.description) lines.push({ label: t.expenses.description, value: x.description });
+    if (x.created_by_name) lines.push({ label: t.expenses.recordedBy, value: x.created_by_name });
+    return lines;
+  }
+
   // Category options for the form's select — includes whatever's currently being
   // edited even if it was since removed from (or never added to) the managed list,
   // so opening an old expense for edit never shows a blank/mismatched dropdown.
@@ -349,14 +367,21 @@ export default function ExpensesPage() {
                     <tr key={x.id}>
                       <td>
                         <Tag color="amber">{x.category}</Tag>
-                        {x.status === 'pending_approval' && (
+                        {(x.status === 'pending_approval' || x.status === 'rejected') && (
                           <div style={{ marginTop: 4 }}>
-                            <Tag color="amber">{t.expenses.pendingApproval}</Tag>
-                          </div>
-                        )}
-                        {x.status === 'rejected' && (
-                          <div style={{ marginTop: 4 }}>
-                            <Tag color="red">{t.expenses.rejectedStatus}</Tag>
+                            <button
+                              type="button"
+                              className="link-button"
+                              style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                              onClick={() => setApprovalView(x)}
+                              title={t.approvalWorkflow.title}
+                            >
+                              {x.status === 'pending_approval' ? (
+                                <Tag color="amber">{t.expenses.pendingApproval}</Tag>
+                              ) : (
+                                <Tag color="red">{t.expenses.rejectedStatus}</Tag>
+                              )}
+                            </button>
                           </div>
                         )}
                       </td>
@@ -529,6 +554,15 @@ export default function ExpensesPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {approvalView && (
+        <ApprovalWorkflowModal
+          moduleType="EXPENSE"
+          referenceId={approvalView.id}
+          detailLines={expenseDetailLines(approvalView)}
+          onClose={() => setApprovalView(null)}
+        />
       )}
     </div>
   );

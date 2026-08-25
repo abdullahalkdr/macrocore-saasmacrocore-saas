@@ -5,6 +5,7 @@ import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
+import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 
 interface Supplier {
@@ -75,6 +76,10 @@ export default function PurchaseOrdersPage() {
 
   const [receiveTarget, setReceiveTarget] = useState<PurchaseOrder | null>(null);
   const [receiveLocationId, setReceiveLocationId] = useState('');
+
+  // Approval status popup (ApprovalWorkflowModal.tsx) — opened by clicking the
+  // pending/rejected approval tag on a row; read-only, open to anyone.
+  const [approvalView, setApprovalView] = useState<PurchaseOrder | null>(null);
 
   function load() {
     get<{ purchase_orders: PurchaseOrder[] }>('/purchase-orders')
@@ -247,6 +252,18 @@ export default function PurchaseOrdersPage() {
     return m.name || m.name_en || '';
   }
 
+  function poDetailLines(po: PurchaseOrder): { label: string; value: string }[] {
+    const lines = [
+      { label: t.purchaseOrders.supplier, value: po.supplier_name || '—' },
+      { label: t.purchaseOrders.status.label, value: statusLabel(po.status) },
+      { label: t.purchaseOrders.total, value: `${po.total.toFixed(3)} KD` },
+    ];
+    if (po.order_date) lines.push({ label: t.purchaseOrders.orderDate, value: po.order_date.slice(0, 10) });
+    if (po.expected_date) lines.push({ label: t.purchaseOrders.expectedDate, value: po.expected_date.slice(0, 10) });
+    if (po.notes) lines.push({ label: t.purchaseOrders.notes, value: po.notes });
+    return lines;
+  }
+
   return (
     <div>
       <PageHeader title={t.purchaseOrders.title} subtitle={t.purchaseOrders.subtitle} />
@@ -278,9 +295,21 @@ export default function PurchaseOrdersPage() {
                   <td style={{ fontWeight: 700 }}>{po.supplier_name || '—'}</td>
                   <td>
                     <span className={`badge ${po.status}`}>{statusLabel(po.status)}</span>
-                    {po.approval_status === 'pending' && (
+                    {(po.approval_status === 'pending' || po.approval_status === 'rejected') && (
                       <div style={{ marginTop: 4 }}>
-                        <Tag color="amber">{t.purchaseOrders.pendingApproval}</Tag>
+                        <button
+                          type="button"
+                          className="link-button"
+                          style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                          onClick={() => setApprovalView(po)}
+                          title={t.approvalWorkflow.title}
+                        >
+                          {po.approval_status === 'pending' ? (
+                            <Tag color="amber">{t.purchaseOrders.pendingApproval}</Tag>
+                          ) : (
+                            <Tag color="red">{t.purchaseOrders.rejectedStatus}</Tag>
+                          )}
+                        </button>
                       </div>
                     )}
                   </td>
@@ -452,6 +481,15 @@ export default function PurchaseOrdersPage() {
             </div>
           </form>
         </Modal>
+      )}
+
+      {approvalView && (
+        <ApprovalWorkflowModal
+          moduleType="PURCHASE_ORDER"
+          referenceId={approvalView.id}
+          detailLines={poDetailLines(approvalView)}
+          onClose={() => setApprovalView(null)}
+        />
       )}
     </div>
   );

@@ -889,6 +889,7 @@ const en = {
     // shows up for a company that actually has the gate on.
     pendingApproval: 'Pending approval',
     rejectedStatus: 'Rejected',
+    approvedStatus: 'Approved',
     pendingApprovalNote: 'Awaiting approval — cannot be edited or deleted until a decision is made.',
   },
   waste: {
@@ -930,6 +931,8 @@ const en = {
     // tag, and the Mark Paid button is disabled while this is true.
     pendingApproval: 'Pending approval',
     submittedForApproval: 'Submitted for approval — waiting on a second sign-off.',
+    rejectedStatus: 'Rejected',
+    approvedStatus: 'Approved',
     selectEmployee: 'Select employee...',
     empty: 'No payroll records yet.',
     loadFailed: 'Failed to load payroll',
@@ -1414,6 +1417,8 @@ const en = {
     // submitted and is awaiting approval (Gold+ only, see financialApprovals.ts).
     pendingApproval: 'Pending approval',
     submittedForApproval: 'Submitted for approval — waiting on a second sign-off.',
+    rejectedStatus: 'Rejected',
+    approvedStatus: 'Approved',
     status: {
       label: 'Status',
       draft: 'Draft',
@@ -1451,6 +1456,21 @@ const en = {
     loadFailed: 'Failed to load pending approvals',
     actionFailed: 'Failed to submit your decision',
     empty: "No pending approvals — you're all caught up.",
+  },
+  // Shared "Approval Status" popup (ApprovalWorkflowModal.tsx) — opened by clicking any
+  // approval status tag in Expenses/Payroll/Purchase Orders/the Approvals Inbox. Shows
+  // the request's own details plus a timeline of the approval workflow: submitted -> each
+  // step -> outcome, generalized across single-step (financial) and multi-step (ITSM
+  // ticket) module_types via GET /api/approvals/summary.
+  approvalWorkflow: {
+    title: 'Approval status',
+    detailsTitle: 'Request details',
+    timelineTitle: 'Approval workflow',
+    submittedByLabel: 'Submitted by',
+    waitingOnLabel: 'Waiting on this step',
+    finalDecisionLabel: 'Final decision',
+    loadFailed: 'Failed to load the approval workflow.',
+    notFound: 'This request was never routed through the approval workflow.',
   },
   permissions: {
     title: 'Permissions',
@@ -3045,6 +3065,7 @@ const ar: typeof en = {
     exportCsv: 'تصدير CSV',
     pendingApproval: 'بانتظار الاعتماد',
     rejectedStatus: 'مرفوض',
+    approvedStatus: 'معتمد',
     pendingApprovalNote: 'بانتظار الاعتماد — ما يقدر يتعدل ولا يتحذف لين يصير قرار.',
   },
   waste: {
@@ -3083,6 +3104,8 @@ const ar: typeof en = {
     markPaid: 'تعليم كمدفوع',
     pendingApproval: 'بانتظار الاعتماد',
     submittedForApproval: 'اترسل للاعتماد — بانتظار توقيع ثاني.',
+    rejectedStatus: 'مرفوض',
+    approvedStatus: 'معتمد',
     selectEmployee: 'اختر الموظف...',
     empty: 'ما فيه سجلات رواتب بعد.',
     loadFailed: 'فشل تحميل الرواتب',
@@ -3549,6 +3572,8 @@ const ar: typeof en = {
     deleteFailed: 'فشل حذف أمر الشراء',
     pendingApproval: 'بانتظار الاعتماد',
     submittedForApproval: 'اترسل للاعتماد — بانتظار توقيع ثاني.',
+    rejectedStatus: 'مرفوض',
+    approvedStatus: 'معتمد',
     status: {
       label: 'الحالة',
       draft: 'مسودة',
@@ -3586,6 +3611,16 @@ const ar: typeof en = {
     loadFailed: 'فشل تحميل الموافقات المعلّقة',
     actionFailed: 'فشل إرسال قرارك',
     empty: 'ما فيه موافقات معلّقة — كل شي تمام.',
+  },
+  approvalWorkflow: {
+    title: 'حالة الاعتماد',
+    detailsTitle: 'تفاصيل الطلب',
+    timelineTitle: 'مسار الاعتماد',
+    submittedByLabel: 'قدّمه',
+    waitingOnLabel: 'بانتظار هالخطوة',
+    finalDecisionLabel: 'القرار النهائي',
+    loadFailed: 'فشل تحميل مسار الاعتماد.',
+    notFound: 'هذا الطلب ما مر على مسار اعتماد.',
   },
   permissions: {
     title: 'الصلاحيات',

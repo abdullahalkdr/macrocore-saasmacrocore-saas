@@ -47,7 +47,10 @@ export const MODULE_APPROVER_PERMISSION: Record<string, string> = {
 // original comment: the notifications table has a single title/body column
 // (MIGRATION_025), not per-language ones, so both languages are combined into one
 // string.
-const MODULE_LABEL: Record<string, { ar: string; en: string }> = {
+// Exported (not just used internally for notifications) — approvals.controller.ts's
+// getApprovalSummary() reuses these same bilingual names to build the generic
+// "who approves this" sentence for the single-step ApprovalWorkflowModal.tsx timeline.
+export const MODULE_LABEL: Record<string, { ar: string; en: string }> = {
   PAYROLL: { ar: 'الرواتب', en: 'Payroll' },
   PURCHASE_ORDER: { ar: 'أمر شراء', en: 'Purchase order' },
   EXPENSE: { ar: 'مصروف', en: 'Expense' },

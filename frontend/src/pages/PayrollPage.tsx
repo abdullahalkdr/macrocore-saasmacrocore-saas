@@ -7,6 +7,7 @@ import { planLevelOf } from '../planLevels';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
+import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import StatCard from '../components/StatCard';
 import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
 import { exportRowsToCsv } from '../utils/csv';
@@ -129,6 +130,10 @@ export default function PayrollPage() {
   const [filterEmployee, setFilterEmployee] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
 
+  // Approval status popup (ApprovalWorkflowModal.tsx) — opened by clicking the
+  // pending/rejected approval tag on a row; read-only, open to anyone.
+  const [approvalView, setApprovalView] = useState<PayrollRecord | null>(null);
+
   function load(month?: string) {
     const query = month ? `?month=${month}` : '';
     get<{ payroll: PayrollRecord[] }>(`/payroll${query}`)
@@ -161,6 +166,15 @@ export default function PayrollPage() {
   }, [items]);
 
   const employeeName = (id: string) => employees.find((e) => e.id === id)?.name || id;
+
+  function payrollDetailLines(p: PayrollRecord): { label: string; value: string }[] {
+    return [
+      { label: t.payroll.employee, value: employeeName(p.employee_id) },
+      { label: t.payroll.month, value: p.month_year },
+      { label: t.payroll.base, value: `${Number(p.base_salary).toFixed(3)} KD` },
+      { label: t.payroll.netCol, value: `${Number(p.total_paid).toFixed(3)} KD` },
+    ];
+  }
   const selectedEmployee = employees.find((e) => e.id === employeeId);
   const visibleItems = filterEmployee ? items.filter((p) => p.employee_id === filterEmployee) : items;
   // MIGRATION_058 — the record currently open in the edit modal is locked (Save
@@ -452,8 +466,20 @@ export default function PayrollPage() {
                     </td>
                     <td className="num" style={{ fontWeight: 700 }}>{Number(p.total_paid).toFixed(3)} KD</td>
                     <td>
-                      {p.approval_status === 'pending' ? (
-                        <Tag color="amber">{t.payroll.pendingApproval}</Tag>
+                      {p.approval_status === 'pending' || p.approval_status === 'rejected' ? (
+                        <button
+                          type="button"
+                          className="link-button"
+                          style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); setApprovalView(p); }}
+                          title={t.approvalWorkflow.title}
+                        >
+                          {p.approval_status === 'pending' ? (
+                            <Tag color="amber">{t.payroll.pendingApproval}</Tag>
+                          ) : (
+                            <Tag color="red">{t.payroll.rejectedStatus}</Tag>
+                          )}
+                        </button>
                       ) : p.paid_date ? (
                         <Tag color="green">{t.payroll.paid}</Tag>
                       ) : (
@@ -669,6 +695,15 @@ export default function PayrollPage() {
             {t.payroll.finalAmountNote}
           </p>
         </Modal>
+      )}
+
+      {approvalView && (
+        <ApprovalWorkflowModal
+          moduleType="PAYROLL"
+          referenceId={approvalView.id}
+          detailLines={payrollDetailLines(approvalView)}
+          onClose={() => setApprovalView(null)}
+        />
       )}
     </div>
   );

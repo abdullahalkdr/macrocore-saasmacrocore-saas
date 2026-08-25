@@ -5,7 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
-import { MODULE_APPROVER_PERMISSION, fileApprovalRequest, hasOtherEligibleApprover } from '../utils/financialApprovals';
+import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover } from '../utils/financialApprovals';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
 // (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
@@ -249,4 +249,107 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   });
 
   res.status(200).json({ success: true });
+});
+
+// GET /api/approvals/summary?module_type=X&reference_id=Y — powers the shared
+// "Approval status" popup (frontend ApprovalWorkflowModal.tsx), opened by clicking any
+// approval status tag in Expenses/Payroll/Purchase Orders/the Approvals Inbox. Read-only
+// (approve/reject stay on their existing surfaces — this endpoint never mutates
+// anything), and open to ANY authenticated user in the company — including the
+// requester themselves, who previously had zero visibility into a pending
+// financial request once its Edit button was hidden. Returns the SAME shape for both
+// kinds of module_type so one frontend component renders either:
+//   - ITSM_TICKET: real multi-step chain (approval_workflow_steps, MIGRATION_056),
+//     reusing the exact eligibility resolution getItsmApprovalSummary() already applies.
+//   - PAYROLL/PURCHASE_ORDER/EXPENSE: always exactly one synthesized step, since these
+//     modules have no named step chain of their own — its label is a generic
+//     "who's eligible" sentence built from MODULE_LABEL + MODULE_APPROVER_PERMISSION
+//     (a specific list of eligible people's names was deliberately left out — see the
+//     product decision this implements — a role description is enough here).
+export const getApprovalSummary = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { module_type, reference_id } = req.query;
+
+  if (typeof module_type !== 'string' || typeof reference_id !== 'string' || !reference_id) {
+    throw new AppError(400, 'module_type and reference_id query params are required');
+  }
+  if (module_type !== 'ITSM_TICKET' && !VALID_MODULES.includes(module_type)) {
+    throw new AppError(400, `Unknown module_type. Supported: ${VALID_MODULES.join(', ')}, ITSM_TICKET`);
+  }
+
+  const reqResult = await pool.query(
+    `SELECT ar.id, ar.status, ar.current_step, ar.requester_id, e.name AS requester_name, e.job_role AS requester_job_role
+     FROM approval_requests ar
+     JOIN employees e ON e.id = ar.requester_id
+     WHERE ar.company_id = $1 AND ar.module_type = $2 AND ar.reference_id = $3
+     ORDER BY ar.created_at DESC LIMIT 1`,
+    [companyId, module_type, reference_id]
+  );
+  const request = reqResult.rows[0];
+  if (!request) {
+    // Never submitted through the workflow at all (e.g. a pre-bypass Bronze/Silver
+    // record that was auto-approved, or the Global Unlock BYPASS_PLAN_GATING was off
+    // when it was created) — not an error, just nothing to show.
+    res.status(200).json({ success: true, summary: null });
+    return;
+  }
+
+  const logResult = await pool.query(
+    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, e.name AS approver_name
+     FROM approval_steps_log asl
+     LEFT JOIN employees e ON e.id = asl.approver_id
+     WHERE asl.approval_request_id = $1
+     ORDER BY asl.action_at ASC`,
+    [request.id]
+  );
+
+  let steps: { step_number: number; step_label: string; step_label_en: string | null }[];
+  let isPendingApprover = false;
+
+  if (module_type === 'ITSM_TICKET') {
+    const workflowSteps = await getWorkflowSteps('ITSM_TICKET');
+    steps = workflowSteps.map((s) => ({ step_number: s.step_number, step_label: s.step_label, step_label_en: s.step_label_en }));
+    if (request.status === 'pending') {
+      const step = workflowSteps.find((s) => s.step_number === request.current_step);
+      if (step) {
+        const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, reference_id, step);
+        isPendingApprover = isEligible(req.auth!, eligibility);
+      }
+    }
+  } else {
+    const label = MODULE_LABEL[module_type];
+    const permissionKey = MODULE_APPROVER_PERMISSION[module_type];
+    const roleAr = `أي أدمن أو مدير${label ? `، أو أي موظف يملك صلاحية اعتماد ${label.ar}` : ''}`;
+    const roleEn = `Any admin or manager${label ? `, or anyone holding the ${label.en} approver permission` : ''}`;
+    steps = [{ step_number: 1, step_label: roleAr, step_label_en: roleEn }];
+
+    if (request.status === 'pending') {
+      const myId = await myEmployeeId(req.auth!.userId);
+      const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
+      if (myId && myId !== request.requester_id) {
+        isPendingApprover = isManager || (!!permissionKey && (await hasPermission(req.auth!.userId, permissionKey)));
+      } else if (myId && myId === request.requester_id) {
+        // Mirrors actionRequest()'s self-approval safety valve exactly, so
+        // is_pending_approver here never disagrees with what actionRequest() would
+        // actually allow.
+        isPendingApprover = req.auth!.role === 'admin' && !(await hasOtherEligibleApprover(companyId, module_type, myId));
+      }
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    summary: {
+      id: request.id,
+      module_type,
+      status: request.status,
+      current_step: request.current_step,
+      total_steps: steps.length,
+      requester_name: request.requester_name ?? null,
+      requester_job_role: request.requester_job_role ?? null,
+      steps,
+      log: logResult.rows,
+      is_pending_approver: isPendingApprover,
+    },
+  });
 });

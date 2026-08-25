@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createRequest, listPending, actionRequest } from '../controllers/approvals.controller';
+import { createRequest, listPending, actionRequest, getApprovalSummary } from '../controllers/approvals.controller';
 import { requireAuth } from '../middleware/auth';
 
 const router = Router();
@@ -12,6 +12,9 @@ const router = Router();
 router.use(requireAuth);
 router.post('/request', createRequest);
 router.get('/pending', listPending);
+// Read-only, open to any authenticated company user — see getApprovalSummary's own
+// header for why (the requester themselves needs this too, not just approvers).
+router.get('/summary', getApprovalSummary);
 router.post('/:id/action', actionRequest);
 
 export default router;

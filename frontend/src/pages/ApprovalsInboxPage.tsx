@@ -6,6 +6,7 @@ import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
+import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import { IconEye } from '../components/Icon';
 
 // "Blind Approvals" fix — resolves module_type + reference_id to the frontend
@@ -66,6 +67,13 @@ export default function ApprovalsInboxPage() {
   const [approveTarget, setApproveTarget] = useState<ApprovalRequest | null>(null);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Approval status popup (ApprovalWorkflowModal.tsx) — a quick peek at the workflow
+  // timeline without leaving the inbox (the eye icon/module link still navigate to
+  // the underlying record itself, unchanged). No detailLines here — the record's own
+  // fields aren't loaded on this page, and the popup's own "submitted by" node
+  // already covers the requester.
+  const [approvalView, setApprovalView] = useState<ApprovalRequest | null>(null);
 
   function load() {
     get<{ requests: ApprovalRequest[] }>('/approvals/pending')
@@ -167,7 +175,17 @@ export default function ApprovalsInboxPage() {
                     )}
                   </td>
                   <td>{r.created_at.slice(0, 10)}</td>
-                  <td>{statusTag(r.status)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="link-button"
+                      style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                      onClick={() => setApprovalView(r)}
+                      title={t.approvalWorkflow.title}
+                    >
+                      {statusTag(r.status)}
+                    </button>
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       <button
@@ -226,6 +244,15 @@ export default function ApprovalsInboxPage() {
             <textarea rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t.approvals.commentPlaceholder} />
           </div>
         </Modal>
+      )}
+
+      {approvalView && (
+        <ApprovalWorkflowModal
+          moduleType={approvalView.module_type}
+          referenceId={approvalView.reference_id}
+          detailLines={[]}
+          onClose={() => setApprovalView(null)}
+        />
       )}
     </div>
   );
