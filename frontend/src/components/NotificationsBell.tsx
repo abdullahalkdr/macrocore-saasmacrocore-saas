@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { get, post } from '../api/client';
+import { get, post, patch, del } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import { useNavigate } from 'react-router-dom';
 import Modal from './Modal';
-import { IconBell, IconApproval } from './Icon';
+import ConfirmDialog from './ConfirmDialog';
+import { IconBell, IconApproval, IconTrash } from './Icon';
 
 interface NotificationItem {
   id: string;
@@ -98,6 +99,26 @@ export default function NotificationsBell() {
 
   async function markAllRead() {
     await post('/notifications/read-all', {}).catch(() => {});
+    load();
+  }
+
+  // Per-notification controls (MIGRATION_060) -- the user asked for a way to pick
+  // exactly which notifications to clear instead of only "click one to navigate away"
+  // or "mark literally everything read" via markAllRead above. stopPropagation on both
+  // so they never also trigger the row's own onClick (handleClick, which navigates).
+  const [deleteTarget, setDeleteTarget] = useState<NotificationItem | null>(null);
+
+  async function toggleRead(n: NotificationItem, e: React.MouseEvent) {
+    e.stopPropagation();
+    await patch(`/notifications/${n.id}/read`, { read: !n.read_at }).catch(() => {});
+    load();
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setDeleteTarget(null);
+    await del(`/notifications/${id}`).catch(() => {});
     load();
   }
 
@@ -228,18 +249,37 @@ export default function NotificationsBell() {
                     )}
                   </div>
 
-                  {unread && (
-                    <span
+                  {/* Per-item read/unread toggle + delete -- see toggleRead/confirmDelete
+                      above. The dot itself IS the toggle button: filled amber while
+                      unread, an empty ring once read, so selecting exactly which
+                      notifications to clear doesn't require "mark all as read". */}
+                  <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleRead(n, e)}
+                      title={unread ? t.notifications.markRead : t.notifications.markUnread}
                       style={{
-                        flex: '0 0 auto',
-                        width: 8,
-                        height: 8,
+                        width: 16,
+                        height: 16,
                         borderRadius: '50%',
-                        background: 'var(--amber-500)',
-                        marginTop: 4,
+                        border: unread ? 'none' : '2px solid var(--stone-300)',
+                        background: unread ? 'var(--amber-500)' : 'transparent',
+                        padding: 0,
+                        cursor: 'pointer',
                       }}
                     />
-                  )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteTarget(n);
+                      }}
+                      title={t.notifications.delete}
+                      style={{ background: 'none', border: 'none', color: 'var(--stone-400)', padding: 0, cursor: 'pointer' }}
+                    >
+                      <IconTrash size={13} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -265,6 +305,16 @@ export default function NotificationsBell() {
             )}
           </div>
         </Modal>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title={t.notifications.delete}
+          message={t.notifications.deleteConfirm}
+          confirmLabel={t.notifications.delete}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </>
   );

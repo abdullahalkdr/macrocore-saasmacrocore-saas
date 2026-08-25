@@ -52,6 +52,11 @@ interface ApprovalRequest {
   created_at: string;
   current_step_label?: string;
   current_step_label_en?: string | null;
+  // MIGRATION_060 -- human-readable request number (e.g. APR-2608-0001), shown here
+  // and in the notification bell/ApprovalWorkflowModal so a reviewer can match a
+  // notification to its row, especially when the same employee has more than one
+  // similar pending request. Absent on requests filed before this migration ran.
+  request_number?: string | null;
 }
 
 export default function ApprovalsInboxPage() {
@@ -149,6 +154,7 @@ export default function ApprovalsInboxPage() {
           <table className="data-table">
             <thead>
               <tr>
+                <th>{t.approvals.requestNumber}</th>
                 <th>{t.approvals.module}</th>
                 <th>{t.approvals.requester}</th>
                 <th>{t.approvals.requestedOn}</th>
@@ -159,6 +165,7 @@ export default function ApprovalsInboxPage() {
             <tbody>
               {requests.map((r) => (
                 <tr key={r.id}>
+                  <td className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{r.request_number || '—'}</td>
                   <td style={{ fontWeight: 700 }}>
                     <button
                       type="button"
@@ -223,7 +230,7 @@ export default function ApprovalsInboxPage() {
               ))}
               {requests.length === 0 && (
                 <tr>
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <div className="empty-state">{t.approvals.empty}</div>
                   </td>
                 </tr>

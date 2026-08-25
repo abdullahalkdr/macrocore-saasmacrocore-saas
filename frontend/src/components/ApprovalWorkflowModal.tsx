@@ -42,9 +42,18 @@ interface ApprovalLogEntry {
   action_at: string;
   approver_name: string | null;
 }
+interface RecordDetailLine {
+  label_ar: string;
+  label_en: string;
+  value: string;
+}
 interface ApprovalSummary {
   id: string;
   module_type: string;
+  // MIGRATION_060 -- human-readable request number (e.g. APR-2608-0001), shown in
+  // this modal's own title so it always reads the same as the bell notification and
+  // the Approvals Inbox row it corresponds to.
+  request_number: string | null;
   status: string;
   current_step: number;
   total_steps: number;
@@ -53,6 +62,10 @@ interface ApprovalSummary {
   steps: ApprovalStepDef[];
   log: ApprovalLogEntry[];
   is_pending_approver: boolean;
+  // Server-computed fallback for callers that don't already have the record loaded
+  // (ApprovalsInboxPage passes detailLines={[]} for exactly this reason) -- see
+  // approvals.controller.ts's buildRecordDetail().
+  record_detail: RecordDetailLine[];
 }
 
 type NodeState = 'done' | 'current' | 'upcoming' | 'rejected';
@@ -195,7 +208,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   return (
     <Fragment>
     <Modal
-      title={`${t.approvalWorkflow.title} — ${moduleLabel}`}
+      title={summary?.request_number ? `${t.approvalWorkflow.title} — ${moduleLabel} #${summary.request_number}` : `${t.approvalWorkflow.title} — ${moduleLabel}`}
       onClose={onClose}
       actions={
         <button className="btn btn-secondary" type="button" onClick={onClose}>
@@ -206,16 +219,27 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
       {error && <div className="error-banner">{error}</div>}
       {loading && <div className="muted">{t.common.loading}</div>}
 
-      {!loading && detailLines.length > 0 && (
+      {/* Caller-supplied detailLines take priority (pages that already have the row
+          loaded render instantly, no network wait) -- record_detail from the summary
+          fetch is only the fallback for a caller with nothing preloaded, currently
+          ApprovalsInboxPage's eye icon. */}
+      {!loading && (detailLines.length > 0 || (summary?.record_detail.length ?? 0) > 0) && (
         <>
           <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)', marginBottom: 8 }}>{t.approvalWorkflow.detailsTitle}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', marginBottom: 18, fontSize: 13 }}>
-            {detailLines.map((d) => (
-              <div key={d.label} style={{ display: 'contents' }}>
-                <span className="muted">{d.label}</span>
-                <span style={{ fontWeight: 700 }}>{d.value}</span>
-              </div>
-            ))}
+            {detailLines.length > 0
+              ? detailLines.map((d) => (
+                  <div key={d.label} style={{ display: 'contents' }}>
+                    <span className="muted">{d.label}</span>
+                    <span style={{ fontWeight: 700 }}>{d.value}</span>
+                  </div>
+                ))
+              : summary?.record_detail.map((d) => (
+                  <div key={d.label_en} style={{ display: 'contents' }}>
+                    <span className="muted">{lang === 'ar' ? d.label_ar : d.label_en}</span>
+                    <span style={{ fontWeight: 700 }}>{d.value}</span>
+                  </div>
+                ))}
           </div>
         </>
       )}
