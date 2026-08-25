@@ -95,6 +95,19 @@ export default function ProfileSection() {
     }
   }
 
+  // BUGFIX — the login/security card used to reuse t.account.profile.jobTitle's label
+  // ("Role"/"الدور") to show the actual system role, while that exact same label sat
+  // on the free-text job-title field above it — one wrong translation, shown twice,
+  // meaning two different things. Now the system role gets its own `role` key, and
+  // the raw enum value (admin/manager/employee/viewer) is translated the same way
+  // UsersRolesSection.tsx already does, instead of printing it verbatim.
+  const roleLabels: Record<string, string> = {
+    admin: t.account.users.roleAdmin,
+    manager: t.account.users.roleManager,
+    employee: t.account.users.roleEmployee,
+    viewer: t.account.users.roleViewer,
+  };
+
   if (loading) return <div className="muted">{t.common.loading}</div>;
 
   return (
@@ -201,7 +214,7 @@ export default function ProfileSection() {
             )}
           </div>
           <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
-            {t.account.profile.jobTitle}: {authUser?.role}
+            {t.account.profile.role}: {(authUser?.role && roleLabels[authUser.role]) || authUser?.role}
           </div>
         </div>
       </div>

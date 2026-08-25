@@ -1827,7 +1827,13 @@ const en = {
       newPassword: 'New password',
       phone: 'Phone',
       phoneHint: 'Stored for your account only — phone verification isn’t wired up yet.',
-      jobTitle: 'Role',
+      // BUGFIX — this used to say 'Role' and was reused below for the actual system
+      // role display too, which is exactly why a manager reading this page thought
+      // this free-text field controlled their permission level. It's just a job
+      // title (e.g. "Cashier", "Shift Lead") — the real system role is read-only and
+      // uses the new `role` key right below.
+      jobTitle: 'Job Title',
+      role: 'Role',
     },
     company: {
       logo: 'Logo',
@@ -3976,7 +3982,12 @@ const ar: typeof en = {
       newPassword: 'كلمة المرور الجديدة',
       phone: 'الهاتف',
       phoneHint: 'يُحفظ لحسابك فقط — توثيق الهاتف غير مفعّل حاليًا.',
-      jobTitle: 'الدور',
+      // إصلاح — كانت هذي "الدور"، ونفس الترجمة كانت تُستخدم تحت لعرض الدور الفعلي
+      // بالنظام أيضًا — عشان كذا كان يصير لبس (المستخدم يظنه حقل يتحكم بصلاحياته).
+      // هذا مجرد مسمى وظيفي حر (مثلاً "كاشير")، والدور الفعلي للقراءة فقط ويستخدم
+      // المفتاح الجديد role تحت مباشرة.
+      jobTitle: 'المسمى الوظيفي',
+      role: 'الدور',
     },
     company: {
       logo: 'الشعار',

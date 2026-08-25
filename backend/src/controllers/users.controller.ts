@@ -137,13 +137,39 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const tempPassword = crypto.randomBytes(6).toString('base64url'); // e.g. "aZ3-kQ9x1F2z"
   const passwordHash = await hashPassword(tempPassword);
 
-  const result = await pool.query(
-    `INSERT INTO users (company_id, email, password_hash, full_name, role)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, email, full_name, role, status, created_at`,
-    [companyId, email.toLowerCase(), passwordHash, name.trim(), finalRole]
-  );
-  const user = result.rows[0];
+  // BUGFIX (orphaned approval requests, part 2) — same root cause as auth.controller.ts's
+  // register(): a user created here (an admin/manager adding a teammate's login) never
+  // got a matching employees row, so users.employee_id stayed NULL forever. That's exactly
+  // what makes fileApprovalRequest() throw ("not linked to an employee record") the first
+  // time this teammate's own action needs approval, and what makes actionRequest() refuse
+  // to let them approve/reject anything at all even when their role/permissions otherwise
+  // qualify them. Every new user now gets a minimal employees row created in the same
+  // transaction and linked immediately — same treatment register() got.
+  const client = await pool.connect();
+  let user;
+  try {
+    await client.query('BEGIN');
+
+    const employeeResult = await client.query(
+      `INSERT INTO employees (company_id, name, email, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+      [companyId, name.trim(), email.toLowerCase()]
+    );
+
+    const result = await client.query(
+      `INSERT INTO users (company_id, email, password_hash, full_name, role, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, email, full_name, role, status, created_at`,
+      [companyId, email.toLowerCase(), passwordHash, name.trim(), finalRole, employeeResult.rows[0].id]
+    );
+    user = result.rows[0];
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'user_created', entityType: 'users', entityId: user.id, req });
 
