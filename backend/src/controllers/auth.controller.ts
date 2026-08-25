@@ -191,9 +191,22 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     for (const inviteEmail of inviteList) {
       const tempPassword = crypto.randomBytes(6).toString('base64url');
       const inviteHash = await hashPassword(tempPassword);
+
+      // BUGFIX (orphaned approval requests, part 3) — same root cause as the admin
+      // employees insert above and users.controller.ts's create(): an invited colleague
+      // never got a matching employees row, so users.employee_id stayed NULL forever,
+      // breaking fileApprovalRequest()/actionRequest() for them the same way it did for
+      // brand-new admins and teammates added via the Users page. Same fix here: create +
+      // link an employees row in this same transaction. No real name yet at invite time,
+      // so email is used as the placeholder name (same NOT-NULL fallback pattern as the
+      // admin insert above) — the invitee can fill in their real name later.
+      const inviteEmployeeResult = await client.query(
+        `INSERT INTO employees (company_id, name, email, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+        [company.id, inviteEmail.toLowerCase(), inviteEmail.toLowerCase()]
+      );
       await client.query(
-        `INSERT INTO users (company_id, email, password_hash, role) VALUES ($1, $2, $3, 'employee')`,
-        [company.id, inviteEmail.toLowerCase(), inviteHash]
+        `INSERT INTO users (company_id, email, password_hash, role, employee_id) VALUES ($1, $2, $3, 'employee', $4)`,
+        [company.id, inviteEmail.toLowerCase(), inviteHash, inviteEmployeeResult.rows[0].id]
       );
       invitedUsers.push({ email: inviteEmail.toLowerCase(), temp_password: tempPassword });
     }
