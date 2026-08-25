@@ -1,8 +1,7 @@
-import { ComponentType, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { ComponentType, useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { useLangStore, isRTL } from '../store/langStore';
+import { useLangStore } from '../store/langStore';
 import { useThemeStore } from '../store/themeStore';
 import { useT } from '../i18n';
 import { get, post } from '../api/client';
@@ -25,7 +24,6 @@ import {
   IconSettings,
   IconAttendance,
   IconLogout,
-  IconChevronRight,
   IconMenu,
   IconClose,
   IconApproval,
@@ -343,69 +341,31 @@ export default function Layout() {
     }))
     .filter((group) => group.items.length > 0);
 
-  // Flyout state — a separate floating panel beside the sidebar (per Abdullah's Wafeq
-  // reference), not an inline accordion that pushes the rest of the list down. Started
-  // as a Sales-only special case; generalized so any accordion group (Sales,
-  // Warehouses, HR, Reports & Documents, Settings & Support) can use the same panel —
-  // only one open at a time (opening one closes whichever was open), keyed by each
-  // group's stable `key` since `parentLabel` is a translated string that changes with
-  // `lang`. Starts closed; clicking a parent toggles its panel, and clicking outside it
-  // or picking an item closes it again.
+  // Inline accordion — per Abdullah's 3R reference: a group expands IN PLACE right
+  // below its own header, pushing the rest of the sidebar list down, instead of a
+  // floating panel beside/over the sidebar. Any number of groups can be open at once
+  // (Set, not a single key) — matches the reference showing two groups expanded
+  // simultaneously. Plain conditional rendering, no position:fixed/portal/z-index at
+  // all: it's normal document flow inside .sidebar's own scroll, so none of the
+  // WebKit position:fixed-inside-overflow:auto bugs the old flyout kept running into
+  // even apply here.
   const location = useLocation();
   useEffect(() => {
     setMobileNavOpen(false);
-    setExpandedGroupKey(null);
+    setExpandedGroupKeys(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
-  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
-  // top/bottom/left/right computed from the clicked button's own on-screen position
-  // (see toggleFlyout) — needed because the panel is `position: fixed` (see
-  // styles.css for why absolute positioning didn't work here) and has no CSS-only
-  // anchor to the button. Under 480px this is overridden entirely by the bottom-sheet
-  // CSS rule (see styles.css) — the JS position only matters above that breakpoint.
-  const [flyoutPos, setFlyoutPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number }>({ top: 0 });
-  const flyoutButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const flyoutRef = useRef<HTMLDivElement>(null);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
 
-  function toggleFlyout(key: string) {
-    if (expandedGroupKey === key) {
-      setExpandedGroupKey(null);
-      return;
-    }
-    const btn = flyoutButtonRefs.current[key];
-    if (btn) {
-      const rect = btn.getBoundingClientRect();
-      const gap = 8;
-      // BUGFIX — a group near the bottom of a long sidebar (Warehouses, Settings &
-      // Support, ...) used to always anchor from the button's top edge and grow
-      // downward, running the flyout off the bottom of the screen with no way to
-      // scroll to its lower items. Flip to anchoring from the bottom edge and
-      // growing upward whenever the button sits in the lower half of the viewport.
-      const openUpward = rect.top > window.innerHeight / 2;
-      const vertical = openUpward ? { bottom: window.innerHeight - rect.bottom } : { top: rect.top };
-      const horizontal = isRTL(lang) ? { right: window.innerWidth - rect.left + gap } : { left: rect.right + gap };
-      setFlyoutPos({ ...vertical, ...horizontal });
-    }
-    setExpandedGroupKey(key);
+  function toggleGroup(key: string) {
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
-
-  useEffect(() => {
-    if (!expandedGroupKey) return;
-    function onOutside(e: MouseEvent) {
-      const btn = flyoutButtonRefs.current[expandedGroupKey!];
-      if (
-        flyoutRef.current &&
-        !flyoutRef.current.contains(e.target as Node) &&
-        btn &&
-        !btn.contains(e.target as Node)
-      ) {
-        setExpandedGroupKey(null);
-      }
-    }
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, [expandedGroupKey]);
 
   function renderNavItem(l: NavItem) {
     const minPlan = 'minPlan' in l ? l.minPlan : undefined;
@@ -526,7 +486,8 @@ export default function Layout() {
           <NotificationsBell />
         </div>
         {visibleGroups.map((group, gi) => {
-          const groupActive = group.accordion && (expandedGroupKey === group.key || group.items.some((i) => i.to === location.pathname));
+          const isOpen = !!group.accordion && expandedGroupKeys.has(group.key!);
+          const groupActive = group.accordion && (isOpen || group.items.some((i) => i.to === location.pathname));
           return (
             <div key={group.key ?? group.label ?? gi} style={{ padding: '10px 10px 4px' }}>
               {!group.accordion && group.label && (
@@ -535,75 +496,36 @@ export default function Layout() {
                 </div>
               )}
               {group.accordion ? (
-                <div className="nav-flyout-wrap">
+                // Inline accordion (per Abdullah's 3R reference): the sublist expands
+                // directly below this button in normal document flow, pushing the
+                // groups after it down the page. No portal, no position:fixed, no
+                // backdrop — plain conditional rendering, so none of the WebKit
+                // position:fixed-inside-overflow:auto bugs the old flyout kept running
+                // into can even occur here.
+                <div className="nav-accordion-wrap">
                   <button
-                    ref={(el) => {
-                      flyoutButtonRefs.current[group.key!] = el;
-                    }}
                     type="button"
                     className={`nav-accordion-head${groupActive ? ' open' : ''}`}
-                    onClick={() => toggleFlyout(group.key!)}
+                    onClick={() => toggleGroup(group.key!)}
                   >
                     {group.parentIcon ? <group.parentIcon /> : null}
                     <span style={{ flex: 1 }}>{group.parentLabel}</span>
-                    <span className="nav-accordion-chevron">
-                      <IconChevronRight />
+                    <span className="nav-accordion-toggle" aria-hidden="true">
+                      {isOpen ? '−' : '+'}
                     </span>
                   </button>
-                  {/* BUGFIX (flyout rendering "inside" the sidebar instead of beside it,
-                      on Safari/WebKit both desktop Mac and mobile) — same root cause as
-                      Modal.tsx/ConfirmDialog.tsx's own earlier fix this session: .sidebar
-                      has overflow-y: auto on a positioned ancestor, and WebKit wrongly
-                      treats that as the containing block for a `position: fixed`
-                      descendant instead of the viewport, so despite the comment in
-                      styles.css claiming .nav-flyout "escapes" the clipping, it never
-                      actually did on WebKit -- only on Chrome/Firefox, which get the spec
-                      right. Portaling to document.body sidesteps the ancestor entirely,
-                      the same fix as those two components. */}
-                  {expandedGroupKey === group.key && createPortal(
-                    <>
-                      {/* Dims the page behind the flyout on narrow screens (declared
-                          display:none outside the 860px breakpoint, same convention as
-                          .sidebar-backdrop above) — also gives a second, more obvious
-                          tap target to dismiss it, on top of the outside-click handler. */}
-                      <div className="nav-flyout-backdrop" onClick={() => setExpandedGroupKey(null)} />
-                      <div
-                        className="nav-flyout"
-                        ref={flyoutRef}
-                        style={{ top: flyoutPos.top, bottom: flyoutPos.bottom, left: flyoutPos.left, right: flyoutPos.right }}
-                      >
-                      <div className="nav-flyout-header">
-                        <span className="back">
-                          <IconChevronRight size={12} />
-                        </span>
-                        <span style={{ flex: 1 }}>{group.parentLabel}</span>
-                        {/* An explicit close button, not just tap-outside-to-dismiss --
-                            on a narrow phone the flyout can cover nearly the whole
-                            screen (see the 480px override below), leaving little "outside"
-                            area to tap; this makes closing it unambiguous either way. */}
-                        <button
-                          type="button"
-                          className="nav-flyout-close"
-                          onClick={() => setExpandedGroupKey(null)}
-                          title={t.common.close}
-                        >
-                          <IconClose size={14} />
-                        </button>
-                      </div>
-                      <nav onClick={() => setExpandedGroupKey(null)}>
-                        {group.dividerBeforeLast ? (
-                          <>
-                            {group.items.slice(0, -1).map((l) => renderNavItem(l))}
-                            <div className="nav-flyout-divider" />
-                            {renderNavItem(group.items[group.items.length - 1])}
-                          </>
-                        ) : (
-                          group.items.map((l) => renderNavItem(l))
-                        )}
-                      </nav>
-                      </div>
-                    </>,
-                    document.body
+                  {isOpen && (
+                    <div className="nav-accordion-sublist">
+                      {group.dividerBeforeLast ? (
+                        <>
+                          {group.items.slice(0, -1).map((l) => renderNavItem(l))}
+                          <div className="nav-accordion-divider" />
+                          {renderNavItem(group.items[group.items.length - 1])}
+                        </>
+                      ) : (
+                        group.items.map((l) => renderNavItem(l))
+                      )}
+                    </div>
                   )}
                 </div>
               ) : (

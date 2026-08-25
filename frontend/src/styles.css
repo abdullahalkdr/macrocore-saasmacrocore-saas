@@ -580,11 +580,19 @@ table.data-table th { font-size: 11px; }
 .row-hover-actions:hover .print-btn,
 tr:hover .print-btn { opacity: 1; }
 
-/* ---------- Sidebar flyout submenu (Sales section) ----------
-   Matches the Wafeq reference: clicking "المبيعات" doesn't push the sidebar list down —
-   it pops a separate light panel out beside the sidebar (outside the dark rail), with
-   the parent item highlighted while open. */
-.nav-flyout-wrap { position: relative; }
+/* ---------- Sidebar inline accordion submenu ----------
+   Pivoted away from the floating "flyout beside the sidebar" design (Wafeq-style)
+   after it kept hitting WebKit's position:fixed-inside-overflow:auto containing-block
+   bug (rendered clipped inside the sidebar on Mac/iPhone Safari — fixed once with a
+   portal, but the follow-up bottom-sheet-on-mobile treatment made every group's
+   submenu jump to the screen bottom regardless of which button was clicked, which
+   Abdullah rejected outright). Per his 3R app reference: the submenu now expands
+   in NORMAL DOCUMENT FLOW directly below its own header, pushing the groups below it
+   down the page, with plain uniform-height rows — no position:fixed, no portal, no
+   backdrop, so the WebKit bug class this app kept re-fixing simply doesn't apply
+   anymore. Any number of groups can be open at once (Layout.tsx tracks a Set of open
+   keys), matching the reference screenshots showing two groups expanded together. */
+.nav-accordion-wrap { display: flex; flex-direction: column; }
 .nav-accordion-head {
   display: flex; align-items: center; gap: 10px; width: 100%;
   background: none; border: none; color: inherit; cursor: pointer; padding: 9px 12px; font: inherit; text-align: start;
@@ -592,92 +600,53 @@ tr:hover .print-btn { opacity: 1; }
 }
 .nav-accordion-head.open { background: var(--amber-500); color: var(--stone-900); }
 .nav-accordion-head:hover:not(.open) { background: var(--stone-800); color: #fff; }
-.nav-accordion-chevron { margin-inline-start: auto; opacity: .8; display: inline-flex; transition: transform .15s; }
-/* Generalized from the Sales-only flyout to every accordion group (Warehouses, HR,
-   Reports & Documents, Settings & Support) — the chevron rotates on the open state so
-   it reads as an expand/collapse indicator rather than a static decoration. */
-.nav-accordion-head.open .nav-accordion-chevron { transform: rotate(90deg); }
+/* "+"/"−" toggle glyph (3R reference uses a red plus/minus rather than a chevron) —
+   fixed width so the row doesn't reflow by a pixel or two when it switches to "−". */
+.nav-accordion-toggle {
+  margin-inline-start: auto; flex-shrink: 0; width: 16px; text-align: center;
+  font-size: 15px; font-weight: 800; line-height: 1; color: var(--amber-500);
+}
+.nav-accordion-head.open .nav-accordion-toggle { color: inherit; }
 
-.nav-flyout {
-  /* position: fixed on purpose, not absolute — .sidebar has overflow-y: auto, and per
-     the CSS overflow spec that silently forces overflow-x to clip too, so an
-     absolutely-positioned panel anchored outside the sidebar's own box was being cut
-     off invisibly. Fixed positioning ALONE doesn't actually escape that on WebKit
-     though (see Layout.tsx's own comment on why this is now portaled to document.body
-     too) — exact top/bottom/left/right come from the button's getBoundingClientRect()
-     in Layout.tsx (with a top/bottom flip when the button sits in the lower half of
-     the screen — see toggleFlyout()), not from this stylesheet.
-     z-index: 310 — deliberately above .sidebar (300) and .sidebar-backdrop (290)
-     below, so the flyout always renders on top of the open mobile drawer instead of
-     being sandwiched behind it (it used to be 60, which is how it ended up looking
-     "inside" the sidebar instead of over it).
-     max-height/overflow-y — a safety net independent of the top/bottom flip: even
-     anchored correctly, a long group's item list could still be taller than the
-     viewport has room for; this makes it scroll internally instead of running off
-     the edge with no way to reach the last items. */
-  position: fixed;
-  width: 230px; z-index: 310;
-  max-height: calc(100vh - 16px);
-  overflow-y: auto;
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--border); border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(0,0,0,.22);
-  padding: 6px;
+/* The expanded sublist itself: sits directly under the header in normal flow (no
+   position:fixed/absolute at all), a lightly-bordered/grouped block of uniform rows —
+   matches the reference's consistent same-size stacked rows. margin-inline-start
+   keeps the indentation RTL-correct (Arabic flips it to the right automatically). */
+.nav-accordion-sublist {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 4px; padding: 4px 0;
+  margin-inline-start: 14px;
+  border-inline-start: 2px solid var(--border);
 }
-.nav-flyout-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 6px 6px 10px; font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: .02em;
+.nav-accordion-sublist a, .nav-accordion-sublist button {
+  color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font: inherit; font-size: 12px; font-weight: 600;
+  background: none; border: none; text-align: start; width: 100%; border-radius: 6px;
+  min-height: 30px;
 }
-.nav-flyout-header .back { transform: scaleX(-1); }
-.nav-flyout-close {
-  background: none; border: none; color: var(--muted); cursor: pointer;
-  display: flex; align-items: center; padding: 4px; border-radius: 6px; flex-shrink: 0;
+/* Small bullet before each subitem label, per the 3R reference's bulleted rows. */
+.nav-accordion-sublist a::before, .nav-accordion-sublist button::before {
+  content: ''; width: 4px; height: 4px; border-radius: 50%; background: currentColor;
+  opacity: .45; flex-shrink: 0;
 }
-.nav-flyout-close:hover { background: var(--surface-alt); color: var(--text); }
-.nav-flyout nav { display: flex; flex-direction: column; gap: 1px; }
-.nav-flyout nav a, .nav-flyout nav button {
-  color: var(--text); text-decoration: none; padding: 8px 10px; border-radius: 8px;
-  font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 10px;
-}
-.nav-flyout nav a:hover, .nav-flyout nav button:hover { background: var(--surface-alt); }
-.nav-flyout nav a.active { background: var(--amber-50); color: var(--amber-700); }
-.nav-flyout-divider { border-top: 1px solid var(--border); margin: 5px 6px; }
-
-/* Dims the page behind the flyout on narrow/touch screens — element always exists in
-   the DOM (same convention as .mobile-topbar/.sidebar-backdrop above), hidden outside
-   the 860px breakpoint where the flyout has plenty of open page around it and a
-   backdrop would just be visual noise. */
-.nav-flyout-backdrop { display: none; }
+.nav-accordion-sublist a:hover, .nav-accordion-sublist button:hover { background: var(--surface-alt); }
+.nav-accordion-sublist a.active { background: var(--amber-50); color: var(--amber-700); }
+.nav-accordion-divider { border-top: 1px solid var(--border); margin: 5px 8px; }
 
 @media (max-width: 860px) {
-  .nav-flyout-backdrop {
-    display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 305;
-  }
-  /* Tablet width (481–860px, e.g. iPad portrait): the off-canvas drawer is still only
-     260px/82vw wide, so there's real room beside it for the flyout — keep the JS
-     "beside the button" position, just size it down a notch from the desktop/mouse
-     default so it doesn't feel oversized on a touch screen. */
-  .nav-flyout { width: 210px; }
-  .nav-flyout-header { font-size: 10px; }
-  .nav-flyout nav a, .nav-flyout nav button { font-size: 12.5px; padding: 7px 9px; }
+  /* Tablet width (e.g. iPad portrait): shrink a notch from the desktop/mouse default. */
+  .nav-accordion-head { font-size: 12.5px; padding: 8px 11px; }
+  .nav-accordion-sublist a, .nav-accordion-sublist button { font-size: 11.5px; padding: 6px 9px; min-height: 28px; }
 }
 
-/* Real phone widths: no room beside the 260px/82vw drawer at all, so instead of a
-   floating rectangle competing with it mid-screen, the flyout becomes a proper
-   bottom sheet — full width, anchored to the bottom edge, rounded top corners, its
-   own scroll region. !important overrides the inline top/bottom/left/right/width the
-   JS sets for the tablet/desktop case; env(safe-area-inset-bottom) clears the home
-   indicator on notched iPhones. */
 @media (max-width: 480px) {
-  .nav-flyout {
-    left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
-    width: auto !important;
-    max-height: 70vh;
-    border-radius: 16px 16px 0 0;
-    padding: 4px 4px calc(8px + env(safe-area-inset-bottom));
-  }
-  .nav-flyout-header { font-size: 10px; padding: 10px 10px 8px; }
-  .nav-flyout nav a, .nav-flyout nav button { font-size: 12px; padding: 8px 9px; }
+  /* Phone width: smallest tier — still an inline block in the drawer's own scroll,
+     never a floating panel or bottom sheet, so there's no separate positioning to
+     override here, only sizing. */
+  .nav-accordion-head { font-size: 12px; padding: 7px 10px; }
+  .nav-accordion-toggle { font-size: 13px; }
+  .nav-accordion-sublist { margin-inline-start: 10px; }
+  .nav-accordion-sublist a, .nav-accordion-sublist button { font-size: 11px; padding: 6px 8px; min-height: 26px; }
 }
 
 /* ---------- Manage Roles modal: responsive row grid (no horizontal scroll) ----------
