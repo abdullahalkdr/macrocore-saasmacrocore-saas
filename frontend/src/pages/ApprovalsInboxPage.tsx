@@ -252,6 +252,7 @@ export default function ApprovalsInboxPage() {
           referenceId={approvalView.reference_id}
           detailLines={[]}
           onClose={() => setApprovalView(null)}
+          onActioned={load}
         />
       )}
     </div>

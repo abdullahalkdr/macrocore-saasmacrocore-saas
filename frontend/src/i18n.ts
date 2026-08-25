@@ -1471,6 +1471,7 @@ const en = {
     finalDecisionLabel: 'Final decision',
     loadFailed: 'Failed to load the approval workflow.',
     notFound: 'This request was never routed through the approval workflow.',
+    yourTurnLabel: "It's your turn to decide",
   },
   permissions: {
     title: 'Permissions',
@@ -3627,6 +3628,7 @@ const ar: typeof en = {
     finalDecisionLabel: 'القرار النهائي',
     loadFailed: 'فشل تحميل مسار الاعتماد.',
     notFound: 'هذا الطلب ما مر على مسار اعتماد.',
+    yourTurnLabel: 'دورك تاخذ قرار',
   },
   permissions: {
     title: 'الصلاحيات',

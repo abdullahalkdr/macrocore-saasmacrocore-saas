@@ -489,6 +489,7 @@ export default function PurchaseOrdersPage() {
           referenceId={approvalView.id}
           detailLines={poDetailLines(approvalView)}
           onClose={() => setApprovalView(null)}
+          onActioned={load}
         />
       )}
     </div>

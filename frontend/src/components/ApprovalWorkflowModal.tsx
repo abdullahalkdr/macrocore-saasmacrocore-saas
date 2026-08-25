@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
-import { get, ApiError } from '../api/client';
+import { get, post, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import Modal from './Modal';
 import Tag from './Tag';
 
 // Shared "Approval status" popup — opened by clicking any approval status tag in
-// ExpensesPage/PayrollPage/PurchaseOrdersPage/ApprovalsInboxPage. Read-only: shows the
-// request's own details (passed in by the caller, who already has the row loaded) plus
-// a vertical timeline of the approval workflow (submitted -> each step -> outcome),
+// ExpensesPage/PayrollPage/PurchaseOrdersPage/ApprovalsInboxPage. Shows the request's
+// own details (passed in by the caller, who already has the row loaded) plus a
+// vertical timeline of the approval workflow (submitted -> each step -> outcome),
 // fetched from the one shared GET /api/approvals/summary endpoint that generalizes
 // across single-step financial modules and ITSM_TICKET's real multi-step chain.
 //
@@ -17,6 +17,18 @@ import Tag from './Tag';
 // flips to RTL Arabic, while a top-to-bottom timeline (dot + connecting line, like a
 // shipment tracker) reads identically in both languages and still shows the exact
 // same "where is it now / what's next" information.
+//
+// Originally read-only by design — approve/reject stayed on their existing surfaces
+// (the Approvals Inbox, or SupportTicketsPage's own ticket detail). Real usage showed
+// that was one click too many: an eligible approver would open this popup to see
+// exactly what they need to decide, then have to close it and go hunt for the action
+// elsewhere. So when the viewer IS the pending approver (is_pending_approver) and the
+// request is still pending, this popup now also lets them act — reusing the exact
+// same POST /approvals/:id/action endpoint and inline-comment-then-confirm pattern
+// SupportTicketsPage.tsx already uses for ITSM tickets, generalized here to work for
+// every module_type this endpoint supports. onActioned lets the caller refresh its own
+// list (the row's status just changed) — it does NOT auto-close the popup, so the
+// viewer sees the timeline update to reflect their own decision before dismissing it.
 interface ApprovalStepDef {
   step_number: number;
   step_label: string;
@@ -52,6 +64,11 @@ interface Props {
   // workflow data, never re-fetches the underlying record itself.
   detailLines: { label: string; value: string }[];
   onClose: () => void;
+  // Called after a successful approve/reject so the caller (whichever list page
+  // opened this popup) can refresh its own rows. Optional — pass the page's own
+  // load()/refetch function so acting from inside the popup doesn't leave that page
+  // showing a stale row.
+  onActioned?: () => void;
 }
 
 const DOT_COLOR: Record<NodeState, string> = {
@@ -61,14 +78,23 @@ const DOT_COLOR: Record<NodeState, string> = {
   rejected: '#dc2626',
 };
 
-export default function ApprovalWorkflowModal({ moduleType, referenceId, detailLines, onClose }: Props) {
+export default function ApprovalWorkflowModal({ moduleType, referenceId, detailLines, onClose, onActioned }: Props) {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
   const [summary, setSummary] = useState<ApprovalSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  // Inline approve/reject — approving opens a small optional-comment step (matching
+  // SupportTicketsPage.tsx's own approvalCommentOpen/approvalComment pattern);
+  // rejecting confirms once via window.confirm(), same as ApprovalsInboxPage's
+  // quick-reject button, then submits immediately with no comment.
+  const [approving, setApproving] = useState(false);
+  const [comment, setComment] = useState('');
+  const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  function loadSummary() {
     setLoading(true);
     setError(null);
     get<{ summary: ApprovalSummary | null }>(
@@ -77,8 +103,34 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
       .then((r) => setSummary(r.summary))
       .catch((err) => setError(err instanceof ApiError ? err.message : t.approvalWorkflow.loadFailed))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleType, referenceId]);
+
+  async function submitAction(action: 'approved' | 'rejected', comments?: string) {
+    if (!summary) return;
+    setActing(true);
+    setActionError(null);
+    try {
+      await post(`/approvals/${summary.id}/action`, { action, comments: comments?.trim() || undefined });
+      setApproving(false);
+      setComment('');
+      loadSummary();
+      onActioned?.();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : t.approvals.actionFailed);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  function handleReject() {
+    if (!confirm(t.approvals.rejectConfirm)) return;
+    submitAction('rejected');
+  }
 
   function stepLabel(s: ApprovalStepDef) {
     return lang === 'ar' ? s.step_label : s.step_label_en || s.step_label;
@@ -200,6 +252,38 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
               </div>
             ))}
           </div>
+
+          {summary.status === 'pending' && summary.is_pending_approver && (
+            <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+              {actionError && <div className="error-banner">{actionError}</div>}
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>{t.approvalWorkflow.yourTurnLabel}</div>
+              {!approving ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={() => setApproving(true)}>
+                    {t.approvals.approve}
+                  </button>
+                  <button className="btn btn-danger btn-sm" type="button" disabled={acting} onClick={handleReject}>
+                    {t.approvals.reject}
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="field">
+                    <label>{t.approvals.commentLabel}</label>
+                    <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t.approvals.commentPlaceholder} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={() => submitAction('approved', comment)}>
+                      {acting ? t.common.loading : t.approvals.confirmApprove}
+                    </button>
+                    <button className="btn btn-secondary btn-sm" type="button" disabled={acting} onClick={() => setApproving(false)}>
+                      {t.common.cancel}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </Modal>

@@ -703,6 +703,7 @@ export default function PayrollPage() {
           referenceId={approvalView.id}
           detailLines={payrollDetailLines(approvalView)}
           onClose={() => setApprovalView(null)}
+          onActioned={() => load()}
         />
       )}
     </div>

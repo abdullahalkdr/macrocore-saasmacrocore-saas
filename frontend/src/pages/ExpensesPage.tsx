@@ -562,6 +562,7 @@ export default function ExpensesPage() {
           referenceId={approvalView.id}
           detailLines={expenseDetailLines(approvalView)}
           onClose={() => setApprovalView(null)}
+          onActioned={load}
         />
       )}
     </div>
