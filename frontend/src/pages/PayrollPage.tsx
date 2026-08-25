@@ -30,7 +30,7 @@ interface PayrollRecord {
   // MIGRATION_058 — latest approval_requests status for this record's PAYROLL
   // module_type, or null if it was never submitted (below-Gold company, or a
   // Gold+ record that hasn't had "Mark paid" clicked yet).
-  approval_status?: 'pending' | 'approved' | 'rejected' | null;
+  approval_status?: 'pending' | 'approved' | 'rejected' | 'returned' | null;
 }
 interface Employee {
   id: string;
@@ -466,7 +466,7 @@ export default function PayrollPage() {
                     </td>
                     <td className="num" style={{ fontWeight: 700 }}>{Number(p.total_paid).toFixed(3)} KD</td>
                     <td>
-                      {p.approval_status === 'pending' || p.approval_status === 'rejected' ? (
+                      {p.approval_status === 'pending' || p.approval_status === 'rejected' || p.approval_status === 'returned' ? (
                         <button
                           type="button"
                           className="link-button"
@@ -476,6 +476,8 @@ export default function PayrollPage() {
                         >
                           {p.approval_status === 'pending' ? (
                             <Tag color="amber">{t.payroll.pendingApproval}</Tag>
+                          ) : p.approval_status === 'returned' ? (
+                            <Tag color="amber">{t.approvals.statusReturned}</Tag>
                           ) : (
                             <Tag color="red">{t.payroll.rejectedStatus}</Tag>
                           )}

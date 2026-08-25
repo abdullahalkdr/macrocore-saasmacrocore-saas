@@ -45,7 +45,7 @@ interface PurchaseOrder {
   // MIGRATION_058 — latest approval_requests status for this PO's PURCHASE_ORDER
   // module_type, or null if never submitted (below-Gold company, or a draft that
   // hasn't hit "Send to Supplier" yet).
-  approval_status?: 'pending' | 'approved' | 'rejected' | null;
+  approval_status?: 'pending' | 'approved' | 'rejected' | 'returned' | null;
 }
 interface ItemRow {
   rawMaterialId: string;
@@ -295,7 +295,7 @@ export default function PurchaseOrdersPage() {
                   <td style={{ fontWeight: 700 }}>{po.supplier_name || '—'}</td>
                   <td>
                     <span className={`badge ${po.status}`}>{statusLabel(po.status)}</span>
-                    {(po.approval_status === 'pending' || po.approval_status === 'rejected') && (
+                    {(po.approval_status === 'pending' || po.approval_status === 'rejected' || po.approval_status === 'returned') && (
                       <div style={{ marginTop: 4 }}>
                         <button
                           type="button"
@@ -306,6 +306,8 @@ export default function PurchaseOrdersPage() {
                         >
                           {po.approval_status === 'pending' ? (
                             <Tag color="amber">{t.purchaseOrders.pendingApproval}</Tag>
+                          ) : po.approval_status === 'returned' ? (
+                            <Tag color="amber">{t.approvals.statusReturned}</Tag>
                           ) : (
                             <Tag color="red">{t.purchaseOrders.rejectedStatus}</Tag>
                           )}

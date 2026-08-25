@@ -26,6 +26,13 @@ interface Expense {
   // see financialApprovals.ts) and for every pre-existing row. Only a Gold+ company's
   // NEW expenses ever start as 'pending_approval'.
   status?: 'pending_approval' | 'approved' | 'rejected';
+  // MIGRATION_061 — resolved LIVE from the latest approval_requests row (see
+  // expenses.controller.ts's list()), separate from the local `status` column above.
+  // The two agree for pending/approved/rejected, but diverge for 'returned': `status`
+  // deliberately stays 'pending_approval' (still mid-review) while this correctly
+  // shows 'returned' so the badge and maker-editability below reflect reality.
+  approval_status?: 'pending' | 'approved' | 'rejected' | 'returned' | null;
+  request_number?: string | null;
 }
 
 interface Location {
@@ -296,10 +303,22 @@ export default function ExpensesPage() {
   }
 
   const colCount = isManager ? 7 : 6;
+  // MIGRATION_061 — prefers the LIVE approval_status over the local status column:
+  // a 'returned' expense keeps status === 'pending_approval' (see
+  // expenses.controller.ts's comment on why) but must NOT stay locked — the whole
+  // point of "Return for Changes" is letting the maker edit it now. Falls back to
+  // the local column only if approval_status wasn't returned at all (defensive;
+  // every Gold+ expense always gets a matching approval_requests row today).
+  function isAwaitingDecision(x: Expense): boolean {
+    if (x.approval_status) return x.approval_status === 'pending';
+    return x.status === 'pending_approval';
+  }
+
   // MIGRATION_058 — the expense currently open in the edit modal is locked (Save
   // disabled) while awaiting approval — reached via the Approvals Inbox's "View
   // Details" deep-link, since the Edit button itself is hidden for a pending row.
-  const editingRecordPending = !!editingId && items.find((x) => x.id === editingId)?.status === 'pending_approval';
+  const editingExpense = items.find((x) => x.id === editingId);
+  const editingRecordPending = !!editingExpense && isAwaitingDecision(editingExpense);
 
   return (
     <div>
@@ -376,7 +395,9 @@ export default function ExpensesPage() {
                               onClick={() => setApprovalView(x)}
                               title={t.approvalWorkflow.title}
                             >
-                              {x.status === 'pending_approval' ? (
+                              {x.approval_status === 'returned' ? (
+                                <Tag color="amber">{t.approvals.statusReturned}</Tag>
+                              ) : x.status === 'pending_approval' ? (
                                 <Tag color="amber">{t.expenses.pendingApproval}</Tag>
                               ) : (
                                 <Tag color="red">{t.expenses.rejectedStatus}</Tag>
@@ -404,8 +425,10 @@ export default function ExpensesPage() {
                         <td>
                           {/* MIGRATION_058 — locked out entirely while awaiting approval
                               (prevent tampering with what an approver is about to
-                              review), not just visually disabled. */}
-                          {x.status === 'pending_approval' ? (
+                              review), not just visually disabled.
+                              MIGRATION_061 — unlocked again once 'returned': that's
+                              exactly when the maker needs Edit back. */}
+                          {isAwaitingDecision(x) ? (
                             <span className="muted" style={{ fontSize: 12 }}>{t.expenses.pendingApprovalNote}</span>
                           ) : (
                             <div style={{ display: 'flex', gap: 4 }}>
