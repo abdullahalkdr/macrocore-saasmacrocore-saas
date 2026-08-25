@@ -604,14 +604,21 @@ tr:hover .print-btn { opacity: 1; }
      absolutely-positioned panel anchored outside the sidebar's own box was being cut
      off invisibly. Fixed positioning ALONE doesn't actually escape that on WebKit
      though (see Layout.tsx's own comment on why this is now portaled to document.body
-     too) — exact top/left/right come from the button's getBoundingClientRect() in
-     Layout.tsx, not from this stylesheet.
+     too) — exact top/bottom/left/right come from the button's getBoundingClientRect()
+     in Layout.tsx (with a top/bottom flip when the button sits in the lower half of
+     the screen — see toggleFlyout()), not from this stylesheet.
      z-index: 310 — deliberately above .sidebar (300) and .sidebar-backdrop (290)
      below, so the flyout always renders on top of the open mobile drawer instead of
      being sandwiched behind it (it used to be 60, which is how it ended up looking
-     "inside" the sidebar instead of over it). */
+     "inside" the sidebar instead of over it).
+     max-height/overflow-y — a safety net independent of the top/bottom flip: even
+     anchored correctly, a long group's item list could still be taller than the
+     viewport has room for; this makes it scroll internally instead of running off
+     the edge with no way to reach the last items. */
   position: fixed;
   width: 230px; z-index: 310;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 12px 32px rgba(0,0,0,.22);
@@ -636,13 +643,41 @@ tr:hover .print-btn { opacity: 1; }
 .nav-flyout nav a.active { background: var(--amber-50); color: var(--amber-700); }
 .nav-flyout-divider { border-top: 1px solid var(--border); margin: 5px 6px; }
 
-/* On a narrow phone the drawer itself can eat most of the width, so the flyout's
-   normal "beside the button" position (computed in Layout.tsx from the button's own
-   coordinates) can land partly off-screen. Pin it to a comfortable full-ish width
-   instead — !important is deliberate here, overriding the inline left/right/top the
-   JS sets for the desktop/tablet case. */
+/* Dims the page behind the flyout on narrow/touch screens — element always exists in
+   the DOM (same convention as .mobile-topbar/.sidebar-backdrop above), hidden outside
+   the 860px breakpoint where the flyout has plenty of open page around it and a
+   backdrop would just be visual noise. */
+.nav-flyout-backdrop { display: none; }
+
+@media (max-width: 860px) {
+  .nav-flyout-backdrop {
+    display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 305;
+  }
+  /* Tablet width (481–860px, e.g. iPad portrait): the off-canvas drawer is still only
+     260px/82vw wide, so there's real room beside it for the flyout — keep the JS
+     "beside the button" position, just size it down a notch from the desktop/mouse
+     default so it doesn't feel oversized on a touch screen. */
+  .nav-flyout { width: 210px; }
+  .nav-flyout-header { font-size: 10px; }
+  .nav-flyout nav a, .nav-flyout nav button { font-size: 12.5px; padding: 7px 9px; }
+}
+
+/* Real phone widths: no room beside the 260px/82vw drawer at all, so instead of a
+   floating rectangle competing with it mid-screen, the flyout becomes a proper
+   bottom sheet — full width, anchored to the bottom edge, rounded top corners, its
+   own scroll region. !important overrides the inline top/bottom/left/right/width the
+   JS sets for the tablet/desktop case; env(safe-area-inset-bottom) clears the home
+   indicator on notched iPhones. */
 @media (max-width: 480px) {
-  .nav-flyout { left: 12px !important; right: 12px !important; width: auto !important; }
+  .nav-flyout {
+    left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
+    width: auto !important;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
+    padding: 4px 4px calc(8px + env(safe-area-inset-bottom));
+  }
+  .nav-flyout-header { font-size: 10px; padding: 10px 10px 8px; }
+  .nav-flyout nav a, .nav-flyout nav button { font-size: 12px; padding: 8px 9px; }
 }
 
 /* ---------- Manage Roles modal: responsive row grid (no horizontal scroll) ----------

@@ -359,10 +359,12 @@ export default function Layout() {
   }, [location.pathname]);
 
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
-  // top/left/right computed from the clicked button's own on-screen position (see
-  // toggleFlyout) — needed because the panel is `position: fixed` (see styles.css for
-  // why absolute positioning didn't work here) and has no CSS-only anchor to the button.
-  const [flyoutPos, setFlyoutPos] = useState<{ top: number; left?: number; right?: number }>({ top: 0 });
+  // top/bottom/left/right computed from the clicked button's own on-screen position
+  // (see toggleFlyout) — needed because the panel is `position: fixed` (see
+  // styles.css for why absolute positioning didn't work here) and has no CSS-only
+  // anchor to the button. Under 480px this is overridden entirely by the bottom-sheet
+  // CSS rule (see styles.css) — the JS position only matters above that breakpoint.
+  const [flyoutPos, setFlyoutPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number }>({ top: 0 });
   const flyoutButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const flyoutRef = useRef<HTMLDivElement>(null);
 
@@ -375,11 +377,15 @@ export default function Layout() {
     if (btn) {
       const rect = btn.getBoundingClientRect();
       const gap = 8;
-      setFlyoutPos(
-        isRTL(lang)
-          ? { top: rect.top, right: window.innerWidth - rect.left + gap }
-          : { top: rect.top, left: rect.right + gap }
-      );
+      // BUGFIX — a group near the bottom of a long sidebar (Warehouses, Settings &
+      // Support, ...) used to always anchor from the button's top edge and grow
+      // downward, running the flyout off the bottom of the screen with no way to
+      // scroll to its lower items. Flip to anchoring from the bottom edge and
+      // growing upward whenever the button sits in the lower half of the viewport.
+      const openUpward = rect.top > window.innerHeight / 2;
+      const vertical = openUpward ? { bottom: window.innerHeight - rect.bottom } : { top: rect.top };
+      const horizontal = isRTL(lang) ? { right: window.innerWidth - rect.left + gap } : { left: rect.right + gap };
+      setFlyoutPos({ ...vertical, ...horizontal });
     }
     setExpandedGroupKey(key);
   }
@@ -555,7 +561,17 @@ export default function Layout() {
                       right. Portaling to document.body sidesteps the ancestor entirely,
                       the same fix as those two components. */}
                   {expandedGroupKey === group.key && createPortal(
-                    <div className="nav-flyout" ref={flyoutRef} style={{ top: flyoutPos.top, left: flyoutPos.left, right: flyoutPos.right }}>
+                    <>
+                      {/* Dims the page behind the flyout on narrow screens (declared
+                          display:none outside the 860px breakpoint, same convention as
+                          .sidebar-backdrop above) — also gives a second, more obvious
+                          tap target to dismiss it, on top of the outside-click handler. */}
+                      <div className="nav-flyout-backdrop" onClick={() => setExpandedGroupKey(null)} />
+                      <div
+                        className="nav-flyout"
+                        ref={flyoutRef}
+                        style={{ top: flyoutPos.top, bottom: flyoutPos.bottom, left: flyoutPos.left, right: flyoutPos.right }}
+                      >
                       <div className="nav-flyout-header">
                         <span className="back">
                           <IconChevronRight size={12} />
@@ -585,7 +601,8 @@ export default function Layout() {
                           group.items.map((l) => renderNavItem(l))
                         )}
                       </nav>
-                    </div>,
+                      </div>
+                    </>,
                     document.body
                   )}
                 </div>
