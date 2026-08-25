@@ -24,8 +24,13 @@ export async function notifyRoles(input: NotifyRolesInput): Promise<void> {
         [input.companyId, row.id, input.type, input.title, input.body ?? null, input.link ?? null]
       );
     }
-  } catch {
+  } catch (err) {
     // Notifications are best-effort — never let a failure here break the caller's real action.
+    // DIAGNOSTIC — was a bare swallow with zero trace, making a "notification never
+    // arrived" report unfixable from the caller's side alone (no error, no row, nothing
+    // to go on). Logged now so a real failure here shows up in the server logs instead
+    // of vanishing silently; still never throws/rejects, same fire-and-forget contract.
+    console.error('[notifyRoles] failed to notify', { companyId: input.companyId, roles: input.roles, type: input.type }, err);
   }
 }
 
@@ -53,7 +58,9 @@ export async function notifyUsers(input: NotifyUsersInput): Promise<void> {
         [input.companyId, userId, input.type, input.title, input.body ?? null, input.link ?? null]
       );
     }
-  } catch {
+  } catch (err) {
     // Notifications are best-effort — never let a failure here break the caller's real action.
+    // DIAGNOSTIC — see notifyRoles' matching comment above.
+    console.error('[notifyUsers] failed to notify', { companyId: input.companyId, userIds: input.userIds, type: input.type }, err);
   }
 }
