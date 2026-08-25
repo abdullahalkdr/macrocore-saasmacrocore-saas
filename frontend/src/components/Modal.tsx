@@ -1,4 +1,5 @@
 import { ReactNode, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useT } from '../i18n';
 import { IconClose } from './Icon';
 
@@ -47,7 +48,17 @@ export default function Modal({ title, onClose, children, actions }: ModalProps)
 
   const resolvedActions = typeof actions === 'function' ? actions(requestClose) : actions;
 
-  return (
+  // BUGFIX (Mac/Safari: sidebar became unresponsive after opening the notifications
+  // bell's modal) — .sidebar is `position: sticky` + `overflow-y: auto` (styles.css),
+  // and WebKit has a long-standing bug where a sticky+overflow ancestor incorrectly
+  // acts as the containing block for `position: fixed` descendants instead of the
+  // viewport (spec says only transform/filter/perspective/contain/will-change should
+  // do that). NotificationsBell renders this Modal directly inside .sidebar's JSX
+  // tree (no portal), so on WebKit the overlay/box were clipped to the sidebar's own
+  // box instead of covering the screen -- invisible, but still eating clicks over the
+  // sidebar. Rendering through a portal to document.body sidesteps any ancestor's
+  // stacking/containing context entirely, for every caller of Modal, not just this one.
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal-box" onInputCapture={() => setDirty(true)} onChangeCapture={() => setDirty(true)}>
         <div className="modal-head">
@@ -78,6 +89,7 @@ export default function Modal({ title, onClose, children, actions }: ModalProps)
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
