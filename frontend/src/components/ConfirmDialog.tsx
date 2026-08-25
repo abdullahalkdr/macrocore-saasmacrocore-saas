@@ -1,4 +1,5 @@
 import { useT } from '../i18n';
+import { createPortal } from 'react-dom';
 
 interface ConfirmDialogProps {
   title?: string;
@@ -30,7 +31,18 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const t = useT();
-  return (
+  // BUGFIX -- same class of bug as Modal.tsx's own portal fix: this dialog is opened
+  // from callers nested anywhere in the tree (NotificationsBell renders it from
+  // inside .sidebar, same as the notifications Modal did before its fix), and it was
+  // rendered inline, not portaled. Once Modal.tsx started portaling to document.body,
+  // this stopped stacking reliably above it: z-index:400 only wins against z-index:200
+  // when both are compared in the SAME stacking context, and a non-portaled dialog
+  // nested inside an ancestor that establishes its own stacking context (e.g. the
+  // mobile drawer sidebar's own z-index) gets capped there regardless of its own
+  // z-index number -- so it rendered behind the (portaled, truly top-level) Modal
+  // instead of on top of it. Portaling here too removes it from any ancestor's
+  // stacking context, the same fix for the same reason.
+  return createPortal(
     <div className="modal-overlay" style={{ zIndex: 400 }}>
       <div className="modal-box" style={{ maxWidth: 360 }}>
         <div className="modal-head">
@@ -46,6 +58,7 @@ export default function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

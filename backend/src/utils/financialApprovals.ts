@@ -140,7 +140,31 @@ export async function fileApprovalRequest(
   const requesterName = requesterRes.rows[0]?.name || '';
   const label = MODULE_LABEL[moduleType];
   const title = `مطلوب اعتماد جديد #${requestNumber} / New Approval Required #${requestNumber}`;
-  const body = label ? `${label.ar} من ${requesterName} / ${label.en} from ${requesterName}` : requesterName;
+
+  // Amount snippet -- the user asked for more context directly in the notification
+  // itself, not just "who it's from". One small query per module_type, same values
+  // each page's own detailLines already shows (ExpensesPage/PayrollPage/
+  // PurchaseOrdersPage) -- best-effort, never blocks filing the request if it fails.
+  let amountSnippet = '';
+  try {
+    if (moduleType === 'EXPENSE') {
+      const r = await pool.query('SELECT amount FROM expenses WHERE id = $1', [referenceId]);
+      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].amount).toFixed(3)} KD`;
+    } else if (moduleType === 'PAYROLL') {
+      const r = await pool.query('SELECT total_paid FROM payroll WHERE id = $1', [referenceId]);
+      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].total_paid).toFixed(3)} KD`;
+    } else if (moduleType === 'PURCHASE_ORDER') {
+      const r = await pool.query(
+        `SELECT COALESCE(SUM(qty * unit_price), 0)::float AS total FROM purchase_order_items WHERE purchase_order_id = $1`,
+        [referenceId]
+      );
+      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].total).toFixed(3)} KD`;
+    }
+  } catch {
+    // Best-effort -- a missing/mismatched record here must never block filing the request.
+  }
+
+  const body = label ? `${label.ar} من ${requesterName}${amountSnippet} / ${label.en} from ${requesterName}${amountSnippet}` : requesterName;
   const link = '/approvals';
   notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: actingUserId, approvalRequestId: request.id }).catch(() => {});
   const permissionKey = MODULE_APPROVER_PERMISSION[moduleType];
