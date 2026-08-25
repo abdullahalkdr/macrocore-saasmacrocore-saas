@@ -372,7 +372,7 @@ export default function App() {
             <Route
               path="/audit-log"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} permission="view_audit_log">
                   <AuditLogPage />
                 </RequireRole>
               }

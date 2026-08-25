@@ -42,6 +42,7 @@ export const PERMISSION_KEYS = [
   'apply_custom_discount',
   'export_sensitive_reports',
   'manage_system_settings',
+  'view_audit_log',
 ] as const;
 
 // 'view_hr_tickets' is a restrictive-override key, not a delegation one: the other

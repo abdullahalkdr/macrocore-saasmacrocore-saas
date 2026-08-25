@@ -281,7 +281,7 @@ export default function Layout() {
         { to: '/reports', label: t.nav.reports, icon: IconReports },
         { to: '/official-documents', label: t.nav.officialDocuments, icon: IconReports, managerOnly: true, minPlan: 2 },
         { to: '/company-files', label: t.nav.companyFiles, icon: IconReports, managerOnly: true, minPlan: 2 },
-        { to: '/audit-log', label: t.nav.auditLog, icon: IconReports, managerOnly: true, minPlan: 3 },
+        { to: '/audit-log', label: t.nav.auditLog, icon: IconReports, managerOnly: true, minPlan: 3, permission: 'view_audit_log' },
       ],
     },
     {
