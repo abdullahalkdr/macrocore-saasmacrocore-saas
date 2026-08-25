@@ -138,43 +138,66 @@ export async function fileApprovalRequest(
   // never called from expenses/payroll/PO), which is why it went unnoticed until now.
   const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [requesterId]);
   const requesterName = requesterRes.rows[0]?.name || '';
-  const label = MODULE_LABEL[moduleType];
-  const title = `مطلوب اعتماد جديد #${requestNumber} / New Approval Required #${requestNumber}`;
+  const amountSnippet = await buildAmountSnippet(moduleType, referenceId);
+  notifyEligibleApprovers(companyId, moduleType, request.id, requestNumber, requesterName, amountSnippet, actingUserId).catch(() => {});
 
-  // Amount snippet -- the user asked for more context directly in the notification
-  // itself, not just "who it's from". One small query per module_type, same values
-  // each page's own detailLines already shows (ExpensesPage/PayrollPage/
-  // PurchaseOrdersPage) -- best-effort, never blocks filing the request if it fails.
-  let amountSnippet = '';
+  return request;
+}
+
+// Amount snippet -- the user asked for more context directly in the notification
+// itself, not just "who it's from". One small query per module_type, same values
+// each page's own detailLines already shows (ExpensesPage/PayrollPage/
+// PurchaseOrdersPage) -- best-effort, never blocks filing/resubmitting the request
+// if it fails. Exported so actionRequest()'s 'resubmitted' branch (MIGRATION_061)
+// can reuse it for the re-notify-approvers step, same as first filing.
+export async function buildAmountSnippet(moduleType: string, referenceId: string): Promise<string> {
   try {
     if (moduleType === 'EXPENSE') {
       const r = await pool.query('SELECT amount FROM expenses WHERE id = $1', [referenceId]);
-      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].amount).toFixed(3)} KD`;
+      if (r.rows[0]) return ` — ${Number(r.rows[0].amount).toFixed(3)} KD`;
     } else if (moduleType === 'PAYROLL') {
       const r = await pool.query('SELECT total_paid FROM payroll WHERE id = $1', [referenceId]);
-      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].total_paid).toFixed(3)} KD`;
+      if (r.rows[0]) return ` — ${Number(r.rows[0].total_paid).toFixed(3)} KD`;
     } else if (moduleType === 'PURCHASE_ORDER') {
       const r = await pool.query(
         `SELECT COALESCE(SUM(qty * unit_price), 0)::float AS total FROM purchase_order_items WHERE purchase_order_id = $1`,
         [referenceId]
       );
-      if (r.rows[0]) amountSnippet = ` — ${Number(r.rows[0].total).toFixed(3)} KD`;
+      if (r.rows[0]) return ` — ${Number(r.rows[0].total).toFixed(3)} KD`;
     }
   } catch {
     // Best-effort -- a missing/mismatched record here must never block filing the request.
   }
+  return '';
+}
 
+// Notifies everyone eligible to act on a single-step module's pending request --
+// every admin/manager, plus anyone individually/by-job-role holding the module's
+// MODULE_APPROVER_PERMISSION. Factored out of fileApprovalRequest() (MIGRATION_061)
+// so actionRequest()'s 'resubmitted' branch can re-notify the SAME audience without
+// duplicating this block -- resubmitting is exactly "file it again" from the
+// approvers' point of view.
+export async function notifyEligibleApprovers(
+  companyId: string,
+  moduleType: string,
+  requestId: string,
+  requestNumber: string | null,
+  requesterName: string,
+  amountSnippet: string,
+  excludeUserId?: string
+): Promise<void> {
+  const label = MODULE_LABEL[moduleType];
+  const numberSuffix = requestNumber ? ` #${requestNumber}` : '';
+  const title = `مطلوب اعتماد جديد${numberSuffix} / New Approval Required${numberSuffix}`;
   const body = label ? `${label.ar} من ${requesterName}${amountSnippet} / ${label.en} from ${requesterName}${amountSnippet}` : requesterName;
   const link = '/approvals';
-  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: actingUserId, approvalRequestId: request.id }).catch(() => {});
+  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId, approvalRequestId: requestId }).catch(() => {});
   const permissionKey = MODULE_APPROVER_PERMISSION[moduleType];
   if (permissionKey) {
     usersWithPermission(companyId, permissionKey)
-      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId: actingUserId, approvalRequestId: request.id }))
+      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId, approvalRequestId: requestId }))
       .catch(() => {});
   }
-
-  return request;
 }
 
 // GLOBAL UNLOCK — self-approval safety valve. Universal Maker-Checker (see

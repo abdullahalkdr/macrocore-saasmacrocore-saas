@@ -194,12 +194,14 @@ export async function getBlockingApproval(companyId: string, ticketId: string) {
 
 export interface ItsmApprovalSummary {
   id: string;
+  request_number: string | null;
   status: string;
   current_step: number;
   total_steps: number;
   steps: { step_number: number; step_label: string; step_label_en: string | null }[];
   log: { step_number: number; action: string; comments: string | null; action_at: string; approver_name: string | null }[];
   is_pending_approver: boolean;
+  can_resubmit: boolean;
 }
 
 // Full status block for SupportTicketsPage.tsx's ticket detail — the step list, the
@@ -239,13 +241,25 @@ export async function getItsmApprovalSummary(
     }
   }
 
+  // MIGRATION_061 -- true only for the maker themselves, and only while the ticket's
+  // request is actually sitting "with them" (status === 'returned'). Mirrors
+  // approvals.controller.ts's getApprovalSummary()/actionRequest() resubmit guard.
+  let canResubmit = false;
+  if (request.status === 'returned') {
+    const empRes = await pool.query('SELECT employee_id FROM users WHERE id = $1', [currentUser.userId]);
+    const myId = empRes.rows[0]?.employee_id ?? null;
+    canResubmit = !!myId && myId === request.requester_id;
+  }
+
   return {
     id: request.id,
+    request_number: request.request_number ?? null,
     status: request.status,
     current_step: request.current_step,
     total_steps: steps.length,
     steps: steps.map((s) => ({ step_number: s.step_number, step_label: s.step_label, step_label_en: s.step_label_en })),
     log: logResult.rows,
     is_pending_approver: isPendingApproverForMe,
+    can_resubmit: canResubmit,
   };
 }

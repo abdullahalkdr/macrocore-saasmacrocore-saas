@@ -5,7 +5,8 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
-import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover } from '../utils/financialApprovals';
+import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
+import { notifyUsers } from '../utils/notifications';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
 // (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
@@ -36,6 +37,59 @@ const VALID_MODULES = Object.keys(MODULE_APPROVER_PERMISSION);
 async function myEmployeeId(userId: string): Promise<string | null> {
   const result = await pool.query('SELECT employee_id FROM users WHERE id = $1', [userId]);
   return result.rows[0]?.employee_id ?? null;
+}
+
+// Where the maker should land to actually fix a returned record — deliberately NOT
+// '/approvals' (every other notification's link): the maker is the REQUESTER, not
+// an approver, so /approvals' listPending() would show them nothing at all (it only
+// ever returns requests the viewer is eligible to act on). They need the record's
+// own page instead, same URL SupportTicketsPage/ExpensesPage/PayrollPage/
+// PurchaseOrdersPage already live at.
+function resolveMakerUrl(moduleType: string): string {
+  switch (moduleType) {
+    case 'EXPENSE':
+      return '/expenses';
+    case 'PAYROLL':
+      return '/payroll';
+    case 'PURCHASE_ORDER':
+      return '/purchase-orders';
+    case 'ITSM_TICKET':
+      return '/support';
+    default:
+      return '/approvals';
+  }
+}
+
+// MIGRATION_061 — tells the maker their request was sent back for changes, with the
+// reviewer's own comment right in the notification body (the whole point of
+// "returned" vs. a plain rejection) and a link straight to the record so they don't
+// have to go hunting for it. Fire-and-forget like every other notification here —
+// actionRequest() already committed the real state change before calling this.
+async function notifyMakerReturned(
+  companyId: string,
+  request: { id: string; module_type: string; reference_id: string; requester_id: string; request_number?: string | null },
+  comments: string
+): Promise<void> {
+  try {
+    const usersRes = await pool.query('SELECT id FROM users WHERE company_id = $1 AND employee_id = $2', [companyId, request.requester_id]);
+    const userIds = usersRes.rows.map((r) => r.id);
+    if (userIds.length === 0) return;
+
+    const label = request.module_type === 'ITSM_TICKET'
+      ? { ar: 'تذكرة الدعم الفني', en: 'the support ticket' }
+      : MODULE_LABEL[request.module_type];
+    const numberSuffix = request.request_number ? ` #${request.request_number}` : '';
+    const title = `تم إرجاع طلبك للتعديل${numberSuffix} / Your request was returned for changes${numberSuffix}`;
+    const body = label
+      ? `${label.ar} بحاجة لتعديل: ${comments} / ${label.en} needs changes: ${comments}`
+      : `${comments}`;
+    const link = resolveMakerUrl(request.module_type);
+
+    await notifyUsers({ companyId, userIds, type: 'approval_returned', title, body, link, approvalRequestId: request.id });
+  } catch {
+    // Best-effort — never let a notification failure mask the "returned" decision
+    // that already committed above.
+  }
 }
 
 // POST /api/approvals/request — any authenticated employee-linked user can file one
@@ -126,17 +180,79 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   const { id } = req.params;
   const { action, comments } = req.body ?? {};
 
-  if (action !== 'approved' && action !== 'rejected') {
-    throw new AppError(400, "action must be 'approved' or 'rejected'");
+  const VALID_ACTIONS = ['approved', 'rejected', 'returned', 'resubmitted'];
+  if (!VALID_ACTIONS.includes(action)) {
+    throw new AppError(400, `action must be one of ${VALID_ACTIONS.join(', ')}`);
+  }
+  // "Return for Changes" (MIGRATION_061) -- the whole point is telling the maker
+  // what to fix, so unlike approve/reject's optional comment, this one is mandatory.
+  if (action === 'returned' && !String(comments ?? '').trim()) {
+    throw new AppError(400, 'A comment is required when returning a request for changes.');
   }
 
   const reqResult = await pool.query(`SELECT * FROM approval_requests WHERE id = $1 AND company_id = $2`, [id, companyId]);
   const request = reqResult.rows[0];
   if (!request) throw new AppError(404, 'Approval request not found');
-  if (request.status !== 'pending') throw new AppError(400, `This request is already ${request.status}`);
 
   const myId = await myEmployeeId(req.auth!.userId);
   if (!myId) throw new AppError(400, 'Your account is not linked to an employee record.');
+
+  // MIGRATION_061 -- "resubmitted" is the maker's own move after a "returned"
+  // decision, and theirs ALONE: the exact inverse of every other action here, which
+  // maker-checker blocks the requester from taking on their own request. Handled as
+  // its own early branch since almost nothing below (eligibility resolution,
+  // ITSM-vs-single-step branching) applies to it.
+  if (action === 'resubmitted') {
+    if (request.status !== 'returned') {
+      throw new AppError(400, `This request isn't waiting on you to resubmit it (status: ${request.status}).`);
+    }
+    if (myId !== request.requester_id) {
+      throw new AppError(403, 'Only the person who filed this request can resubmit it.');
+    }
+
+    await pool.query(
+      `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments)
+       VALUES ($1, 1, $2, 'resubmitted', $3)`,
+      [id, myId, comments || null]
+    );
+    // Resumes at step 1 exactly -- MIGRATION_061 decision #3: never a full restart
+    // of an already-approved chain, always right back to the step that asked for
+    // changes (a "returned" request's current_step is always 0, meaning it was
+    // step 1 -- or the single-step modules' only step -- that returned it; see
+    // that migration's decision #2 for why current_step can't be anything else here).
+    await pool.query(`UPDATE approval_requests SET current_step = 1, status = 'pending', updated_at = now() WHERE id = $1`, [id]);
+
+    if (request.module_type === 'ITSM_TICKET') {
+      const steps = await getWorkflowSteps('ITSM_TICKET');
+      const step1 = steps.find((s) => s.step_number === 1);
+      if (step1) {
+        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, step1, request.id, request.request_number ?? null).catch(() => {});
+      }
+    } else {
+      const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [myId]);
+      const requesterName = requesterRes.rows[0]?.name || '';
+      const amountSnippet = await buildAmountSnippet(request.module_type, request.reference_id);
+      notifyEligibleApprovers(companyId, request.module_type, request.id, request.request_number ?? null, requesterName, amountSnippet, req.auth!.userId).catch(() => {});
+    }
+
+    await logAudit({
+      companyId,
+      userId: req.auth!.userId,
+      action: 'approval_request_resubmitted',
+      entityType: 'approval_requests',
+      entityId: id as string,
+      req,
+    });
+
+    res.status(200).json({ success: true });
+    return;
+  }
+
+  // approved / rejected / returned all require the request to still genuinely be
+  // pending, and the actor to be someone OTHER than whoever filed it -- except the
+  // narrow single-employee "GLOBAL UNLOCK" safety valve below.
+  if (request.status !== 'pending') throw new AppError(400, `This request is already ${request.status}`);
+
   if (myId === request.requester_id) {
     // GLOBAL UNLOCK — self-approval safety valve (financialApprovals.ts's
     // hasOtherEligibleApprover). Universal Maker-Checker (isCompanyGoldPlus() now
@@ -177,6 +293,17 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
         // A rejection at ANY step stops the whole chain immediately — see
         // MIGRATION_056 decision #3.
         await client.query(`UPDATE approval_requests SET status = 'rejected', updated_at = now() WHERE id = $1`, [id]);
+      } else if (action === 'returned') {
+        // MIGRATION_061 -- returns exactly ONE step back. Step 1 has no step before
+        // it, so returning from step 1 goes to the maker (current_step -> 0, status
+        // -> 'returned'); returning from any later step goes to that earlier step's
+        // actor, who sees it as an ordinary pending item (status stays 'pending').
+        const newStep = request.current_step - 1;
+        if (newStep >= 1) {
+          await client.query(`UPDATE approval_requests SET current_step = $1, status = 'pending', updated_at = now() WHERE id = $2`, [newStep, id]);
+        } else {
+          await client.query(`UPDATE approval_requests SET current_step = 0, status = 'returned', updated_at = now() WHERE id = $1`, [id]);
+        }
       } else if (request.current_step < steps.length) {
         await client.query(`UPDATE approval_requests SET current_step = current_step + 1, updated_at = now() WHERE id = $1`, [id]);
       } else {
@@ -190,18 +317,24 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       client.release();
     }
 
-    // Chain moved on to a new pending step (not rejected, not the final approval) —
-    // tell whoever's eligible for THAT step now. No-op for reject/final-approve,
-    // there's no new pending approver in either case.
+    // Chain moved on to a new pending step (advance OR return-one-step-back) — tell
+    // whoever's eligible for THAT step now. No-op for reject/final-approve/returned-
+    // to-the-maker, there's no new pending APPROVER in any of those three.
     if (action === 'approved' && request.current_step < steps.length) {
       const nextStep = steps.find((s) => s.step_number === request.current_step + 1);
       if (nextStep) {
         notifyItsmStepPending(companyId, request.reference_id, request.requester_id, nextStep, request.id, request.request_number ?? null).catch(() => {});
       }
+    } else if (action === 'returned' && request.current_step - 1 >= 1) {
+      const prevStep = steps.find((s) => s.step_number === request.current_step - 1);
+      if (prevStep) {
+        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, prevStep, request.id, request.request_number ?? null).catch(() => {});
+      }
     }
   } else {
-    // Single-step modules (unchanged from MIGRATION_055) — approve or reject both
-    // resolve the request immediately, current_step is not advanced.
+    // Single-step modules — approve/reject resolve the request immediately,
+    // current_step is not advanced. "returned" (MIGRATION_061) has no step before
+    // this one either, so it always goes straight to the maker.
     if (!isManager) {
       const requiredPermission = MODULE_APPROVER_PERMISSION[request.module_type];
       const allowed = !!requiredPermission && (await hasPermission(req.auth!.userId, requiredPermission));
@@ -216,18 +349,25 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
          VALUES ($1, $2, $3, $4, $5)`,
         [id, request.current_step, myId, action, comments || null]
       );
-      await client.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [action, id]);
 
-      // MIGRATION_058 — EXPENSE is the one single-step module with a side effect
-      // here: unlike Payroll (pay()) or Purchase Orders (the draft->ordered retry),
-      // there's no follow-up call for the submitter to make once approved — the
-      // expense record IS the financial event, so this decision must flip its own
-      // `status` column directly. Payroll/Purchase Orders deliberately do NOT get
-      // this treatment (same "approval = permission, not execution" principle
-      // already applied to ITSM tickets) — their maker still takes the real action
-      // themselves after seeing 'approved'.
-      if (request.module_type === 'EXPENSE') {
-        await client.query(`UPDATE expenses SET status = $1 WHERE id = $2 AND company_id = $3`, [action, request.reference_id, companyId]);
+      if (action === 'returned') {
+        await client.query(`UPDATE approval_requests SET current_step = 0, status = 'returned', updated_at = now() WHERE id = $1`, [id]);
+      } else {
+        await client.query(`UPDATE approval_requests SET status = $1, updated_at = now() WHERE id = $2`, [action, id]);
+
+        // MIGRATION_058 — EXPENSE is the one single-step module with a side effect
+        // here: unlike Payroll (pay()) or Purchase Orders (the draft->ordered retry),
+        // there's no follow-up call for the submitter to make once approved — the
+        // expense record IS the financial event, so this decision must flip its own
+        // `status` column directly. Payroll/Purchase Orders deliberately do NOT get
+        // this treatment (same "approval = permission, not execution" principle
+        // already applied to ITSM tickets) — their maker still takes the real action
+        // themselves after seeing 'approved'. Only for the two FINAL actions —
+        // 'returned' leaves expenses.status untouched (still 'pending_approval')
+        // since the request isn't resolved, just bounced back for a fix.
+        if (request.module_type === 'EXPENSE') {
+          await client.query(`UPDATE expenses SET status = $1 WHERE id = $2 AND company_id = $3`, [action, request.reference_id, companyId]);
+        }
       }
 
       await client.query('COMMIT');
@@ -237,6 +377,10 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     } finally {
       client.release();
     }
+  }
+
+  if (action === 'returned') {
+    notifyMakerReturned(companyId, request, String(comments)).catch(() => {});
   }
 
   // BUGFIX (stale "pending" notifications) -- MIGRATION_060. A pending-approval
@@ -457,6 +601,16 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
 
   const recordDetail = await buildRecordDetail(companyId, module_type, reference_id);
 
+  // MIGRATION_061 -- true only for the maker themselves, and only while their
+  // request is actually sitting "with them" (status === 'returned'). Mirrors
+  // actionRequest()'s own resubmit guard exactly, so a true here never disagrees
+  // with what that endpoint will actually allow.
+  let canResubmit = false;
+  if (request.status === 'returned') {
+    const myId = await myEmployeeId(req.auth!.userId);
+    canResubmit = !!myId && myId === request.requester_id;
+  }
+
   res.status(200).json({
     success: true,
     summary: {
@@ -471,6 +625,7 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
       steps,
       log: logResult.rows,
       is_pending_approver: isPendingApprover,
+      can_resubmit: canResubmit,
       record_detail: recordDetail,
     },
   });

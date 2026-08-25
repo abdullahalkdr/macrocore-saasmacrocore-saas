@@ -4,7 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { assertDateNotClosed } from '../utils/periodGuard';
-import { isCompanyGoldPlus, fileApprovalRequest } from '../utils/financialApprovals';
+import { isCompanyGoldPlus, fileApprovalRequest, getLatestApproval } from '../utils/financialApprovals';
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -19,9 +19,22 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     where += ` AND COALESCE(e.expense_date, e.created_at::date) = $${params.length}`;
   }
 
+  // MIGRATION_061 — approval_status is resolved live from the latest approval_requests
+  // row for this expense (module_type = 'EXPENSE'), separately from expenses.status
+  // itself. The two agree for 'approved'/'rejected' (actionRequest() writes both), but
+  // diverge for 'returned': expenses.status deliberately stays 'pending_approval' (the
+  // expense is still mid-review, just bounced back for a fix) while approval_status
+  // correctly reflects 'returned' so ExpensesPage can show the distinct badge + let the
+  // maker edit/resubmit instead of the generic "awaiting approval, locked" state.
   const result = await pool.query(
     `SELECT e.id, e.category, e.amount, e.description, e.receipt_image, e.location_id, e.expense_date,
-            e.created_at, e.created_by, e.status, l.name AS location_name, u.full_name AS created_by_name
+            e.created_at, e.created_by, e.status, l.name AS location_name, u.full_name AS created_by_name,
+            (SELECT ar.status FROM approval_requests ar
+             WHERE ar.company_id = e.company_id AND ar.module_type = 'EXPENSE' AND ar.reference_id = e.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status,
+            (SELECT ar.request_number FROM approval_requests ar
+             WHERE ar.company_id = e.company_id AND ar.module_type = 'EXPENSE' AND ar.reference_id = e.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS request_number
      FROM expenses e
      LEFT JOIN locations l ON l.id = e.location_id AND l.company_id = e.company_id
      LEFT JOIN users u ON u.id = e.created_by
@@ -126,7 +139,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   // from under them mid-review. Unblocks once the approval resolves either way
   // (approved stays editable same as always; rejected can still be corrected and
   // is NOT auto-resubmitted here — the submitter re-creates it if needed).
-  if (currentRow.rows[0].status === 'pending_approval') {
+  //
+  // MIGRATION_061 — checks the LIVE approval_requests status, not the local
+  // expenses.status column: a 'returned' request deliberately leaves
+  // expenses.status at 'pending_approval' (see actionRequest()'s own comment), so
+  // gating on that column alone would keep locking the maker out of the very edit
+  // "Return for Changes" exists to let them make. Only a genuinely 'pending'
+  // request (still with the approver, no decision yet) blocks editing.
+  const latestApproval = await getLatestApproval(companyId, 'EXPENSE', id as string);
+  if (latestApproval?.status === 'pending') {
     throw new AppError(400, 'This expense is awaiting approval and cannot be edited until a decision is made.');
   }
   // Block editing a record that currently sits in a closed period at all, not
@@ -206,7 +227,10 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   if (!currentRow.rows[0]) throw new AppError(404, 'Expense not found');
   // MIGRATION_058 — same tampering guard as update() above: don't let the record an
   // approver is reviewing disappear out from under them mid-review.
-  if (currentRow.rows[0].status === 'pending_approval') {
+  // MIGRATION_061 — same live-status fix as update(): a 'returned' expense must stay
+  // deletable/editable by its maker, not just re-locked by the stale local column.
+  const latestApproval = await getLatestApproval(companyId, 'EXPENSE', id as string);
+  if (latestApproval?.status === 'pending') {
     throw new AppError(400, 'This expense is awaiting approval and cannot be deleted until a decision is made.');
   }
   await assertDateNotClosed(companyId, currentRow.rows[0].effective_date);
