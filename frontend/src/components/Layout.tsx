@@ -113,13 +113,20 @@ export default function Layout() {
   // any plan-tier gate, so keeping the sidebar's locked badges/upgrade-modal prompts up
   // would be actively misleading — every item they'd block is actually reachable.
   const [planGatingBypassed, setPlanGatingBypassed] = useState(false);
+  const updateCompany = useAuthStore((s) => s.updateCompany);
   useEffect(() => {
     get<{ plan: string; plan_gating_bypassed?: boolean }>('/company/me')
       .then((r) => {
         setLivePlan(r.plan);
         setPlanGatingBypassed(!!r.plan_gating_bypassed);
+        // Also push into the shared authStore so pages that don't poll /company/me
+        // themselves (e.g. PayrollPage.tsx's Performance-linked adjustments check)
+        // can read the live bypass state via useAuthStore(s => s.company) instead of
+        // duplicating this fetch.
+        updateCompany({ plan: r.plan, plan_gating_bypassed: !!r.plan_gating_bypassed });
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Own effective permission set (job-role + individual layers, MIGRATION_054) — fetched

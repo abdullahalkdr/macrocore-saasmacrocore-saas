@@ -15,6 +15,13 @@ export interface AuthCompany {
   name: string;
   plan: string;
   trial_end_date?: string;
+  // GLOBAL UNLOCK — mirrors company.controller.ts getMe()'s plan_gating_bypassed
+  // (env.BYPASS_PLAN_GATING, dev/test only). Not part of the login response — this
+  // is a login-time snapshot store, and the bypass flag is a live server runtime
+  // setting, not a per-company attribute fixed at login. Layout.tsx's existing
+  // /company/me poll pushes the current value in here via updateCompany() so any
+  // page reading useAuthStore(s => s.company) can see it without its own fetch.
+  plan_gating_bypassed?: boolean;
 }
 
 interface AuthState {
@@ -23,6 +30,7 @@ interface AuthState {
   company: AuthCompany | null;
   setAuth: (token: string, user: AuthUser, company?: AuthCompany | null) => void;
   updateUser: (patch: Partial<AuthUser>) => void;
+  updateCompany: (patch: Partial<AuthCompany>) => void;
   logout: () => void;
 }
 
@@ -37,6 +45,8 @@ export const useAuthStore = create<AuthState>()(
       // completes verification) — doesn't touch the server, just keeps the cached user
       // object in sync so the UI doesn't need a re-login to reflect it.
       updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : {})),
+      // Same idea for company — see AuthCompany.plan_gating_bypassed above.
+      updateCompany: (patch) => set((s) => (s.company ? { company: { ...s.company, ...patch } } : {})),
       logout: () => set({ token: null, user: null, company: null }),
     }),
     { name: 'macrocore-auth' }

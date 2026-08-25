@@ -103,6 +103,13 @@ export default function PayrollPage() {
   const user = useAuthStore((s) => s.user);
   const isManager = user?.role === 'admin' || user?.role === 'manager';
   const companyPlanLevel = planLevelOf(company?.plan);
+  // GLOBAL UNLOCK (dev/test only, env.BYPASS_PLAN_GATING) — company.plan_gating_bypassed
+  // is pushed into authStore by Layout.tsx's own /company/me poll (see authStore.ts's
+  // AuthCompany.plan_gating_bypassed comment). When true, /performance-scores is
+  // reachable for every company regardless of its real stored plan (requirePlan.ts's
+  // bypass), so the Gold-only guard below must not silently skip the fetch and hide the
+  // feature client-side while the backend has already unlocked it.
+  const adjustmentsUnlocked = !!company?.plan_gating_bypassed || companyPlanLevel >= GOLD_PLAN_LEVEL;
   const [items, setItems] = useState<PayrollRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [open, setOpen] = useState(false);
@@ -264,7 +271,7 @@ export default function PayrollPage() {
     try {
       const [detail, systemIds] = await Promise.all([
         get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${p.id}`),
-        companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(p.employee_id) : Promise.resolve(new Set<string>()),
+        adjustmentsUnlocked ? fetchSystemAdjustmentIds(p.employee_id) : Promise.resolve(new Set<string>()),
       ]);
       setAdjustments(markSystemAdjustments(detail.adjustments, systemIds));
     } catch (err) {
@@ -295,7 +302,7 @@ export default function PayrollPage() {
       if (editingId) {
         const [detail, systemIds] = await Promise.all([
           get<{ adjustments: AdjustmentDetail[] }>(`/payroll/${editingId}`),
-          companyPlanLevel >= GOLD_PLAN_LEVEL ? fetchSystemAdjustmentIds(employeeId) : Promise.resolve(new Set<string>()),
+          adjustmentsUnlocked ? fetchSystemAdjustmentIds(employeeId) : Promise.resolve(new Set<string>()),
         ]);
         currentAdjustments = mergeSystemAdjustments(detail.adjustments, systemIds, currentAdjustments);
       }
