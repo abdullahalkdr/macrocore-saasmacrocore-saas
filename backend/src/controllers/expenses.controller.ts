@@ -58,29 +58,51 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const goldPlus = await isCompanyGoldPlus(companyId);
   const initialStatus = goldPlus ? 'pending_approval' : 'approved';
 
-  const result = await pool.query(
-    `INSERT INTO expenses (company_id, category, amount, description, receipt_image, location_id, expense_date, created_by, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING id, category, amount, description, location_id, expense_date, created_at, status`,
-    [
-      companyId,
-      category ?? null,
-      amount,
-      description ?? null,
-      receipt_image ?? null,
-      location_id ?? null,
-      expense_date ?? null,
-      req.auth!.userId,
-      initialStatus,
-    ]
-  );
-  const expense = result.rows[0];
+  // BUGFIX (orphaned pending_approval) — the INSERT (which sets status directly to
+  // 'pending_approval') and the fileApprovalRequest() call that creates the matching
+  // approval_requests row used to be two separate non-transactional queries: if
+  // fileApprovalRequest() threw (e.g. the creator has no linked employee record — see
+  // auth.controller.ts's register(), now fixed to always link one), the expense was
+  // left permanently stuck at 'pending_approval' with no approval_requests row to ever
+  // resolve it, and no UI path to fix it. Wrapping both in one transaction means a
+  // failure here rolls back the INSERT too, so the request fails cleanly (the caller
+  // gets the 400 and no row is created) instead of leaving corrupted data behind.
+  const client = await pool.connect();
+  let expense;
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `INSERT INTO expenses (company_id, category, amount, description, receipt_image, location_id, expense_date, created_by, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, category, amount, description, location_id, expense_date, created_at, status`,
+      [
+        companyId,
+        category ?? null,
+        amount,
+        description ?? null,
+        receipt_image ?? null,
+        location_id ?? null,
+        expense_date ?? null,
+        req.auth!.userId,
+        initialStatus,
+      ]
+    );
+    expense = result.rows[0];
+
+    if (goldPlus) {
+      await fileApprovalRequest(companyId, 'EXPENSE', expense.id, req.auth!.userId, client);
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'expense_created', entityType: 'expenses', entityId: expense.id, req });
-
-  if (goldPlus) {
-    await fileApprovalRequest(companyId, 'EXPENSE', expense.id, req.auth!.userId);
-  }
 
   res.status(201).json({ success: true, expense });
 });

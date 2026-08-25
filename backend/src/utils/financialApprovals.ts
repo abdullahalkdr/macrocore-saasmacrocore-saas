@@ -1,3 +1,4 @@
+import { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { AppError } from '../middleware/errorHandler';
 import { planLevelOf } from '../config/planFeatures';
@@ -84,25 +85,41 @@ export async function getLatestApproval(companyId: string, moduleType: string, r
 // implementation instead of two copies drifting apart. Throws if actingUserId has
 // no linked employee record — same "approvals require a linked employee" rule
 // createRequest() already enforced.
+//
+// BUGFIX (orphaned pending_approval) — optional `client` param lets a caller that
+// already mutated its own row inside a transaction (e.g. expenses.controller.ts's
+// create(), which sets expenses.status = 'pending_approval' as part of the same
+// INSERT) pass that same client in, so this INSERT joins that transaction instead
+// of running against the shared pool. If the employee-link check above throws, the
+// caller's ROLLBACK undoes the row mutation too — no more permanently orphaned
+// "pending_approval" records with no matching approval_requests row. Callers that
+// have no prior mutation to protect (payroll.controller.ts's pay(),
+// purchaseOrders.controller.ts's update() — both call this BEFORE touching their
+// own row) can keep omitting client; nothing to roll back either way there.
 export async function fileApprovalRequest(
   companyId: string,
   moduleType: string,
   referenceId: string,
-  actingUserId: string
+  actingUserId: string,
+  client?: PoolClient
 ): Promise<{ id: string; requester_id: string; module_type: string; reference_id: string; status: string; current_step: number; created_at: string }> {
-  const empResult = await pool.query('SELECT employee_id FROM users WHERE id = $1', [actingUserId]);
+  const db = client ?? pool;
+  const empResult = await db.query('SELECT employee_id FROM users WHERE id = $1', [actingUserId]);
   const requesterId = empResult.rows[0]?.employee_id;
   if (!requesterId) {
     throw new AppError(400, 'Your account is not linked to an employee record — approval requests require a linked employee.');
   }
 
-  const inserted = await pool.query(
+  const inserted = await db.query(
     `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id)
      VALUES ($1, $2, $3, $4) RETURNING *`,
     [companyId, moduleType, referenceId, requesterId]
   );
   const request = inserted.rows[0];
 
+  // Notifications are best-effort and read/write nothing this transaction touches —
+  // always go through the shared pool (fire-and-forget, unawaited) regardless of
+  // whether this call is running inside a caller's transaction.
   const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
   const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
   const label = MODULE_LABEL[moduleType];

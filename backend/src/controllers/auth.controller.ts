@@ -161,6 +161,30 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     );
     user = userResult.rows[0];
 
+    // BUGFIX (orphaned approval requests) — a brand-new admin used to have no
+    // employees row at all (users.employee_id stayed NULL forever), which is exactly
+    // what makes fileApprovalRequest() throw ("Your account is not linked to an
+    // employee record") the first time that admin's own action needs approval —
+    // e.g. creating an expense on a Gold+ company. Every admin now gets a matching
+    // employees row created in this same transaction and linked immediately, so
+    // fileApprovalRequest() always has a requester_id to resolve. Minimal fields only
+    // (name is the one NOT NULL column on employees) — the admin can fill in the rest
+    // (civil ID, salary, department, etc.) later from the Employees page like any
+    // other record.
+    const employeeResult = await client.query(
+      `INSERT INTO employees (company_id, name, email, phone, job_role, status)
+       VALUES ($1, $2, $3, $4, $5, 'active')
+       RETURNING id`,
+      [
+        company.id,
+        resolvedFullName || normalizedEmail,
+        normalizedEmail,
+        typeof phone === 'string' && phone.trim() ? phone.trim() : null,
+        typeof job_title === 'string' && job_title.trim() ? job_title.trim() : null,
+      ]
+    );
+    await client.query('UPDATE users SET employee_id = $1 WHERE id = $2', [employeeResult.rows[0].id, user.id]);
+
     // Colleague invites — no email service wired up yet (see users.controller.ts),
     // so we create the accounts immediately with a temp password and hand them
     // back in the response for the admin to share directly.
