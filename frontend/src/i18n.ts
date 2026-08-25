@@ -1469,6 +1469,15 @@ const en = {
     returnedBannerFallback: 'Changes were requested. See the note above.',
     resubmit: 'Resubmit',
     resubmitConfirm: 'Resubmit this request? It goes straight back to the step that returned it.',
+    // MIGRATION_062 — attachments on the Modify/Resubmit steps, plus a comment
+    // (optional on resubmit — the maker may just be pushing back with no changes).
+    attachments: 'Attachments',
+    addAttachment: 'Attach a file',
+    removeAttachment: 'Remove attachment',
+    attachmentTooLarge: (name: string) => `${name} is too large — attachments are capped at 5MB each`,
+    tooManyAttachments: (max: number) => `You can attach at most ${max} files`,
+    resubmitCommentLabel: 'Comment (optional)',
+    resubmitCommentPlaceholder: "What did you change? Leave blank if nothing needed fixing...",
   },
   // Shared "Approval Status" popup (ApprovalWorkflowModal.tsx) — opened by clicking any
   // approval status tag in Expenses/Payroll/Purchase Orders/the Approvals Inbox. Shows
@@ -3652,6 +3661,13 @@ const ar: typeof en = {
     returnedBannerFallback: 'طلب منك تعديل. شوف الملاحظة أعلاه.',
     resubmit: 'إعادة الإرسال',
     resubmitConfirm: 'تبي ترسل هذا الطلب مرة ثانية؟ بيرجع مباشرة للخطوة اللي رجعته.',
+    attachments: 'المرفقات',
+    addAttachment: 'إرفاق ملف',
+    removeAttachment: 'حذف المرفق',
+    attachmentTooLarge: (name: string) => `${name} حجمه كبير — الحد الأقصى لكل مرفق 5 ميجا`,
+    tooManyAttachments: (max: number) => `أقصى عدد مرفقات تقدر ترفعها ${max}`,
+    resubmitCommentLabel: 'ملاحظة (اختياري)',
+    resubmitCommentPlaceholder: 'وش عدّلت؟ سيبها فاضية إذا ما كان فيه شي يحتاج تصليح...',
   },
   approvalWorkflow: {
     title: 'حالة الاعتماد',

@@ -5,6 +5,8 @@ import { useLangStore } from '../store/langStore';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
 import Tag from './Tag';
+import { IconPaperclip, IconClose } from './Icon';
+import { Attachment, AttachmentGallery, readFileAsBase64, addStagedFiles } from './Attachments';
 
 // Shared "Approval status" popup — opened by clicking any approval status tag in
 // ExpensesPage/PayrollPage/PurchaseOrdersPage/ApprovalsInboxPage. Shows the request's
@@ -40,6 +42,9 @@ interface ApprovalLogEntry {
   action: string;
   comments: string | null;
   action_at: string;
+  // MIGRATION_062 — a return/resubmit decision can carry the actual fix (a
+  // corrected receipt photo, an updated document), not just a comment.
+  attachments: Attachment[];
   approver_name: string | null;
 }
 interface RecordDetailLine {
@@ -118,7 +123,13 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   // maker isn't leaving a note, they're just sending their fix back.
   const [modifying, setModifying] = useState(false);
   const [modifyComment, setModifyComment] = useState('');
-  const [confirmingResubmit, setConfirmingResubmit] = useState(false);
+  const [modifyFiles, setModifyFiles] = useState<File[]>([]);
+  // MIGRATION_062 — Resubmit is now a small form too (comment optional + attachments
+  // optional), not a bare confirm: the maker needs somewhere to actually attach the
+  // fix, not just click a button with nothing to show for it.
+  const [resubmitting, setResubmitting] = useState(false);
+  const [resubmitComment, setResubmitComment] = useState('');
+  const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
 
   function loadSummary() {
     setLoading(true);
@@ -136,16 +147,21 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleType, referenceId]);
 
-  async function submitAction(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string) {
+  async function submitAction(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string, files?: File[]) {
     if (!summary) return;
     setActing(true);
     setActionError(null);
     try {
-      await post(`/approvals/${summary.id}/action`, { action, comments: comments?.trim() || undefined });
+      const attachments = files && files.length > 0 ? await Promise.all(files.map(async (f) => ({ file_name: f.name, file_base64: await readFileAsBase64(f) }))) : undefined;
+      await post(`/approvals/${summary.id}/action`, { action, comments: comments?.trim() || undefined, attachments });
       setApproving(false);
       setComment('');
       setModifying(false);
       setModifyComment('');
+      setModifyFiles([]);
+      setResubmitting(false);
+      setResubmitComment('');
+      setResubmitFiles([]);
       loadSummary();
       onActioned?.();
     } catch (err) {
@@ -169,16 +185,29 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
       setActionError(t.approvals.modifyCommentRequired);
       return;
     }
-    submitAction('returned', modifyComment);
+    submitAction('returned', modifyComment, modifyFiles);
   }
 
-  function handleResubmit() {
-    setConfirmingResubmit(true);
+  function addModifyFiles(files: FileList | null) {
+    setActionError(null);
+    const next = addStagedFiles(modifyFiles, files, (msg) => setActionError(msg), t.approvals.attachmentTooLarge, t.approvals.tooManyAttachments);
+    if (next) setModifyFiles(next);
+  }
+  function removeModifyFile(index: number) {
+    setModifyFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   function confirmResubmit() {
-    setConfirmingResubmit(false);
-    submitAction('resubmitted');
+    submitAction('resubmitted', resubmitComment, resubmitFiles);
+  }
+
+  function addResubmitFiles(files: FileList | null) {
+    setActionError(null);
+    const next = addStagedFiles(resubmitFiles, files, (msg) => setActionError(msg), t.approvals.attachmentTooLarge, t.approvals.tooManyAttachments);
+    if (next) setResubmitFiles(next);
+  }
+  function removeResubmitFile(index: number) {
+    setResubmitFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   function stepLabel(s: ApprovalStepDef) {
@@ -195,7 +224,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
 
   const moduleLabel = (t.approvals.moduleLabels as Record<string, string>)[moduleType] ?? moduleType;
 
-  const timelineNodes: { key: string; label: string; state: NodeState; meta?: string }[] = [];
+  const timelineNodes: { key: string; label: string; state: NodeState; meta?: string; attachments?: Attachment[] }[] = [];
   if (summary) {
     timelineNodes.push({
       key: 'submitted',
@@ -221,7 +250,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
         meta = `${log.approver_name || '—'} · ${when}`;
         if (log.comments) meta += ` — ${log.comments}`;
       }
-      timelineNodes.push({ key: `step-${s.step_number}`, label: stepLabel(s), state, meta });
+      timelineNodes.push({ key: `step-${s.step_number}`, label: stepLabel(s), state, meta, attachments: log?.attachments });
     });
 
     timelineNodes.push({
@@ -316,6 +345,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                       {node.meta}
                     </div>
                   )}
+                  {node.attachments && node.attachments.length > 0 && <AttachmentGallery attachments={node.attachments} />}
                   {node.state === 'current' && (
                     <div style={{ fontSize: 11, color: '#b45309', marginTop: 2, fontWeight: 700 }}>{t.approvalWorkflow.waitingOnLabel}</div>
                   )}
@@ -360,10 +390,35 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                 </div>
               ) : (
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.approvals.modifyConfirmTitle}</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>{t.approvals.modifyConfirmTitle}</div>
                   <div className="field">
                     <label>{t.approvals.modifyCommentLabel}</label>
-                    <textarea rows={2} value={modifyComment} onChange={(e) => setModifyComment(e.target.value)} placeholder={t.approvals.modifyCommentPlaceholder} />
+                    <textarea
+                      rows={5}
+                      value={modifyComment}
+                      onChange={(e) => setModifyComment(e.target.value)}
+                      placeholder={t.approvals.modifyCommentPlaceholder}
+                      style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>{t.approvals.attachments}</label>
+                    <label className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', width: 'fit-content' }}>
+                      <IconPaperclip size={14} /> {t.approvals.addAttachment}
+                      <input type="file" multiple style={{ display: 'none' }} onChange={(e) => addModifyFiles(e.target.files)} />
+                    </label>
+                    {modifyFiles.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                        {modifyFiles.map((f, i) => (
+                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                            <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeModifyFile(i)}>
+                              <IconClose size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={confirmModify}>
@@ -376,6 +431,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                       onClick={() => {
                         setModifying(false);
                         setModifyComment('');
+                        setModifyFiles([]);
                         setActionError(null);
                       }}
                     >
@@ -387,10 +443,13 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
             </div>
           )}
 
-          {/* MIGRATION_061 — the maker's own side of "Return for Changes": shown
+          {/* MIGRATION_061/062 — the maker's own side of "Return for Changes": shown
               only to them (can_resubmit is server-computed from viewer identity +
               status === 'returned'), regardless of whether they'd also be the
-              pending approver on some other request. */}
+              pending approver on some other request. The reviewer's comment gets a
+              large, comfortable box (not the cramped one-liner it used to be), and
+              Resubmit is now a real form — a comment (optional, the maker may just
+              be pushing back with no changes) plus attachments for the actual fix. */}
           {summary.can_resubmit && (
             <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
               {actionError && <div className="error-banner">{actionError}</div>}
@@ -398,19 +457,76 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                 style={{
                   background: '#fffbeb',
                   border: '1px solid #fde68a',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  marginBottom: 10,
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  marginBottom: 12,
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>{t.approvals.returnedBannerLabel}</div>
-                <div style={{ fontSize: 13 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
+                <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                   {[...summary.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
                 </div>
+                {(() => {
+                  const returnedAttachments = [...summary.log].reverse().find((l) => l.action === 'returned')?.attachments;
+                  return returnedAttachments && returnedAttachments.length > 0 ? <AttachmentGallery attachments={returnedAttachments} /> : null;
+                })()}
               </div>
-              <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={handleResubmit}>
-                {acting ? t.common.loading : t.approvals.resubmit}
-              </button>
+
+              {!resubmitting ? (
+                <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={() => setResubmitting(true)}>
+                  {t.approvals.resubmit}
+                </button>
+              ) : (
+                <div>
+                  <div className="field">
+                    <label>{t.approvals.resubmitCommentLabel}</label>
+                    <textarea
+                      rows={4}
+                      value={resubmitComment}
+                      onChange={(e) => setResubmitComment(e.target.value)}
+                      placeholder={t.approvals.resubmitCommentPlaceholder}
+                      style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>{t.approvals.attachments}</label>
+                    <label className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', width: 'fit-content' }}>
+                      <IconPaperclip size={14} /> {t.approvals.addAttachment}
+                      <input type="file" multiple style={{ display: 'none' }} onChange={(e) => addResubmitFiles(e.target.files)} />
+                    </label>
+                    {resubmitFiles.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                        {resubmitFiles.map((f, i) => (
+                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                            <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeResubmitFile(i)}>
+                              <IconClose size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={confirmResubmit}>
+                      {acting ? t.common.loading : t.approvals.resubmit}
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      type="button"
+                      disabled={acting}
+                      onClick={() => {
+                        setResubmitting(false);
+                        setResubmitComment('');
+                        setResubmitFiles([]);
+                        setActionError(null);
+                      }}
+                    >
+                      {t.common.cancel}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>
@@ -423,15 +539,6 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
         confirmLabel={t.approvals.reject}
         onConfirm={confirmReject}
         onCancel={() => setConfirmingReject(false)}
-      />
-    )}
-    {confirmingResubmit && (
-      <ConfirmDialog
-        title={t.approvals.resubmit}
-        message={t.approvals.resubmitConfirm}
-        confirmLabel={t.approvals.resubmit}
-        onConfirm={confirmResubmit}
-        onCancel={() => setConfirmingResubmit(false)}
       />
     )}
     </Fragment>

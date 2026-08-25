@@ -9,15 +9,9 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Tag from '../components/Tag';
-import { IconPlus, IconChevronRight, IconClose, IconPaperclip, IconFile } from '../components/Icon';
+import { IconPlus, IconChevronRight, IconClose, IconPaperclip } from '../components/Icon';
+import { Attachment, AttachmentGallery, readFileAsBase64, addStagedFiles, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from '../components/Attachments';
 
-// MIGRATION_059 — a single uploaded file, stored as a data: URL (same
-// convention as company_files.file_base64 elsewhere in this app — no S3/
-// object storage in this project).
-interface Attachment {
-  file_name: string;
-  file_base64: string;
-}
 interface Ticket {
   id: string;
   // MIGRATION_057 — Smart Numbering, [DEPT]-[YYMM]-[XXXX] e.g. IT-2608-0001. Null
@@ -60,6 +54,9 @@ interface ApprovalLogEntry {
   action: string;
   comments: string | null;
   action_at: string;
+  // MIGRATION_062 — a return/resubmit decision can carry the actual fix (a
+  // corrected receipt photo, an updated document), not just a comment.
+  attachments: Attachment[];
   approver_name: string | null;
 }
 interface ItsmApprovalSummary {
@@ -108,71 +105,11 @@ interface CompanyUser {
 // this is purely the deepest legacy fallback now, not a form option anymore.
 const LEGACY_CATEGORIES = ['general', 'leave', 'grievance', 'document_request', 'payroll', 'it', 'other'] as const;
 
-// MIGRATION_059 — same helper/convention as CompanyFilesPage.tsx's own
-// readFileAsBase64(): reads the whole file as a data: URL, which the backend
-// stores as-is and this page later uses directly as an <img src>/<a href>.
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-const MAX_ATTACHMENTS = 5;
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high'];
 const statusTagColor = (s: string): 'green' | 'red' | 'amber' | 'gray' =>
   s === 'open' ? 'green' : s === 'closed' ? 'gray' : s === 'resolved' ? 'green' : 'amber';
 const priorityTagColor = (p: string): 'green' | 'red' | 'amber' | 'gray' => (p === 'high' ? 'red' : p === 'medium' ? 'amber' : 'gray');
-
-// MIGRATION_059 — shared render for an Attachment[] array, used both under the
-// original ticket description and inside each reply bubble. Images render as
-// an actual clickable thumbnail (opens the full data: URL in a new tab);
-// anything else renders as a small document chip that downloads on click.
-function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
-  if (!attachments || attachments.length === 0) return null;
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-      {attachments.map((a, i) =>
-        a.file_base64.startsWith('data:image/') ? (
-          <a key={`${a.file_name}-${i}`} href={a.file_base64} target="_blank" rel="noreferrer" title={a.file_name}>
-            <img
-              src={a.file_base64}
-              alt={a.file_name}
-              style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }}
-            />
-          </a>
-        ) : (
-          <a
-            key={`${a.file_name}-${i}`}
-            href={a.file_base64}
-            download={a.file_name}
-            title={a.file_name}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 10px',
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              fontSize: 12,
-              maxWidth: 180,
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            <IconFile size={14} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.file_name}</span>
-          </a>
-        )
-      )}
-    </div>
-  );
-}
 
 // ITSM pivot Step 3 — hard cutover (Principal Architect decision: no parallel
 // old/new UI). The old flat ticket-create modal + ticket_categories admin
@@ -536,19 +473,30 @@ export default function SupportTicketsPage() {
   // same shape as ApprovalWorkflowModal.tsx's own pair of flows.
   const [modifyCommentOpen, setModifyCommentOpen] = useState(false);
   const [modifyComment, setModifyComment] = useState('');
+  const [modifyFiles, setModifyFiles] = useState<File[]>([]);
   const [modifyError, setModifyError] = useState<string | null>(null);
-  const [confirmingTicketResubmit, setConfirmingTicketResubmit] = useState(false);
+  // MIGRATION_062 — Resubmit is now its own small modal (comment optional +
+  // attachments optional), not a bare confirm: the maker needs somewhere to
+  // actually attach the fix, not just click a button with nothing to show for it.
+  const [resubmitModalOpen, setResubmitModalOpen] = useState(false);
+  const [resubmitComment, setResubmitComment] = useState('');
+  const [resubmitFiles, setResubmitFiles] = useState<File[]>([]);
 
-  async function submitTicketApproval(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string) {
+  async function submitTicketApproval(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string, files?: File[]) {
     if (!detail?.approval) return;
     setApprovalActing(true);
     setError(null);
     try {
-      await post(`/approvals/${detail.approval.id}/action`, { action, comments: comments?.trim() || undefined });
+      const attachments = files && files.length > 0 ? await Promise.all(files.map(async (f) => ({ file_name: f.name, file_base64: await readFileAsBase64(f) }))) : undefined;
+      await post(`/approvals/${detail.approval.id}/action`, { action, comments: comments?.trim() || undefined, attachments });
       setApprovalCommentOpen(false);
       setApprovalComment('');
       setModifyCommentOpen(false);
       setModifyComment('');
+      setModifyFiles([]);
+      setResubmitModalOpen(false);
+      setResubmitComment('');
+      setResubmitFiles([]);
       if (openId) openTicket(openId);
       load();
     } catch (err) {
@@ -573,16 +521,29 @@ export default function SupportTicketsPage() {
       return;
     }
     setModifyError(null);
-    submitTicketApproval('returned', modifyComment);
+    submitTicketApproval('returned', modifyComment, modifyFiles);
   }
 
-  function handleTicketResubmit() {
-    setConfirmingTicketResubmit(true);
+  function addModifyFiles(files: FileList | null) {
+    setModifyError(null);
+    const next = addStagedFiles(modifyFiles, files, (msg) => setModifyError(msg), t.approvals.attachmentTooLarge, t.approvals.tooManyAttachments);
+    if (next) setModifyFiles(next);
+  }
+  function removeModifyFile(index: number) {
+    setModifyFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   function confirmTicketResubmit() {
-    setConfirmingTicketResubmit(false);
-    submitTicketApproval('resubmitted');
+    submitTicketApproval('resubmitted', resubmitComment, resubmitFiles);
+  }
+
+  function addResubmitFiles(files: FileList | null) {
+    setError(null);
+    const next = addStagedFiles(resubmitFiles, files, (msg) => setError(msg), t.approvals.attachmentTooLarge, t.approvals.tooManyAttachments);
+    if (next) setResubmitFiles(next);
+  }
+  function removeResubmitFile(index: number) {
+    setResubmitFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   function approvalStatusTag(status: string) {
@@ -767,6 +728,7 @@ export default function SupportTicketsPage() {
                           <div key={i} className="muted" style={{ fontSize: 12 }}>
                             {entry.approver_name || '—'} — {approvalStatusTag(entry.action)}
                             {entry.comments && <span> — {entry.comments}</span>}
+                            {entry.attachments && entry.attachments.length > 0 && <AttachmentGallery attachments={entry.attachments} />}
                           </div>
                         ))}
                       </div>
@@ -819,18 +781,30 @@ export default function SupportTicketsPage() {
                         style={{
                           background: '#fffbeb',
                           border: '1px solid #fde68a',
-                          borderRadius: 8,
-                          padding: '10px 12px',
-                          marginBottom: 10,
+                          borderRadius: 10,
+                          padding: '14px 16px',
+                          marginBottom: 12,
                         }}
                       >
-                        <div style={{ fontSize: 12, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>{t.approvals.returnedBannerLabel}</div>
-                        <div style={{ fontSize: 13 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
+                        <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                           {[...detail.approval.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
                         </div>
+                        {(() => {
+                          const returnedAttachments = [...detail.approval!.log].reverse().find((l) => l.action === 'returned')?.attachments;
+                          return returnedAttachments && returnedAttachments.length > 0 ? <AttachmentGallery attachments={returnedAttachments} /> : null;
+                        })()}
                       </div>
-                      <button className="btn btn-primary btn-sm" disabled={approvalActing} onClick={handleTicketResubmit}>
-                        {approvalActing ? t.common.loading : t.approvals.resubmit}
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={approvalActing}
+                        onClick={() => {
+                          setResubmitComment('');
+                          setResubmitFiles([]);
+                          setResubmitModalOpen(true);
+                        }}
+                      >
+                        {t.approvals.resubmit}
                       </button>
                     </div>
                   )}
@@ -1197,19 +1171,81 @@ export default function SupportTicketsPage() {
           {modifyError && <div className="error-banner">{modifyError}</div>}
           <div className="field">
             <label>{t.approvals.modifyCommentLabel}</label>
-            <textarea rows={3} value={modifyComment} onChange={(e) => setModifyComment(e.target.value)} placeholder={t.approvals.modifyCommentPlaceholder} />
+            <textarea
+              rows={5}
+              value={modifyComment}
+              onChange={(e) => setModifyComment(e.target.value)}
+              placeholder={t.approvals.modifyCommentPlaceholder}
+              style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+            />
+          </div>
+          <div className="field">
+            <label>{t.approvals.attachments}</label>
+            <label className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', width: 'fit-content' }}>
+              <IconPaperclip size={14} /> {t.approvals.addAttachment}
+              <input type="file" multiple style={{ display: 'none' }} onChange={(e) => addModifyFiles(e.target.files)} />
+            </label>
+            {modifyFiles.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                {modifyFiles.map((f, i) => (
+                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                    <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeModifyFile(i)}>
+                      <IconClose size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </Modal>
       )}
 
-      {confirmingTicketResubmit && (
-        <ConfirmDialog
+      {resubmitModalOpen && (
+        <Modal
           title={t.approvals.resubmit}
-          message={t.approvals.resubmitConfirm}
-          confirmLabel={t.approvals.resubmit}
-          onConfirm={confirmTicketResubmit}
-          onCancel={() => setConfirmingTicketResubmit(false)}
-        />
+          onClose={() => setResubmitModalOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="button" disabled={approvalActing} onClick={confirmTicketResubmit}>
+                {approvalActing ? t.common.loading : t.approvals.resubmit}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setResubmitModalOpen(false)}>
+                {t.common.cancel}
+              </button>
+            </>
+          }
+        >
+          <div className="field">
+            <label>{t.approvals.resubmitCommentLabel}</label>
+            <textarea
+              rows={4}
+              value={resubmitComment}
+              onChange={(e) => setResubmitComment(e.target.value)}
+              placeholder={t.approvals.resubmitCommentPlaceholder}
+              style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+            />
+          </div>
+          <div className="field">
+            <label>{t.approvals.attachments}</label>
+            <label className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', width: 'fit-content' }}>
+              <IconPaperclip size={14} /> {t.approvals.addAttachment}
+              <input type="file" multiple style={{ display: 'none' }} onChange={(e) => addResubmitFiles(e.target.files)} />
+            </label>
+            {resubmitFiles.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                {resubmitFiles.map((f, i) => (
+                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                    <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeResubmitFile(i)}>
+                      <IconClose size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
       )}
     </div>
   );
