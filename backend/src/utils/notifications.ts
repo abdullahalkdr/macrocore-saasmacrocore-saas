@@ -8,6 +8,7 @@ interface NotifyRolesInput {
   body?: string;
   link?: string;
   excludeUserId?: string;
+  approvalRequestId?: string;
 }
 
 // Fire-and-forget by design: callers should not await-fail their main action if this
@@ -29,8 +30,8 @@ export async function notifyRoles(input: NotifyRolesInput): Promise<void> {
     );
     for (const row of users.rows) {
       await pool.query(
-        `INSERT INTO notifications (company_id, user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [input.companyId, row.id, input.type, input.title, input.body ?? null, input.link ?? null]
+        `INSERT INTO notifications (company_id, user_id, type, title, body, link, approval_request_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [input.companyId, row.id, input.type, input.title, input.body ?? null, input.link ?? null, input.approvalRequestId ?? null]
       );
     }
   } catch (err) {
@@ -51,6 +52,7 @@ interface NotifyUsersInput {
   body?: string;
   link?: string;
   excludeUserId?: string;
+  approvalRequestId?: string;
 }
 
 // notifyRoles' sibling for when the recipients are already known specific user ids
@@ -63,8 +65,8 @@ export async function notifyUsers(input: NotifyUsersInput): Promise<void> {
     const targets = Array.from(new Set(input.userIds)).filter((id) => id && id !== input.excludeUserId);
     for (const userId of targets) {
       await pool.query(
-        `INSERT INTO notifications (company_id, user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [input.companyId, userId, input.type, input.title, input.body ?? null, input.link ?? null]
+        `INSERT INTO notifications (company_id, user_id, type, title, body, link, approval_request_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [input.companyId, userId, input.type, input.title, input.body ?? null, input.link ?? null, input.approvalRequestId ?? null]
       );
     }
   } catch (err) {

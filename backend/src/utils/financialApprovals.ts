@@ -5,6 +5,7 @@ import { planLevelOf } from '../config/planFeatures';
 import { env } from '../config/env';
 import { notifyRoles, notifyUsers } from './notifications';
 import { usersWithPermission } from './permissions';
+import { generateApprovalRequestNumber } from './sequences';
 
 // MIGRATION_058 — shared helpers for the three single-step financial modules
 // (PAYROLL, PURCHASE_ORDER, EXPENSE) that must now go through approval_requests
@@ -110,10 +111,15 @@ export async function fileApprovalRequest(
     throw new AppError(400, 'Your account is not linked to an employee record — approval requests require a linked employee.');
   }
 
+  // MIGRATION_060 -- human-readable request_number (e.g. APR-2608-0001), shown
+  // everywhere this request appears (notifications, the bell, the Approvals inbox,
+  // this popup's own title) so a reviewer can tell two similar pending requests
+  // from the same employee apart at a glance.
+  const requestNumber = await generateApprovalRequestNumber(companyId);
   const inserted = await db.query(
-    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [companyId, moduleType, referenceId, requesterId]
+    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id, request_number)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [companyId, moduleType, referenceId, requesterId, requestNumber]
   );
   const request = inserted.rows[0];
 
@@ -133,14 +139,14 @@ export async function fileApprovalRequest(
   const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [requesterId]);
   const requesterName = requesterRes.rows[0]?.name || '';
   const label = MODULE_LABEL[moduleType];
-  const title = 'مطلوب اعتماد جديد / New Approval Required';
+  const title = `مطلوب اعتماد جديد #${requestNumber} / New Approval Required #${requestNumber}`;
   const body = label ? `${label.ar} من ${requesterName} / ${label.en} from ${requesterName}` : requesterName;
   const link = '/approvals';
-  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: actingUserId }).catch(() => {});
+  notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, excludeUserId: actingUserId, approvalRequestId: request.id }).catch(() => {});
   const permissionKey = MODULE_APPROVER_PERMISSION[moduleType];
   if (permissionKey) {
     usersWithPermission(companyId, permissionKey)
-      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId: actingUserId }))
+      .then((userIds) => notifyUsers({ companyId, userIds, type: 'approval_pending', title, body, link, excludeUserId: actingUserId, approvalRequestId: request.id }))
       .catch(() => {});
   }
 

@@ -196,7 +196,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     if (action === 'approved' && request.current_step < steps.length) {
       const nextStep = steps.find((s) => s.step_number === request.current_step + 1);
       if (nextStep) {
-        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, nextStep).catch(() => {});
+        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, nextStep, request.id, request.request_number ?? null).catch(() => {});
       }
     }
   } else {
@@ -239,6 +239,16 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     }
   }
 
+  // BUGFIX (stale "pending" notifications) -- MIGRATION_060. A pending-approval
+  // notification used to only clear when the recipient clicked THAT exact
+  // notification (handleClick's own markRead), so resolving the same request from
+  // any other surface (the Approvals Inbox, another eligible approver's own click)
+  // left it stuck "unread" in the bell forever, pointing at an already-resolved
+  // request. Now every notification tied to this approval_request_id is marked read
+  // the moment ANY action resolves it. Best-effort -- never let this break the
+  // response, the decision itself already committed above.
+  await pool.query(`UPDATE notifications SET read_at = NOW() WHERE approval_request_id = $1 AND read_at IS NULL`, [id]).catch(() => {});
+
   await logAudit({
     companyId,
     userId: req.auth!.userId,
@@ -266,6 +276,114 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
 //     "who's eligible" sentence built from MODULE_LABEL + MODULE_APPROVER_PERMISSION
 //     (a specific list of eligible people's names was deliberately left out — see the
 //     product decision this implements — a role description is enough here).
+interface RecordDetailLine {
+  label_ar: string;
+  label_en: string;
+  value: string;
+}
+
+// "Blind Approvals" fix, part 2 (MIGRATION_060) -- getApprovalSummary() used to
+// return workflow data only (steps/log), never the underlying record itself. Pages
+// that already have the row loaded (ExpensesPage, PayrollPage, PurchaseOrdersPage)
+// build their own detailLines from local state and pass them into
+// ApprovalWorkflowModal directly, but ApprovalsInboxPage's eye icon opens the same
+// modal with nothing loaded -- it used to pass detailLines={[]}, so a reviewer
+// clicking the eye saw only Approve/Reject with zero context on what they were
+// deciding. This mirrors each page's own detailLines shape server-side (one small
+// query per module_type) so the Inbox gets the same detail for free, without
+// duplicating four different fetch calls on the frontend. Bilingual per-line labels
+// (not the single "ar / en" combined-string convention notifications use) since
+// ApprovalWorkflowModal already picks step labels the same way via its own
+// lang === 'ar' ? ... : ... pattern -- record_detail follows that same convention.
+async function buildRecordDetail(companyId: string, moduleType: string, referenceId: string): Promise<RecordDetailLine[]> {
+  if (moduleType === 'EXPENSE') {
+    const r = await pool.query(
+      `SELECT e.category, e.amount, e.description, e.expense_date, l.name AS location_name, u.full_name AS created_by_name
+       FROM expenses e
+       LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN users u ON u.id = e.created_by
+       WHERE e.id = $1 AND e.company_id = $2`,
+      [referenceId, companyId]
+    );
+    const row = r.rows[0];
+    if (!row) return [];
+    const lines: RecordDetailLine[] = [
+      { label_ar: 'الفئة', label_en: 'Category', value: row.category || '—' },
+      { label_ar: 'المبلغ', label_en: 'Amount', value: `${Number(row.amount).toFixed(3)} KD` },
+    ];
+    if (row.expense_date) lines.push({ label_ar: 'التاريخ', label_en: 'Date', value: String(row.expense_date).slice(0, 10) });
+    if (row.location_name) lines.push({ label_ar: 'الموقع', label_en: 'Location', value: row.location_name });
+    if (row.description) lines.push({ label_ar: 'الوصف', label_en: 'Description', value: row.description });
+    if (row.created_by_name) lines.push({ label_ar: 'سجّله', label_en: 'Recorded by', value: row.created_by_name });
+    return lines;
+  }
+
+  if (moduleType === 'PAYROLL') {
+    const r = await pool.query(
+      `SELECT p.month_year, p.base_salary, p.total_paid, emp.name AS employee_name
+       FROM payroll p JOIN employees emp ON emp.id = p.employee_id
+       WHERE p.id = $1 AND p.company_id = $2`,
+      [referenceId, companyId]
+    );
+    const row = r.rows[0];
+    if (!row) return [];
+    return [
+      { label_ar: 'الموظف', label_en: 'Employee', value: row.employee_name || '—' },
+      { label_ar: 'الشهر', label_en: 'Month', value: row.month_year || '—' },
+      { label_ar: 'الأساسي', label_en: 'Base', value: `${Number(row.base_salary).toFixed(3)} KD` },
+      { label_ar: 'الصافي', label_en: 'Net', value: `${Number(row.total_paid).toFixed(3)} KD` },
+    ];
+  }
+
+  if (moduleType === 'PURCHASE_ORDER') {
+    const r = await pool.query(
+      `SELECT po.status, po.order_date, po.expected_date, po.notes, s.name AS supplier_name,
+              COALESCE(SUM(poi.qty * poi.unit_price), 0)::float AS total
+       FROM purchase_orders po
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
+       LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
+       WHERE po.id = $1 AND po.company_id = $2
+       GROUP BY po.id, s.name`,
+      [referenceId, companyId]
+    );
+    const row = r.rows[0];
+    if (!row) return [];
+    const poStatusLabel: Record<string, { ar: string; en: string }> = {
+      draft: { ar: 'مسودة', en: 'Draft' },
+      ordered: { ar: 'مطلوب', en: 'Ordered' },
+      received: { ar: 'مستلم', en: 'Received' },
+      cancelled: { ar: 'ملغي', en: 'Cancelled' },
+    };
+    const status = poStatusLabel[row.status] ?? { ar: row.status, en: row.status };
+    const lines: RecordDetailLine[] = [
+      { label_ar: 'المورد', label_en: 'Supplier', value: row.supplier_name || '—' },
+      { label_ar: 'الحالة', label_en: 'Status', value: `${status.ar} / ${status.en}` },
+      { label_ar: 'الإجمالي', label_en: 'Total', value: `${Number(row.total).toFixed(3)} KD` },
+    ];
+    if (row.order_date) lines.push({ label_ar: 'تاريخ الطلب', label_en: 'Order date', value: String(row.order_date).slice(0, 10) });
+    if (row.expected_date) lines.push({ label_ar: 'التاريخ المتوقع', label_en: 'Expected date', value: String(row.expected_date).slice(0, 10) });
+    if (row.notes) lines.push({ label_ar: 'ملاحظات', label_en: 'Notes', value: row.notes });
+    return lines;
+  }
+
+  if (moduleType === 'ITSM_TICKET') {
+    const r = await pool.query(
+      `SELECT subject, description, priority, category FROM support_tickets WHERE id = $1 AND company_id = $2`,
+      [referenceId, companyId]
+    );
+    const row = r.rows[0];
+    if (!row) return [];
+    return [
+      { label_ar: 'الموضوع', label_en: 'Subject', value: row.subject || '—' },
+      { label_ar: 'الأولوية', label_en: 'Priority', value: row.priority || '—' },
+      { label_ar: 'التصنيف', label_en: 'Category', value: row.category || '—' },
+      { label_ar: 'الوصف', label_en: 'Description', value: row.description || '—' },
+    ];
+  }
+
+  return [];
+}
+
 export const getApprovalSummary = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { module_type, reference_id } = req.query;
@@ -278,7 +396,7 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
   }
 
   const reqResult = await pool.query(
-    `SELECT ar.id, ar.status, ar.current_step, ar.requester_id, e.name AS requester_name, e.job_role AS requester_job_role
+    `SELECT ar.id, ar.status, ar.current_step, ar.requester_id, ar.request_number, e.name AS requester_name, e.job_role AS requester_job_role
      FROM approval_requests ar
      JOIN employees e ON e.id = ar.requester_id
      WHERE ar.company_id = $1 AND ar.module_type = $2 AND ar.reference_id = $3
@@ -337,11 +455,14 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
     }
   }
 
+  const recordDetail = await buildRecordDetail(companyId, module_type, reference_id);
+
   res.status(200).json({
     success: true,
     summary: {
       id: request.id,
       module_type,
+      request_number: request.request_number ?? null,
       status: request.status,
       current_step: request.current_step,
       total_steps: steps.length,
@@ -350,6 +471,7 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
       steps,
       log: logResult.rows,
       is_pending_approver: isPendingApprover,
+      record_detail: recordDetail,
     },
   });
 });

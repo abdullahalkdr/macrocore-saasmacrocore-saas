@@ -1,5 +1,6 @@
 import { pool } from '../db/pool';
 import { notifyRoles, notifyUsers } from './notifications';
+import { generateApprovalRequestNumber } from './sequences';
 
 // MIGRATION_056 — the ITSM/Helpdesk ticketing module's 3-step approval chain, shared
 // between approvals.controller.ts (the generic inbox: listPending/actionRequest) and
@@ -118,7 +119,9 @@ export async function notifyItsmStepPending(
   companyId: string,
   ticketId: string,
   requesterId: string,
-  step: WorkflowStepDef
+  step: WorkflowStepDef,
+  approvalRequestId: string,
+  requestNumber: string | null
 ): Promise<void> {
   try {
     const eligibility = await resolveItsmStepEligibility(companyId, requesterId, ticketId, step);
@@ -131,16 +134,17 @@ export async function notifyItsmStepPending(
     const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [requesterId]);
     const requesterName = requesterRes.rows[0]?.name || '';
 
-    const title = 'مطلوب اعتماد جديد / New Approval Required';
+    const numberSuffix = requestNumber ? ` #${requestNumber}` : '';
+    const title = `مطلوب اعتماد جديد${numberSuffix} / New Approval Required${numberSuffix}`;
     const body = `تذكرة دعم تقني من ${requesterName} — ${step.step_label} / IT support ticket from ${requesterName} — ${
       step.step_label_en || step.step_label
     }`;
     const link = '/approvals';
 
     if (eligibility.userIds.length > 0) {
-      await notifyUsers({ companyId, userIds: eligibility.userIds, type: 'approval_pending', title, body, link });
+      await notifyUsers({ companyId, userIds: eligibility.userIds, type: 'approval_pending', title, body, link, approvalRequestId });
     } else if (eligibility.allowAnyManager) {
-      await notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link });
+      await notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, approvalRequestId });
     }
   } catch {
     // Best-effort — never let a notification failure break ticket creation or an approval action.
@@ -155,14 +159,19 @@ export async function createItsmApprovalChain(companyId: string, ticketId: strin
   const employeeRes = await pool.query('SELECT employee_id FROM users WHERE id = $1', [creatorUserId]);
   const requesterId = employeeRes.rows[0]?.employee_id;
   if (!requesterId) return;
-  await pool.query(
-    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id) VALUES ($1, 'ITSM_TICKET', $2, $3)`,
-    [companyId, ticketId, requesterId]
+  // MIGRATION_060 -- same human-readable numbering financialApprovals.ts's
+  // fileApprovalRequest() gives the single-step modules, so an ITSM ticket's
+  // approval chain is identifiable the same way everywhere (bell, inbox, popup).
+  const requestNumber = await generateApprovalRequestNumber(companyId);
+  const inserted = await pool.query(
+    `INSERT INTO approval_requests (company_id, module_type, reference_id, requester_id, request_number) VALUES ($1, 'ITSM_TICKET', $2, $3, $4) RETURNING id`,
+    [companyId, ticketId, requesterId, requestNumber]
   );
+  const requestId = inserted.rows[0].id;
 
   const steps = await getWorkflowSteps('ITSM_TICKET');
   const step1 = steps.find((s) => s.step_number === 1);
-  if (step1) await notifyItsmStepPending(companyId, ticketId, requesterId, step1);
+  if (step1) await notifyItsmStepPending(companyId, ticketId, requesterId, step1, requestId, requestNumber);
 }
 
 // Ticket-resolution lock (Step 2 of the upgrade): returns the still-open

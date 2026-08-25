@@ -63,3 +63,18 @@ export async function generateTicketNumber(companyId: string, departmentCode: st
   const seq = await generateNextSequence(companyId, prefix);
   return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
+
+// Approval-request numbering: APR-[YYMM]-[XXXX], e.g. APR-2608-0001. Same generic
+// counter as generateTicketNumber, no per-department prefix needed here -- a
+// company's approval requests span every module_type (payroll/PO/expense/ITSM
+// ticket) in one shared numbered feed, so reviewers can match a notification in the
+// bell to the right row in the Approvals inbox even when the same employee has
+// filed more than one similar request.
+export async function generateApprovalRequestNumber(companyId: string): Promise<string> {
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const prefix = `APR-${yy}${mm}`;
+  const seq = await generateNextSequence(companyId, prefix);
+  return `${prefix}-${String(seq).padStart(4, '0')}`;
+}
