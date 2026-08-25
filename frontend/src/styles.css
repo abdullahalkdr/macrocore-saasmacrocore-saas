@@ -609,21 +609,32 @@ tr:hover .print-btn { opacity: 1; }
 .nav-accordion-head.open .nav-accordion-toggle { color: inherit; }
 
 /* The expanded sublist itself: sits directly under the header in normal flow (no
-   position:fixed/absolute at all), a lightly-bordered/grouped block of uniform rows —
-   matches the reference's consistent same-size stacked rows. margin-inline-start
-   keeps the indentation RTL-correct (Arabic flips it to the right automatically). */
+   position:fixed/absolute at all). Per Abdullah's follow-up ("حول الاقسام في القائمة
+   الفرعية حولها اطار جميل ونقطة بجانب كل قسم") — wrapped in an actual bordered,
+   rounded-corner card (var(--surface)/var(--border), same as every other light card
+   in this app), not just a left indent line, so it reads as one grouped frame the way
+   the 3R reference's white box floats over its dark-red rail. overflow:hidden lets
+   the box's own border-radius clip the first/last row's corners cleanly; a hairline
+   border-top on every row but the first stands in for a divider inside that frame.
+   margin-inline-start keeps the indentation RTL-correct (Arabic flips it to the
+   right automatically). */
 .nav-accordion-sublist {
-  display: flex; flex-direction: column; gap: 1px;
-  margin: 2px 0 4px; padding: 4px 0;
+  display: flex; flex-direction: column;
+  margin: 4px 0 6px;
   margin-inline-start: 14px;
-  border-inline-start: 2px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
 }
 .nav-accordion-sublist a, .nav-accordion-sublist button {
   color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; font: inherit; font-size: 12px; font-weight: 600;
-  background: none; border: none; text-align: start; width: 100%; border-radius: 6px;
-  min-height: 30px;
+  padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 600;
+  background: none; border: none; border-top: 1px solid var(--border);
+  text-align: start; width: 100%;
+  min-height: 32px;
 }
+.nav-accordion-sublist a:first-child, .nav-accordion-sublist button:first-child { border-top: none; }
 /* Small bullet before each subitem label, per the 3R reference's bulleted rows. */
 .nav-accordion-sublist a::before, .nav-accordion-sublist button::before {
   content: ''; width: 4px; height: 4px; border-radius: 50%; background: currentColor;
@@ -631,7 +642,7 @@ tr:hover .print-btn { opacity: 1; }
 }
 .nav-accordion-sublist a:hover, .nav-accordion-sublist button:hover { background: var(--surface-alt); }
 .nav-accordion-sublist a.active { background: var(--amber-50); color: var(--amber-700); }
-.nav-accordion-divider { border-top: 1px solid var(--border); margin: 5px 8px; }
+.nav-accordion-divider { border-top: 1px solid var(--border) !important; margin: 0; }
 
 @media (max-width: 860px) {
   /* Tablet width (e.g. iPad portrait): shrink a notch from the desktop/mouse default. */
