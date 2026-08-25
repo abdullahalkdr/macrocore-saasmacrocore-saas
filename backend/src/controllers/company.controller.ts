@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { env } from '../config/env';
 
 const COMPANY_SELECT_FIELDS = `
   id, name, plan, subscription_status, trial_start_date, trial_end_date, created_at,
@@ -25,7 +26,17 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
   const usersCount = await pool.query('SELECT COUNT(*)::int AS n FROM users WHERE company_id = $1', [companyId]);
   const locationsCount = await pool.query('SELECT COUNT(*)::int AS n FROM locations WHERE company_id = $1', [companyId]);
 
-  res.status(200).json({ ...company, users_count: usersCount.rows[0].n, branches_count: locationsCount.rows[0].n });
+  // GLOBAL UNLOCK — lets Layout.tsx (and anywhere else reading /company/me) know the
+  // backend is running with plan-tier gating suspended (env.BYPASS_PLAN_GATING, dev/test
+  // only), so it can drop locked badges/hidden menus that would otherwise contradict a
+  // backend that no longer enforces them. Never derived from `company.plan` itself —
+  // this reflects the server's runtime mode, not this one tenant's billing state.
+  res.status(200).json({
+    ...company,
+    users_count: usersCount.rows[0].n,
+    branches_count: locationsCount.rows[0].n,
+    plan_gating_bypassed: env.BYPASS_PLAN_GATING,
+  });
 });
 
 const STRING_FIELDS = [

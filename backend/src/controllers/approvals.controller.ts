@@ -5,7 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
-import { MODULE_APPROVER_PERMISSION, fileApprovalRequest } from '../utils/financialApprovals';
+import { MODULE_APPROVER_PERMISSION, fileApprovalRequest, hasOtherEligibleApprover } from '../utils/financialApprovals';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
 // (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
@@ -138,7 +138,19 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   const myId = await myEmployeeId(req.auth!.userId);
   if (!myId) throw new AppError(400, 'Your account is not linked to an employee record.');
   if (myId === request.requester_id) {
-    throw new AppError(403, 'Maker-checker: you cannot approve or reject your own request.');
+    // GLOBAL UNLOCK — self-approval safety valve (financialApprovals.ts's
+    // hasOtherEligibleApprover). Universal Maker-Checker (isCompanyGoldPlus() now
+    // always true under env.BYPASS_PLAN_GATING) can strand a single-employee company
+    // with a pending request nobody else can ever act on. Deliberately narrow: only
+    // the company's admin, only for the single-step financial modules (never
+    // ITSM_TICKET — its own multi-step eligibility model is untouched), and only when
+    // no one else in the company is actually eligible to act instead.
+    const isAdmin = req.auth!.role === 'admin';
+    const eligibleForSelfApproval =
+      isAdmin && request.module_type !== 'ITSM_TICKET' && !(await hasOtherEligibleApprover(companyId, request.module_type, myId));
+    if (!eligibleForSelfApproval) {
+      throw new AppError(403, 'Maker-checker: you cannot approve or reject your own request.');
+    }
   }
 
   const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';

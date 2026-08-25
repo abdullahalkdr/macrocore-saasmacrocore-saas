@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { AppError } from './errorHandler';
 import { asyncHandler } from '../utils/asyncHandler';
 import { planLevelOf, PLAN_NAMES } from '../config/planFeatures';
+import { env } from '../config/env';
 
 // Runs after requireAuth + requireActiveSubscription. Real, server-side feature
 // gating — per docs/macrocore-خارطة-طريق.md's own warning, hiding a nav link on the
@@ -11,6 +12,12 @@ import { planLevelOf, PLAN_NAMES } from '../config/planFeatures';
 // "forbidden", so the frontend can surface something a customer actually understands.
 export function requirePlanLevel(minLevel: number, featureLabel: string) {
   return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+    // GLOBAL UNLOCK (dev/test only, env.BYPASS_PLAN_GATING — see env.ts and
+    // .env.example) — every silver()/gold() route in app.ts funnels through this one
+    // function, so short-circuiting here is enough to unlock all of them at once
+    // without touching app.ts, the DB schema, or any company's stored plan value.
+    if (env.BYPASS_PLAN_GATING) return next();
+
     const companyId = req.auth?.companyId;
     if (!companyId) return next();
 

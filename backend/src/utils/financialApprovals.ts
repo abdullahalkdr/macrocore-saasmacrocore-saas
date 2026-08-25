@@ -1,6 +1,7 @@
 import { pool } from '../db/pool';
 import { AppError } from '../middleware/errorHandler';
 import { planLevelOf } from '../config/planFeatures';
+import { env } from '../config/env';
 import { notifyRoles, notifyUsers } from './notifications';
 import { usersWithPermission } from './permissions';
 
@@ -17,9 +18,18 @@ import { usersWithPermission } from './permissions';
 // planLevelOf(company.plan) >= GOLD_LEVEL itself (payroll.controller.ts's pay() is
 // the one exception — /api/payroll is already 100% Gold-gated, so that check is
 // redundant there). See MIGRATION_058's own header for the full reasoning.
+//
+// GLOBAL UNLOCK — under env.BYPASS_PLAN_GATING (dev/test only) this always returns
+// true, which is exactly what "Universal Maker-Checker Enforcement" needs: every
+// company, regardless of its real stored plan, now goes through fileApprovalRequest()
+// for Payroll/PO/Expenses. Safe to do unconditionally here because requirePlan.ts's
+// bypass means /api/approvals is reachable by every company too under the same flag —
+// the exact "stranded pending_approval" trap this Gold-only gate exists to avoid never
+// occurs while both bypasses are active together.
 export const GOLD_LEVEL = 3;
 
 export async function isCompanyGoldPlus(companyId: string): Promise<boolean> {
+  if (env.BYPASS_PLAN_GATING) return true;
   const r = await pool.query('SELECT plan FROM companies WHERE id = $1', [companyId]);
   return planLevelOf(r.rows[0]?.plan) >= GOLD_LEVEL;
 }
@@ -105,4 +115,44 @@ export async function fileApprovalRequest(
   }
 
   return request;
+}
+
+// GLOBAL UNLOCK — self-approval safety valve. Universal Maker-Checker (see
+// isCompanyGoldPlus() above) means a single-employee company can now file a
+// PAYROLL/PURCHASE_ORDER/EXPENSE approval request with genuinely no one else in the
+// company eligible to resolve it — the requester is the only admin, no manager exists,
+// and no one else individually/by-job-role holds the module's approver permission
+// either. Without an escape hatch that record sits pending forever. approvals.controller.ts's
+// actionRequest() calls this ONLY when the actor is also the requester (maker-checker
+// would otherwise 403 immediately) and only for these single-step financial modules —
+// ITSM_TICKET's multi-step chain is intentionally never touched, per its own separate
+// eligibility model in itsmApprovals.ts.
+//
+// "Other eligible approver" mirrors listPending()'s own single-step eligibility check
+// in approvals.controller.ts: any admin/manager, or any individual/job-role holder of
+// MODULE_APPROVER_PERMISSION[moduleType] — excluding the requester themselves. Only
+// employee-linked users count, since actionRequest() already requires a linked
+// employee record to act on anything at all.
+export async function hasOtherEligibleApprover(companyId: string, moduleType: string, requesterEmployeeId: string): Promise<boolean> {
+  const managers = await pool.query(
+    `SELECT 1 FROM users
+     WHERE company_id = $1 AND employee_id IS NOT NULL AND employee_id <> $2 AND role IN ('admin', 'manager')
+     LIMIT 1`,
+    [companyId, requesterEmployeeId]
+  );
+  if (managers.rows.length > 0) return true;
+
+  const permissionKey = MODULE_APPROVER_PERMISSION[moduleType];
+  if (!permissionKey) return false;
+
+  const holderUserIds = await usersWithPermission(companyId, permissionKey);
+  if (holderUserIds.length === 0) return false;
+
+  const others = await pool.query(
+    `SELECT 1 FROM users
+     WHERE company_id = $1 AND employee_id IS NOT NULL AND employee_id <> $2 AND id = ANY($3::uuid[])
+     LIMIT 1`,
+    [companyId, requesterEmployeeId, holderUserIds]
+  );
+  return others.rows.length > 0;
 }

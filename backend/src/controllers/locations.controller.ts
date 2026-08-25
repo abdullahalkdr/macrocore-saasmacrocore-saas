@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { isForeignKeyViolation } from '../utils/dbErrors';
 import { planLevelOf, BRONZE_LOCATION_LIMIT } from '../config/planFeatures';
+import { env } from '../config/env';
 
 // Enterprise Facility Management upgrade (MIGRATION_050) — kiosk/warehouse were the
 // only two types this app ever created; retail/dark_kitchen/head_office added to match
@@ -63,8 +64,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   // is priced for a single kiosk/branch. This is a quantity cap rather than a route
   // gate: every plan, Bronze included, still needs to create its one location to open
   // a shift at all (see shifts.controller.ts open()).
+  // GLOBAL UNLOCK (dev/test only, env.BYPASS_PLAN_GATING) — skip the cap entirely,
+  // same "act as if every company is on the ultimate tier" rule requirePlan.ts applies.
   const companyResult = await pool.query(`SELECT plan FROM companies WHERE id = $1`, [companyId]);
-  if (planLevelOf(companyResult.rows[0]?.plan) < 2) {
+  if (!env.BYPASS_PLAN_GATING && planLevelOf(companyResult.rows[0]?.plan) < 2) {
     const countResult = await pool.query(`SELECT COUNT(*)::int AS n FROM locations WHERE company_id = $1`, [companyId]);
     if (countResult.rows[0].n >= BRONZE_LOCATION_LIMIT) {
       throw new AppError(

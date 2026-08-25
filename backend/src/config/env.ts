@@ -25,4 +25,13 @@ export const env = {
   RESEND_API_KEY: process.env.RESEND_API_KEY || '',
   EMAIL_FROM: process.env.EMAIL_FROM || 'macrocore <hello@macrocore.io>',
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
+
+  // GLOBAL UNLOCK (dev/test only — see backend/.env.example's own warning). When true,
+  // requirePlan.ts's requirePlanLevel() always calls next(), financialApprovals.ts's
+  // isCompanyGoldPlus() always returns true, and locations.controller.ts's Bronze
+  // single-location cap is skipped — every company behaves as if it were on the
+  // ultimate tier, without touching the DB schema or any company's stored `plan`
+  // value. Defaults to false (off) so this can never accidentally reach production —
+  // it must be explicitly set to 'true' in a .env file to activate.
+  BYPASS_PLAN_GATING: process.env.BYPASS_PLAN_GATING === 'true',
 };

@@ -108,9 +108,17 @@ export default function Layout() {
   // see app.ts) means the sidebar reflects reality within one page load/refresh
   // instead of requiring a re-login.
   const [livePlan, setLivePlan] = useState<string | null>(company?.plan ?? null);
+  // GLOBAL UNLOCK — mirrors the backend's env.BYPASS_PLAN_GATING (dev/test only, see
+  // requirePlan.ts/company.controller.ts). When true, the backend no longer enforces
+  // any plan-tier gate, so keeping the sidebar's locked badges/upgrade-modal prompts up
+  // would be actively misleading — every item they'd block is actually reachable.
+  const [planGatingBypassed, setPlanGatingBypassed] = useState(false);
   useEffect(() => {
-    get<{ plan: string }>('/company/me')
-      .then((r) => setLivePlan(r.plan))
+    get<{ plan: string; plan_gating_bypassed?: boolean }>('/company/me')
+      .then((r) => {
+        setLivePlan(r.plan);
+        setPlanGatingBypassed(!!r.plan_gating_bypassed);
+      })
       .catch(() => {});
   }, []);
 
@@ -147,7 +155,10 @@ export default function Layout() {
   const [pendingApprovals, setPendingApprovals] = useState(0);
   useEffect(() => {
     if (!isManagerRole) return;
-    if (planLevelOf(livePlan ?? company?.plan) < 3) return;
+    // GLOBAL UNLOCK — /api/approvals is reachable by every company while
+    // planGatingBypassed is true (requirePlan.ts), so the badge should poll
+    // regardless of the company's real stored plan level.
+    if (!planGatingBypassed && planLevelOf(livePlan ?? company?.plan) < 3) return;
     function loadPendingApprovals() {
       get<{ requests: unknown[] }>('/approvals/pending')
         .then((r) => setPendingApprovals(r.requests.length))
@@ -156,7 +167,7 @@ export default function Layout() {
     loadPendingApprovals();
     const interval = setInterval(loadPendingApprovals, 60000);
     return () => clearInterval(interval);
-  }, [isManagerRole, livePlan, company?.plan]);
+  }, [isManagerRole, livePlan, company?.plan, planGatingBypassed]);
 
   // Grouped like CornLab's activeNavStructure(): a labelled section per work area
   // instead of one flat list.
@@ -384,7 +395,10 @@ export default function Layout() {
 
   function renderNavItem(l: NavItem) {
     const minPlan = 'minPlan' in l ? l.minPlan : undefined;
-    const locked = !!minPlan && companyPlanLevel < minPlan;
+    // GLOBAL UNLOCK — nothing is locked while the backend has plan gating suspended;
+    // showing a lock badge for something the API will actually let you through to
+    // would be a straight-up lie to the user.
+    const locked = !planGatingBypassed && !!minPlan && companyPlanLevel < minPlan;
     // Only ever badge a LOCKED item — once the plan covers it, the item looks exactly
     // like any other nav link. A permanent "this is a Silver feature" tag even after
     // upgrading is exactly what read as "nothing changed" when Abdullah tested this.
