@@ -122,8 +122,14 @@ export async function notifyItsmStepPending(
 ): Promise<void> {
   try {
     const eligibility = await resolveItsmStepEligibility(companyId, requesterId, ticketId, step);
-    const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
-    const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
+    // BUGFIX — same as financialApprovals.ts's fileApprovalRequest(): employees has no
+    // name_en column (that's a real column on other tables — raw_materials, products,
+    // departments, job_roles — never on employees). Selecting it threw a raw Postgres
+    // error every time this ran; caught here by this function's own try/catch, so it
+    // never broke ticket creation, but it silently killed every ITSM step-pending
+    // notification. Never surfaced as a visible error, so it went unnoticed.
+    const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [requesterId]);
+    const requesterName = requesterRes.rows[0]?.name || '';
 
     const title = 'مطلوب اعتماد جديد / New Approval Required';
     const body = `تذكرة دعم تقني من ${requesterName} — ${step.step_label} / IT support ticket from ${requesterName} — ${

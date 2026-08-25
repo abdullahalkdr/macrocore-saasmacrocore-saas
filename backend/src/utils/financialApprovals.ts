@@ -120,8 +120,18 @@ export async function fileApprovalRequest(
   // Notifications are best-effort and read/write nothing this transaction touches —
   // always go through the shared pool (fire-and-forget, unawaited) regardless of
   // whether this call is running inside a caller's transaction.
-  const requesterRes = await pool.query('SELECT name, name_en FROM employees WHERE id = $1', [requesterId]);
-  const requesterName = requesterRes.rows[0]?.name_en || requesterRes.rows[0]?.name || '';
+  //
+  // BUGFIX (Server error on every Gold+/bypassed expense, payroll, or PO submission) —
+  // this used to SELECT a name_en column that has never existed on `employees` (it's a
+  // real column on raw_materials/products/departments/job_roles, never on employees —
+  // see DATABASE_SCHEMA.sql). That threw a raw, uncaught Postgres "column does not
+  // exist" error (not an AppError), which errorHandler.ts's catch-all turns into a
+  // generic 500 "Server error" — this call is NOT wrapped in a try/catch, so it took
+  // the whole request down with it. Below Gold tier / before Global Unlock this path
+  // was never actually exercised (isCompanyGoldPlus() was false, so this function was
+  // never called from expenses/payroll/PO), which is why it went unnoticed until now.
+  const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [requesterId]);
+  const requesterName = requesterRes.rows[0]?.name || '';
   const label = MODULE_LABEL[moduleType];
   const title = 'مطلوب اعتماد جديد / New Approval Required';
   const body = label ? `${label.ar} من ${requesterName} / ${label.en} from ${requesterName}` : requesterName;
