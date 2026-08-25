@@ -61,6 +61,14 @@
   --input-bg: var(--stone-700);
 }
 
+/* NotificationsBell.tsx's unread-count badge — a quick pop-in when the count first
+   renders/changes, matching the small "bounce" an iOS-style badge gets instead of
+   just appearing flat. */
+@keyframes notif-badge-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); transition: background .15s, color .15s; }
 /* Dropdowns use the same bold weight as headings/labels project-wide (not the regular

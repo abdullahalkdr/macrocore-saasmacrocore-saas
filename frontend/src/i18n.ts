@@ -1774,6 +1774,11 @@ const en = {
     title: 'Notifications',
     markAllRead: 'Mark all as read',
     empty: 'No notifications yet.',
+    emptyHint: "You're all caught up.",
+    justNow: 'Just now',
+    minutesAgo: (n: number) => (n === 1 ? 'A minute ago' : `${n} minutes ago`),
+    hoursAgo: (n: number) => (n === 1 ? 'An hour ago' : `${n} hours ago`),
+    daysAgo: (n: number) => (n === 1 ? 'Yesterday' : `${n} days ago`),
   },
   account: {
     title: 'Settings',
@@ -3930,6 +3935,11 @@ const ar: typeof en = {
     title: 'الإشعارات',
     markAllRead: 'تعليم الكل كمقروء',
     empty: 'ما فيه إشعارات بعد.',
+    emptyHint: 'كل شي تمام، ما عليك شي معلّق.',
+    justNow: 'الآن',
+    minutesAgo: (n: number) => (n === 1 ? 'قبل دقيقة' : n === 2 ? 'قبل دقيقتين' : n <= 10 ? `قبل ${n} دقايق` : `قبل ${n} دقيقة`),
+    hoursAgo: (n: number) => (n === 1 ? 'قبل ساعة' : n === 2 ? 'قبل ساعتين' : n <= 10 ? `قبل ${n} ساعات` : `قبل ${n} ساعة`),
+    daysAgo: (n: number) => (n === 1 ? 'أمس' : n === 2 ? 'قبل يومين' : n <= 10 ? `قبل ${n} أيام` : `قبل ${n} يوم`),
   },
   account: {
     title: 'الإعدادات',
