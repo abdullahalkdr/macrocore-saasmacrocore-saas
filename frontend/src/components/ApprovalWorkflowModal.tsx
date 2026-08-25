@@ -62,6 +62,10 @@ interface ApprovalSummary {
   steps: ApprovalStepDef[];
   log: ApprovalLogEntry[];
   is_pending_approver: boolean;
+  // MIGRATION_061 -- true only for the maker themselves, only while the request is
+  // sitting "with them" (status === 'returned'). Drives the returned-banner +
+  // Resubmit button below.
+  can_resubmit: boolean;
   // Server-computed fallback for callers that don't already have the record loaded
   // (ApprovalsInboxPage passes detailLines={[]} for exactly this reason) -- see
   // approvals.controller.ts's buildRecordDetail().
@@ -108,6 +112,13 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingReject, setConfirmingReject] = useState(false);
+  // MIGRATION_061 — "Modify" (Return for Changes): a separate flow from Approve's
+  // optional comment, since here the comment is mandatory (the whole point is
+  // telling the maker what to fix). "Resubmit" needs only a plain confirm — the
+  // maker isn't leaving a note, they're just sending their fix back.
+  const [modifying, setModifying] = useState(false);
+  const [modifyComment, setModifyComment] = useState('');
+  const [confirmingResubmit, setConfirmingResubmit] = useState(false);
 
   function loadSummary() {
     setLoading(true);
@@ -125,7 +136,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleType, referenceId]);
 
-  async function submitAction(action: 'approved' | 'rejected', comments?: string) {
+  async function submitAction(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string) {
     if (!summary) return;
     setActing(true);
     setActionError(null);
@@ -133,6 +144,8 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
       await post(`/approvals/${summary.id}/action`, { action, comments: comments?.trim() || undefined });
       setApproving(false);
       setComment('');
+      setModifying(false);
+      setModifyComment('');
       loadSummary();
       onActioned?.();
     } catch (err) {
@@ -151,6 +164,23 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
     submitAction('rejected');
   }
 
+  function confirmModify() {
+    if (!modifyComment.trim()) {
+      setActionError(t.approvals.modifyCommentRequired);
+      return;
+    }
+    submitAction('returned', modifyComment);
+  }
+
+  function handleResubmit() {
+    setConfirmingResubmit(true);
+  }
+
+  function confirmResubmit() {
+    setConfirmingResubmit(false);
+    submitAction('resubmitted');
+  }
+
   function stepLabel(s: ApprovalStepDef) {
     return lang === 'ar' ? s.step_label : s.step_label_en || s.step_label;
   }
@@ -159,6 +189,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
     if (status === 'approved') return <Tag color="green">{t.approvals.statusApproved}</Tag>;
     if (status === 'rejected') return <Tag color="red">{t.approvals.statusRejected}</Tag>;
     if (status === 'cancelled') return <Tag color="gray">{t.approvals.statusCancelled}</Tag>;
+    if (status === 'returned') return <Tag color="amber">{t.approvals.statusReturned}</Tag>;
     return <Tag color="amber">{t.approvals.statusPending}</Tag>;
   }
 
@@ -200,8 +231,17 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
           ? t.approvals.statusApproved
           : summary.status === 'rejected'
             ? t.approvals.statusRejected
-            : t.approvalWorkflow.finalDecisionLabel,
-      state: summary.status === 'approved' ? 'done' : summary.status === 'rejected' ? 'rejected' : 'upcoming',
+            : summary.status === 'returned'
+              ? t.approvals.statusReturned
+              : t.approvalWorkflow.finalDecisionLabel,
+      state:
+        summary.status === 'approved'
+          ? 'done'
+          : summary.status === 'rejected'
+            ? 'rejected'
+            : summary.status === 'returned'
+              ? 'current'
+              : 'upcoming',
     });
   }
 
@@ -288,16 +328,22 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
             <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
               {actionError && <div className="error-banner">{actionError}</div>}
               <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>{t.approvalWorkflow.yourTurnLabel}</div>
-              {!approving ? (
-                <div style={{ display: 'flex', gap: 6 }}>
+              {!approving && !modifying ? (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={() => setApproving(true)}>
                     {t.approvals.approve}
+                  </button>
+                  {/* MIGRATION_061 — "Modify" sits between Approve and Reject: the
+                      approver's third option, sending the request back to the maker
+                      for changes instead of an outright accept/decline. */}
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={acting} onClick={() => setModifying(true)}>
+                    {t.approvals.modify}
                   </button>
                   <button className="btn btn-danger btn-sm" type="button" disabled={acting} onClick={handleReject}>
                     {t.approvals.reject}
                   </button>
                 </div>
-              ) : (
+              ) : approving ? (
                 <div>
                   <div className="field">
                     <label>{t.approvals.commentLabel}</label>
@@ -312,7 +358,59 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                     </button>
                   </div>
                 </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.approvals.modifyConfirmTitle}</div>
+                  <div className="field">
+                    <label>{t.approvals.modifyCommentLabel}</label>
+                    <textarea rows={2} value={modifyComment} onChange={(e) => setModifyComment(e.target.value)} placeholder={t.approvals.modifyCommentPlaceholder} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={confirmModify}>
+                      {acting ? t.common.loading : t.approvals.confirmModify}
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      type="button"
+                      disabled={acting}
+                      onClick={() => {
+                        setModifying(false);
+                        setModifyComment('');
+                        setActionError(null);
+                      }}
+                    >
+                      {t.common.cancel}
+                    </button>
+                  </div>
+                </div>
               )}
+            </div>
+          )}
+
+          {/* MIGRATION_061 — the maker's own side of "Return for Changes": shown
+              only to them (can_resubmit is server-computed from viewer identity +
+              status === 'returned'), regardless of whether they'd also be the
+              pending approver on some other request. */}
+          {summary.can_resubmit && (
+            <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+              {actionError && <div className="error-banner">{actionError}</div>}
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>{t.approvals.returnedBannerLabel}</div>
+                <div style={{ fontSize: 13 }}>
+                  {[...summary.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
+                </div>
+              </div>
+              <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={handleResubmit}>
+                {acting ? t.common.loading : t.approvals.resubmit}
+              </button>
             </div>
           )}
         </>
@@ -325,6 +423,15 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
         confirmLabel={t.approvals.reject}
         onConfirm={confirmReject}
         onCancel={() => setConfirmingReject(false)}
+      />
+    )}
+    {confirmingResubmit && (
+      <ConfirmDialog
+        title={t.approvals.resubmit}
+        message={t.approvals.resubmitConfirm}
+        confirmLabel={t.approvals.resubmit}
+        onConfirm={confirmResubmit}
+        onCancel={() => setConfirmingResubmit(false)}
       />
     )}
     </Fragment>

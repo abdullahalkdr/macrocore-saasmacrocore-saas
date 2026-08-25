@@ -64,12 +64,16 @@ interface ApprovalLogEntry {
 }
 interface ItsmApprovalSummary {
   id: string;
+  request_number: string | null;
   status: string;
   current_step: number;
   total_steps: number;
   steps: ApprovalStepDef[];
   log: ApprovalLogEntry[];
   is_pending_approver: boolean;
+  // MIGRATION_061 -- true only for the ticket's own requester, only while the
+  // request is sitting "with them" (status === 'returned').
+  can_resubmit: boolean;
 }
 interface TicketDetail extends Ticket {
   description: string;
@@ -528,8 +532,14 @@ export default function SupportTicketsPage() {
   const [approvalComment, setApprovalComment] = useState('');
   const [approvalActing, setApprovalActing] = useState(false);
   const [confirmingTicketReject, setConfirmingTicketReject] = useState(false);
+  // MIGRATION_061 — "Modify" (Return for Changes) + the requester's own "Resubmit",
+  // same shape as ApprovalWorkflowModal.tsx's own pair of flows.
+  const [modifyCommentOpen, setModifyCommentOpen] = useState(false);
+  const [modifyComment, setModifyComment] = useState('');
+  const [modifyError, setModifyError] = useState<string | null>(null);
+  const [confirmingTicketResubmit, setConfirmingTicketResubmit] = useState(false);
 
-  async function submitTicketApproval(action: 'approved' | 'rejected', comments?: string) {
+  async function submitTicketApproval(action: 'approved' | 'rejected' | 'returned' | 'resubmitted', comments?: string) {
     if (!detail?.approval) return;
     setApprovalActing(true);
     setError(null);
@@ -537,6 +547,8 @@ export default function SupportTicketsPage() {
       await post(`/approvals/${detail.approval.id}/action`, { action, comments: comments?.trim() || undefined });
       setApprovalCommentOpen(false);
       setApprovalComment('');
+      setModifyCommentOpen(false);
+      setModifyComment('');
       if (openId) openTicket(openId);
       load();
     } catch (err) {
@@ -555,9 +567,29 @@ export default function SupportTicketsPage() {
     submitTicketApproval('rejected');
   }
 
+  function confirmTicketModify() {
+    if (!modifyComment.trim()) {
+      setModifyError(t.approvals.modifyCommentRequired);
+      return;
+    }
+    setModifyError(null);
+    submitTicketApproval('returned', modifyComment);
+  }
+
+  function handleTicketResubmit() {
+    setConfirmingTicketResubmit(true);
+  }
+
+  function confirmTicketResubmit() {
+    setConfirmingTicketResubmit(false);
+    submitTicketApproval('resubmitted');
+  }
+
   function approvalStatusTag(status: string) {
     if (status === 'approved') return <Tag color="green">{t.approvals.statusApproved}</Tag>;
     if (status === 'rejected') return <Tag color="red">{t.approvals.statusRejected}</Tag>;
+    if (status === 'returned') return <Tag color="amber">{t.approvals.statusReturned}</Tag>;
+    if (status === 'resubmitted') return <Tag color="amber">{t.approvals.resubmit}</Tag>;
     return <Tag color="amber">{t.approvals.statusPending}</Tag>;
   }
 
@@ -746,7 +778,7 @@ export default function SupportTicketsPage() {
                       <div className="muted" style={{ fontSize: 12, marginBottom: 8, fontWeight: 600 }}>
                         {t.support.approvalYourTurn}
                       </div>
-                      <div style={{ display: 'flex', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         <button
                           className="btn btn-primary btn-sm"
                           disabled={approvalActing}
@@ -757,11 +789,50 @@ export default function SupportTicketsPage() {
                         >
                           {t.approvals.approve}
                         </button>
+                        {/* MIGRATION_061 — "Modify" sits between Approve and Reject:
+                            sends the ticket back one step instead of an outright
+                            accept/decline. */}
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          disabled={approvalActing}
+                          onClick={() => {
+                            setModifyComment('');
+                            setModifyError(null);
+                            setModifyCommentOpen(true);
+                          }}
+                        >
+                          {t.approvals.modify}
+                        </button>
                         <button className="btn btn-danger btn-sm" disabled={approvalActing} onClick={handleTicketApprovalReject}>
                           {t.approvals.reject}
                         </button>
                       </div>
                     </>
+                  )}
+
+                  {/* MIGRATION_061 — the requester's own side of "Return for
+                      Changes": shown only to them (can_resubmit is server-computed
+                      from viewer identity + status === 'returned'). */}
+                  {detail.approval.can_resubmit && (
+                    <div style={{ marginTop: 10 }}>
+                      <div
+                        style={{
+                          background: '#fffbeb',
+                          border: '1px solid #fde68a',
+                          borderRadius: 8,
+                          padding: '10px 12px',
+                          marginBottom: 10,
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#b45309', marginBottom: 4 }}>{t.approvals.returnedBannerLabel}</div>
+                        <div style={{ fontSize: 13 }}>
+                          {[...detail.approval.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
+                        </div>
+                      </div>
+                      <button className="btn btn-primary btn-sm" disabled={approvalActing} onClick={handleTicketResubmit}>
+                        {approvalActing ? t.common.loading : t.approvals.resubmit}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1105,6 +1176,39 @@ export default function SupportTicketsPage() {
           confirmLabel={t.approvals.reject}
           onConfirm={confirmTicketReject}
           onCancel={() => setConfirmingTicketReject(false)}
+        />
+      )}
+
+      {modifyCommentOpen && (
+        <Modal
+          title={t.approvals.modifyConfirmTitle}
+          onClose={() => setModifyCommentOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-primary" type="button" disabled={approvalActing} onClick={confirmTicketModify}>
+                {approvalActing ? t.common.loading : t.approvals.confirmModify}
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => setModifyCommentOpen(false)}>
+                {t.common.cancel}
+              </button>
+            </>
+          }
+        >
+          {modifyError && <div className="error-banner">{modifyError}</div>}
+          <div className="field">
+            <label>{t.approvals.modifyCommentLabel}</label>
+            <textarea rows={3} value={modifyComment} onChange={(e) => setModifyComment(e.target.value)} placeholder={t.approvals.modifyCommentPlaceholder} />
+          </div>
+        </Modal>
+      )}
+
+      {confirmingTicketResubmit && (
+        <ConfirmDialog
+          title={t.approvals.resubmit}
+          message={t.approvals.resubmitConfirm}
+          confirmLabel={t.approvals.resubmit}
+          onConfirm={confirmTicketResubmit}
+          onCancel={() => setConfirmingTicketResubmit(false)}
         />
       )}
     </div>
