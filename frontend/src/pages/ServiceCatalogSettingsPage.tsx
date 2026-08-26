@@ -1,20 +1,35 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
-import { ApiError } from '../api/client';
+import { get, ApiError } from '../api/client';
 import {
   useServiceCatalogStore,
   ServiceCategory,
   ServiceRequestType,
   ServiceCustomField,
   CustomFieldType,
+  RequestTypeApprovalStep,
 } from '../store/useServiceCatalogStore';
 import { useDepartmentsStore } from '../store/useDepartmentsStore';
 import PageHeader from '../components/PageHeader';
 import Tag from '../components/Tag';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
+import { IconPlus, IconTrash, IconApproval } from '../components/Icon';
 
 const FIELD_TYPES: CustomFieldType[] = ['text', 'textarea', 'number', 'dropdown'];
+
+// MIGRATION_072 — the Approval Workflow modal's job_role step picker needs the flat,
+// company-wide job role list (not scoped to one department the way DepartmentsPage's
+// roles are) — same endpoint PermissionsPage.tsx already uses. Module-scoped so both
+// the page component and ApprovalWorkflowModal below can share the type.
+interface JobRoleOption {
+  id: string;
+  name: string;
+  name_en: string | null;
+  department_name: string;
+  department_name_en: string | null;
+}
 
 // ITSM pivot Step 3 — Settings > Service Catalog. Admin/manager-only CRUD for
 // the 3 resources MIGRATION_047 introduced (service_categories ->
@@ -45,6 +60,7 @@ export default function ServiceCatalogSettingsPage() {
   const createCustomField = useServiceCatalogStore((s) => s.createCustomField);
   const updateCustomField = useServiceCatalogStore((s) => s.updateCustomField);
   const removeCustomField = useServiceCatalogStore((s) => s.removeCustomField);
+  const setApprovalSteps = useServiceCatalogStore((s) => s.setApprovalSteps);
 
   // MIGRATION_071 — the Request Types tab's Department picker below needs
   // the flat department list (divisions + sections, including the IT
@@ -52,10 +68,17 @@ export default function ServiceCatalogSettingsPage() {
   const departments = useDepartmentsStore((s) => s.departments);
   const fetchAllDepartments = useDepartmentsStore((s) => s.fetchAll);
 
+  const [jobRoles, setJobRoles] = useState<JobRoleOption[]>([]);
+
   useEffect(() => {
     fetchAll();
     fetchAllDepartments();
+    get<{ job_roles: JobRoleOption[] }>('/permissions/job-roles')
+      .then((r) => setJobRoles(r.job_roles))
+      .catch(() => {});
   }, [fetchAll, fetchAllDepartments]);
+
+  const [approvalModalRequestType, setApprovalModalRequestType] = useState<ServiceRequestType | null>(null);
 
   const [tab, setTab] = useState<'categories' | 'requestTypes' | 'customFields'>('categories');
   const [error, setError] = useState<string | null>(null);
@@ -421,6 +444,7 @@ export default function ServiceCatalogSettingsPage() {
                     <th>{t.serviceCatalog.nameLabel}</th>
                     <th>{t.serviceCatalog.nameEnLabel}</th>
                     <th>{t.serviceCatalog.hrSensitive}</th>
+                    <th>{t.serviceCatalog.approvalColLabel}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -464,6 +488,12 @@ export default function ServiceCatalogSettingsPage() {
                             onChange={(e) => setRtDrafts((d) => ({ ...d, [rt.id]: { ...d[rt.id], is_hr_sensitive: e.target.checked } }))}
                           />
                         </td>
+                        <td>
+                          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setApprovalModalRequestType(rt)}>
+                            <IconApproval size={13} />{' '}
+                            {rt.requires_approval ? t.serviceCatalog.approvalOnLabel : t.serviceCatalog.approvalOffLabel}
+                          </button>
+                        </td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           <button className="btn btn-primary btn-sm" type="button" onClick={() => handleSaveRequestType(rt.id)} disabled={savingId === rt.id}>
                             {savingId === rt.id ? t.common.loading : t.common.save}
@@ -478,7 +508,7 @@ export default function ServiceCatalogSettingsPage() {
                   })}
                   {requestTypes.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <div className="empty-state">{t.serviceCatalog.requestTypesEmpty}</div>
                       </td>
                     </tr>
@@ -686,6 +716,232 @@ export default function ServiceCatalogSettingsPage() {
           onCancel={() => setPendingDelete(null)}
         />
       )}
+
+      {approvalModalRequestType && (
+        <ApprovalWorkflowModal
+          requestType={approvalModalRequestType}
+          jobRoles={jobRoles}
+          lang={lang}
+          onSave={setApprovalSteps}
+          onClose={() => setApprovalModalRequestType(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// ========================================================================
+// MIGRATION_072 — Approval Workflow config for one request type. Toggle +
+// ordered step builder, saved together in one PUT (setApprovalSteps) so
+// "requires_approval on with zero steps" can never be submitted — the Save
+// button itself is disabled in that state, matching the backend's own guard.
+// Mirrors DepartmentsPage.tsx's ManageRolesModal conventions (Modal wrapper,
+// local draft state synced from the store's data via useEffect on open).
+// ========================================================================
+
+interface StepDraft {
+  approver_type: 'department_manager' | 'job_role';
+  approver_job_role_id: string;
+  step_label: string;
+  step_label_en: string;
+  // True until the admin manually edits step_label/step_label_en — while true,
+  // changing approver_type or the picked job role keeps regenerating a sensible
+  // default label instead of leaving it blank. Flips to false the moment they
+  // type into either label field, so their own wording is never clobbered.
+  autoLabel: boolean;
+}
+
+function defaultStepLabel(
+  type: 'department_manager' | 'job_role',
+  jobRoleId: string,
+  jobRoles: JobRoleOption[]
+): { ar: string; en: string } {
+  if (type === 'department_manager') {
+    return { ar: 'موافقة مدير القسم المباشر', en: 'Direct department manager approval' };
+  }
+  const role = jobRoles.find((r) => r.id === jobRoleId);
+  if (!role) return { ar: 'اعتماد صاحب مسمى وظيفي محدد', en: 'Approval by a specific job role' };
+  return { ar: `اعتماد ${role.name}`, en: `Approval by ${role.name_en || role.name}` };
+}
+
+function stepFromServer(s: RequestTypeApprovalStep): StepDraft {
+  return {
+    approver_type: s.approver_type,
+    approver_job_role_id: s.approver_job_role_id || '',
+    step_label: s.step_label,
+    step_label_en: s.step_label_en || '',
+    autoLabel: false, // already-saved steps keep their exact saved wording until touched
+  };
+}
+
+function ApprovalWorkflowModal({
+  requestType,
+  jobRoles,
+  lang,
+  onSave,
+  onClose,
+}: {
+  requestType: ServiceRequestType;
+  jobRoles: JobRoleOption[];
+  lang: 'ar' | 'en';
+  onSave: (
+    id: string,
+    requiresApproval: boolean,
+    steps: Array<{ approver_type: 'department_manager' | 'job_role'; approver_job_role_id?: string | null; step_label: string; step_label_en?: string | null }>
+  ) => Promise<void>;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [requiresApproval, setRequiresApproval] = useState(requestType.requires_approval);
+  const [steps, setSteps] = useState<StepDraft[]>(
+    requestType.approval_steps.length > 0
+      ? requestType.approval_steps.map(stepFromServer)
+      : []
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function handleToggle(next: boolean) {
+    setRequiresApproval(next);
+    // Turning it on with nothing configured yet — seed one sensible first step
+    // instead of showing an empty list the admin has to know to add to.
+    if (next && steps.length === 0) {
+      const label = defaultStepLabel('department_manager', '', jobRoles);
+      setSteps([{ approver_type: 'department_manager', approver_job_role_id: '', step_label: label.ar, step_label_en: label.en, autoLabel: true }]);
+    }
+  }
+
+  function updateStep(i: number, patch: Partial<StepDraft>) {
+    setSteps((cur) =>
+      cur.map((s, idx) => {
+        if (idx !== i) return s;
+        const merged = { ...s, ...patch };
+        if (('step_label' in patch || 'step_label_en' in patch) && (patch.step_label !== undefined || patch.step_label_en !== undefined)) {
+          merged.autoLabel = false; // they typed — stop auto-regenerating this step's label
+        } else if (merged.autoLabel && ('approver_type' in patch || 'approver_job_role_id' in patch)) {
+          const label = defaultStepLabel(merged.approver_type, merged.approver_job_role_id, jobRoles);
+          merged.step_label = label.ar;
+          merged.step_label_en = label.en;
+        }
+        return merged;
+      })
+    );
+  }
+
+  function addStep() {
+    const label = defaultStepLabel('department_manager', '', jobRoles);
+    setSteps((cur) => [...cur, { approver_type: 'department_manager', approver_job_role_id: '', step_label: label.ar, step_label_en: label.en, autoLabel: true }]);
+  }
+
+  function removeStep(i: number) {
+    setSteps((cur) => cur.filter((_, idx) => idx !== i));
+  }
+
+  const canSave = !requiresApproval || (steps.length > 0 && steps.every((s) => s.step_label.trim().length > 0 && (s.approver_type !== 'job_role' || s.approver_job_role_id)));
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(
+        requestType.id,
+        requiresApproval,
+        requiresApproval
+          ? steps.map((s) => ({
+              approver_type: s.approver_type,
+              approver_job_role_id: s.approver_type === 'job_role' ? s.approver_job_role_id : null,
+              step_label: s.step_label.trim(),
+              step_label_en: s.step_label_en.trim() || null,
+            }))
+          : []
+      );
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.serviceCatalog.approvalSaveFailed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={`${t.serviceCatalog.approvalModalTitle} — ${lang === 'ar' ? requestType.name : requestType.name_en || requestType.name}`} onClose={onClose}>
+      {error && <div className="error-banner">{error}</div>}
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 14 }}>
+        <input type="checkbox" style={{ width: 'auto' }} checked={requiresApproval} onChange={(e) => handleToggle(e.target.checked)} />
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{t.serviceCatalog.requiresApprovalLabel}</span>
+      </label>
+      <div style={{ fontSize: 12, color: 'var(--muted, #888)', marginBottom: requiresApproval ? 14 : 0 }}>
+        {t.serviceCatalog.requiresApprovalHint}
+      </div>
+
+      {requiresApproval && (
+        <>
+          <div className="hr" style={{ margin: '10px 0' }} />
+          {steps.map((s, i) => (
+            <div key={i} style={{ border: '1px solid var(--border, #e5e5e5)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 800 }}>{t.serviceCatalog.stepNumberLabel(i + 1)}</span>
+                <button type="button" className="icon-btn" onClick={() => removeStep(i)} title={t.serviceCatalog.removeStep}>
+                  <IconTrash />
+                </button>
+              </div>
+
+              <div className="form-row" style={{ flexWrap: 'wrap' }}>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>{t.serviceCatalog.approverTypeLabel}</label>
+                  <select
+                    value={s.approver_type}
+                    onChange={(e) => updateStep(i, { approver_type: e.target.value as 'department_manager' | 'job_role', approver_job_role_id: '' })}
+                  >
+                    <option value="department_manager">{t.serviceCatalog.approverTypeDeptManager}</option>
+                    <option value="job_role">{t.serviceCatalog.approverTypeJobRole}</option>
+                  </select>
+                </div>
+                {s.approver_type === 'job_role' && (
+                  <div className="field" style={{ flex: 1 }}>
+                    <label>{t.serviceCatalog.jobRoleLabel}</label>
+                    <select value={s.approver_job_role_id} onChange={(e) => updateStep(i, { approver_job_role_id: e.target.value })}>
+                      <option value="">{t.serviceCatalog.selectJobRolePlaceholder}</option>
+                      {jobRoles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {lang === 'ar' ? r.name : r.name_en || r.name} — {lang === 'ar' ? r.department_name : r.department_name_en || r.department_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-row" style={{ flexWrap: 'wrap', marginTop: 6 }}>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>{t.serviceCatalog.stepLabelAr}</label>
+                  <input value={s.step_label} onChange={(e) => updateStep(i, { step_label: e.target.value })} />
+                </div>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>{t.serviceCatalog.stepLabelEn}</label>
+                  <input value={s.step_label_en} onChange={(e) => updateStep(i, { step_label_en: e.target.value })} />
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <button type="button" className="btn btn-secondary btn-sm" onClick={addStep}>
+            <IconPlus /> {t.serviceCatalog.addStep}
+          </button>
+        </>
+      )}
+
+      <div className="hr" style={{ margin: '14px 0' }} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
+          {t.common.cancel}
+        </button>
+        <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || !canSave}>
+          {saving ? t.common.loading : t.common.save}
+        </button>
+      </div>
+    </Modal>
   );
 }

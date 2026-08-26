@@ -2,29 +2,79 @@ import { pool } from '../db/pool';
 import { notifyRoles, notifyUsers } from './notifications';
 import { generateApprovalRequestNumber } from './sequences';
 
-// MIGRATION_056 — the ITSM/Helpdesk ticketing module's 3-step approval chain, shared
-// between approvals.controller.ts (the generic inbox: listPending/actionRequest) and
-// supportTickets.controller.ts (spawning the chain on ticket creation, embedding its
-// status on GET /support/tickets/:id, and blocking resolve/close until it completes).
-// Kept in one file specifically so the "who can act on this step" logic is defined
-// exactly once — approvals.controller.ts's actionRequest() enforcement and
-// SupportTicketsPage.tsx's "show me Approve/Reject" decision must never drift apart.
+// MIGRATION_056 (legacy) + MIGRATION_072 (current) — the ITSM/Helpdesk ticketing
+// module's approval chain, shared between approvals.controller.ts (the generic
+// inbox: listPending/actionRequest) and supportTickets.controller.ts (spawning the
+// chain on ticket creation, embedding its status on GET /support/tickets/:id, and
+// blocking resolve/close until it completes). Kept in one file specifically so the
+// "who can act on this step" logic is defined exactly once — approvals.controller.ts's
+// actionRequest() enforcement and SupportTicketsPage.tsx's "show me Approve/Reject"
+// decision must never drift apart.
+//
+// MIGRATION_072 moved step configuration from one global module-wide chain
+// (approval_workflow_steps, module_type = 'ITSM_TICKET') to a per-request-type
+// config (request_type_approval_steps) an admin builds in Settings > Service
+// Catalog — see that migration's header for the full reasoning (this mirrors
+// ServiceNow/Jira Service Management/Freshservice: approval is a property of the
+// specific request type, not the whole ticketing module; an Incident/fault report
+// should never be gated behind a manager approval it has no decision content for).
+// The old global table is kept and still read, but ONLY as a fallback for
+// approval_requests rows that were already spawned before MIGRATION_072 — an
+// in-flight legacy chain must keep working exactly as before, not break mid-flight.
+// No new chain is ever spawned from the legacy table again.
 
 export interface WorkflowStepDef {
   step_number: number;
+  // 'ticket_assignee' only ever appears via the legacy fallback below — new steps
+  // (request_type_approval_steps) only ever write 'department_manager' | 'job_role'.
   approver_type: 'department_manager' | 'ticket_assignee' | 'job_role';
+  // Legacy-only: MIGRATION_056's job_role steps matched by job_roles.name/name_en
+  // text. Null for any step sourced from request_type_approval_steps.
   approver_value: string | null;
+  // Current: MIGRATION_072's job_role steps match by FK, immune to a role rename.
+  // Null for any step sourced from the legacy approval_workflow_steps table.
+  approver_job_role_id: string | null;
   step_label: string;
   step_label_en: string | null;
 }
 
-export async function getWorkflowSteps(moduleType: string): Promise<WorkflowStepDef[]> {
+// Strict read used ONLY when spawning a brand-new chain (createItsmApprovalChain) —
+// no legacy fallback here. A request type with requires_approval = true but zero
+// configured steps yet must not silently borrow the old global 3-step chain.
+async function getConfiguredSteps(requestTypeId: string): Promise<WorkflowStepDef[]> {
   const result = await pool.query(
-    `SELECT step_number, approver_type, approver_value, step_label, step_label_en
-     FROM approval_workflow_steps WHERE module_type = $1 ORDER BY step_number ASC`,
-    [moduleType]
+    `SELECT step_number, approver_type, approver_job_role_id, step_label, step_label_en
+     FROM request_type_approval_steps WHERE request_type_id = $1 ORDER BY step_number ASC`,
+    [requestTypeId]
   );
-  return result.rows;
+  return result.rows.map((r) => ({ ...r, approver_value: null }));
+}
+
+// Read used for an EXISTING approval_requests row (approvals inbox, ticket detail).
+// Tries the request type's own configured steps first; falls back to the legacy
+// global chain only when the request type has none configured — i.e. only for
+// chains spawned before MIGRATION_072 (see this file's header).
+export async function getWorkflowSteps(requestTypeId: string | null): Promise<WorkflowStepDef[]> {
+  if (requestTypeId) {
+    const steps = await getConfiguredSteps(requestTypeId);
+    if (steps.length > 0) return steps;
+  }
+  const legacy = await pool.query(
+    `SELECT step_number, approver_type, approver_value, step_label, step_label_en
+     FROM approval_workflow_steps WHERE module_type = 'ITSM_TICKET' ORDER BY step_number ASC`
+  );
+  return legacy.rows.map((r) => ({ ...r, approver_job_role_id: null }));
+}
+
+// Small helper — several callers (approvals.controller.ts's listPending/actionRequest/
+// getApprovalSummary, this file's own getItsmApprovalSummary) need "which request type
+// is this ticket's chain for" before they can resolve its steps.
+export async function getTicketRequestTypeId(companyId: string, ticketId: string): Promise<string | null> {
+  const result = await pool.query(
+    'SELECT request_type_id FROM support_tickets WHERE id = $1 AND company_id = $2',
+    [ticketId, companyId]
+  );
+  return result.rows[0]?.request_type_id ?? null;
 }
 
 export interface StepEligibility {
@@ -36,9 +86,9 @@ export interface StepEligibility {
   allowAnyManager: boolean;
 }
 
-// Resolves eligibility for ONE step of the ITSM_TICKET workflow, live at call time
-// (never cached/frozen onto the approval_requests row) — see MIGRATION_056's header
-// for why each of the three approver_type strategies is resolved this way.
+// Resolves eligibility for ONE step of an ITSM_TICKET workflow, live at call time
+// (never cached/frozen onto the approval_requests row) — see MIGRATION_072's header
+// for why each approver_type strategy is resolved this way.
 export async function resolveItsmStepEligibility(
   companyId: string,
   requesterEmployeeId: string,
@@ -68,6 +118,8 @@ export async function resolveItsmStepEligibility(
     return { userIds: mgrUser.rows.map((r) => r.id), allowAnyManager: false };
   }
 
+  // Legacy only (MIGRATION_056) — never written by a new chain after MIGRATION_072,
+  // kept so an in-flight pre-existing chain keeps resolving correctly.
   if (step.approver_type === 'ticket_assignee') {
     const ticket = await pool.query(
       'SELECT assigned_to FROM support_tickets WHERE id = $1 AND company_id = $2',
@@ -78,9 +130,19 @@ export async function resolveItsmStepEligibility(
     return { userIds: [assignedTo], allowAnyManager: false };
   }
 
-  // 'job_role' — approver_value names a job_roles.name_en/name to match, resolved via
-  // employees.job_role_id (MIGRATION_054), not the free-text employees.job_role column
-  // (same "linked FK, not string matching" rule job_role_permissions itself follows).
+  // 'job_role' — MIGRATION_072 steps carry approver_job_role_id, a direct FK to
+  // job_roles.id, resolved via employees.job_role_id (MIGRATION_054). Legacy
+  // (MIGRATION_056) steps have no FK, only a name string in approver_value —
+  // matched the old way so an in-flight legacy chain still resolves.
+  if (step.approver_job_role_id) {
+    const jr = await pool.query(
+      `SELECT u.id FROM users u
+       JOIN employees e ON e.id = u.employee_id
+       WHERE u.company_id = $1 AND e.job_role_id = $2`,
+      [companyId, step.approver_job_role_id]
+    );
+    return { userIds: jr.rows.map((r) => r.id), allowAnyManager: true };
+  }
   const jr = await pool.query(
     `SELECT u.id FROM users u
      JOIN employees e ON e.id = u.employee_id
@@ -107,12 +169,12 @@ export function isEligible(auth: { userId: string; role: string }, eligibility: 
 // approval, there's no new pending approver to tell in either case.
 //
 // Notification-noise decision: always notify the specifically resolved userIds
-// (department manager / ticket assignee / named job-role holders). Only ALSO notify
-// every admin/manager when userIds came back empty — i.e. the step genuinely
-// couldn't resolve anyone (see resolveItsmStepEligibility's own "understaffed step"
-// comment). admin can still always ACT on any step regardless (isEligible's
-// universal safety valve) — this only governs who gets proactively pinged, so a
-// company with 20 managers doesn't get 20 notifications for every single ticket.
+// (department manager / named job-role holders). Only ALSO notify every admin/manager
+// when userIds came back empty — i.e. the step genuinely couldn't resolve anyone (see
+// resolveItsmStepEligibility's own "understaffed step" comment). admin can still
+// always ACT on any step regardless (isEligible's universal safety valve) — this only
+// governs who gets proactively pinged, so a company with 20 managers doesn't get 20
+// notifications for every single ticket.
 // Best-effort: swallows its own errors, must never break ticket creation or the
 // approve/reject action that called it.
 export async function notifyItsmStepPending(
@@ -151,14 +213,36 @@ export async function notifyItsmStepPending(
   }
 }
 
-// Spawns the 3-step chain for a brand-new ticket. Silently no-ops if the creator has
-// no linked employee record (a pure admin/owner account filing their own ticket) —
-// ticket creation must never fail over this, same tolerance
-// approvals.controller.ts's createRequest() applies to a manually-filed request.
-export async function createItsmApprovalChain(companyId: string, ticketId: string, creatorUserId: string): Promise<void> {
+// Spawns the chain for a brand-new ticket — ONLY when its request type has
+// requires_approval = true AND has at least one configured step (getConfiguredSteps,
+// no legacy fallback: a request type with the toggle on but nothing built yet must
+// never silently borrow the old global chain). Every other case — no request_type_id,
+// requires_approval false, or the toggle on with zero steps — is a deliberate no-op:
+// the ticket goes straight to the normal queue, no blocking chain at all. Also
+// silently no-ops if the creator has no linked employee record (a pure admin/owner
+// account filing their own ticket) — ticket creation must never fail over this, same
+// tolerance approvals.controller.ts's createRequest() applies to a manually-filed
+// request.
+export async function createItsmApprovalChain(
+  companyId: string,
+  ticketId: string,
+  creatorUserId: string,
+  requestTypeId: string | null
+): Promise<void> {
+  if (!requestTypeId) return;
+  const rt = await pool.query(
+    'SELECT requires_approval FROM service_request_types WHERE id = $1 AND company_id = $2',
+    [requestTypeId, companyId]
+  );
+  if (rt.rows[0]?.requires_approval !== true) return;
+
+  const steps = await getConfiguredSteps(requestTypeId);
+  if (steps.length === 0) return;
+
   const employeeRes = await pool.query('SELECT employee_id FROM users WHERE id = $1', [creatorUserId]);
   const requesterId = employeeRes.rows[0]?.employee_id;
   if (!requesterId) return;
+
   // MIGRATION_060 -- same human-readable numbering financialApprovals.ts's
   // fileApprovalRequest() gives the single-step modules, so an ITSM ticket's
   // approval chain is identifiable the same way everywhere (bell, inbox, popup).
@@ -169,17 +253,17 @@ export async function createItsmApprovalChain(companyId: string, ticketId: strin
   );
   const requestId = inserted.rows[0].id;
 
-  const steps = await getWorkflowSteps('ITSM_TICKET');
   const step1 = steps.find((s) => s.step_number === 1);
   if (step1) await notifyItsmStepPending(companyId, ticketId, requesterId, step1, requestId, requestNumber);
 }
 
 // Ticket-resolution lock (Step 2 of the upgrade): returns the still-open
 // approval_requests row for this ticket, or null when there's nothing blocking it
-// (no chain was ever spawned — a legacy ticket, or a company below Gold tier at
-// creation time — or the chain already reached 'approved'). 'rejected' still blocks:
-// a rejected chain needs a human decision (re-request, or an admin override via direct
-// SQL/support), not a silent path to closing the ticket anyway.
+// (no chain was ever spawned — a legacy ticket, a request type with no approval
+// configured, or a company below Gold tier at creation time — or the chain already
+// reached 'approved'). 'rejected' still blocks: a rejected chain needs a human
+// decision (re-request, or an admin override via direct SQL/support), not a silent
+// path to closing the ticket anyway.
 export async function getBlockingApproval(companyId: string, ticketId: string) {
   const result = await pool.query(
     `SELECT * FROM approval_requests
@@ -222,7 +306,13 @@ export async function getItsmApprovalSummary(
   const request = result.rows[0];
   if (!request) return null;
 
-  const steps = await getWorkflowSteps('ITSM_TICKET');
+  // Steps are resolved from the TICKET'S OWN request type (falls back to the legacy
+  // global chain only if that request type has nothing configured — see this file's
+  // header) — never from module_type alone, since MIGRATION_072 steps vary per
+  // request type.
+  const requestTypeId = await getTicketRequestTypeId(companyId, ticketId);
+  const steps = await getWorkflowSteps(requestTypeId);
+
   const logResult = await pool.query(
     `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
      FROM approval_steps_log asl

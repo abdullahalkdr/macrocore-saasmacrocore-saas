@@ -4,7 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
-import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending } from '../utils/itsmApprovals';
+import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending, getTicketRequestTypeId } from '../utils/itsmApprovals';
 import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
 import { notifyUsers } from '../utils/notifications';
 import { validateAttachments } from '../utils/attachments';
@@ -141,16 +141,25 @@ export const listPending = asyncHandler(async (req: Request, res: Response) => {
     [companyId]
   );
 
-  // Fetched once, reused per-row below — the ITSM chain has exactly one step
-  // sequence company-wide (MIGRATION_056 decision #1), no need to re-query per row.
-  const itsmSteps = await getWorkflowSteps('ITSM_TICKET');
+  // MIGRATION_072 — steps now depend on each ticket's own request type, no longer
+  // one global sequence, so this is resolved per-row below (memoized by
+  // request_type_id since several pending tickets are often the same type).
+  const stepsByRequestType = new Map<string | null, Awaited<ReturnType<typeof getWorkflowSteps>>>();
+  async function stepsFor(requestTypeId: string | null) {
+    if (!stepsByRequestType.has(requestTypeId)) {
+      stepsByRequestType.set(requestTypeId, await getWorkflowSteps(requestTypeId));
+    }
+    return stepsByRequestType.get(requestTypeId)!;
+  }
 
   const requests: (typeof result.rows[number] & { current_step_label?: string; current_step_label_en?: string | null })[] = [];
   for (const r of result.rows) {
     if (myId && r.requester_id === myId) continue; // maker-checker, applies to every module_type
 
     if (r.module_type === 'ITSM_TICKET') {
-      const step = itsmSteps.find((s) => s.step_number === r.current_step);
+      const requestTypeId = await getTicketRequestTypeId(companyId, r.reference_id);
+      const steps = await stepsFor(requestTypeId);
+      const step = steps.find((s) => s.step_number === r.current_step);
       if (!step) continue; // defensive — no step defined for this stage, shouldn't happen
       const eligibility = await resolveItsmStepEligibility(companyId, r.requester_id, r.reference_id, step);
       if (isEligible(req.auth!, eligibility)) {
@@ -230,7 +239,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     await pool.query(`UPDATE approval_requests SET current_step = 1, status = 'pending', updated_at = now() WHERE id = $1`, [id]);
 
     if (request.module_type === 'ITSM_TICKET') {
-      const steps = await getWorkflowSteps('ITSM_TICKET');
+      const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, request.reference_id));
       const step1 = steps.find((s) => s.step_number === 1);
       if (step1) {
         notifyItsmStepPending(companyId, request.reference_id, request.requester_id, step1, request.id, request.request_number ?? null).catch(() => {});
@@ -279,7 +288,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
 
   if (request.module_type === 'ITSM_TICKET') {
-    const steps = await getWorkflowSteps('ITSM_TICKET');
+    const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, request.reference_id));
     const step = steps.find((s) => s.step_number === request.current_step);
     if (!step) throw new AppError(500, 'No workflow step is defined for this stage — contact support.');
 
@@ -576,7 +585,8 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
   let isPendingApprover = false;
 
   if (module_type === 'ITSM_TICKET') {
-    const workflowSteps = await getWorkflowSteps('ITSM_TICKET');
+    const requestTypeId = await getTicketRequestTypeId(companyId, reference_id);
+    const workflowSteps = await getWorkflowSteps(requestTypeId);
     steps = workflowSteps.map((s) => ({ step_number: s.step_number, step_label: s.step_label, step_label_en: s.step_label_en }));
     if (request.status === 'pending') {
       const step = workflowSteps.find((s) => s.step_number === request.current_step);

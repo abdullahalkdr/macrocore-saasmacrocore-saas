@@ -318,19 +318,24 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   );
   const ticket = result.rows[0];
 
-  // MIGRATION_056 — spawn the 3-step ITSM approval chain (department manager -> IT
-  // agent -> IT manager) for every new ticket. Gated on the company's LIVE plan level
-  // being Gold (3) or higher, checked here rather than via the route-level
-  // requirePlanLevel gate — /support/tickets itself stays available on every plan,
-  // only the approval sub-feature is conditional. This matters: /api/approvals is
-  // gold-gated (app.ts), so a Bronze/Silver company would have no way to ever act on
-  // a chain if one were spawned for them — updateStatus() below would then block
-  // their tickets from ever being resolved/closed with no route to fix it. Never
-  // creating the chain for a below-Gold company avoids that trap entirely; their
-  // tickets behave exactly as before this migration.
+  // MIGRATION_056 (legacy global chain) + MIGRATION_072 (per-request-type config) —
+  // spawn the ticket's approval chain, if any, for every new ticket. Gated on the
+  // company's LIVE plan level being Gold (3) or higher, checked here rather than via
+  // the route-level requirePlanLevel gate — /support/tickets itself stays available
+  // on every plan, only the approval sub-feature is conditional. This matters:
+  // /api/approvals is gold-gated (app.ts), so a Bronze/Silver company would have no
+  // way to ever act on a chain if one were spawned for them — updateStatus() below
+  // would then block their tickets from ever being resolved/closed with no route to
+  // fix it. Never creating the chain for a below-Gold company avoids that trap
+  // entirely; their tickets behave exactly as before this migration.
+  //
+  // createItsmApprovalChain itself no-ops when finalRequestTypeId's own
+  // requires_approval is false/unset or has no configured steps — most request
+  // types (incidents/fault reports) are meant to stay that way permanently, see
+  // MIGRATION_072's header for the "which requests actually need approval" design.
   const companyPlan = await pool.query('SELECT plan FROM companies WHERE id = $1', [companyId]);
   if (planLevelOf(companyPlan.rows[0]?.plan) >= 3) {
-    await createItsmApprovalChain(companyId, ticket.id, req.auth!.userId);
+    await createItsmApprovalChain(companyId, ticket.id, req.auth!.userId, finalRequestTypeId);
   }
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_created', entityType: 'support_tickets', entityId: ticket.id, req });

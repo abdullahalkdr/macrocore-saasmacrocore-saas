@@ -12,6 +12,20 @@ export interface ServiceCategory {
   updated_at: string;
 }
 
+// MIGRATION_072 — one configured step of a request type's own approval chain.
+// approver_job_role_id/approver_job_role_name(_en) are set only for
+// approver_type === 'job_role'; both null for 'department_manager'.
+export interface RequestTypeApprovalStep {
+  request_type_id: string;
+  step_number: number;
+  approver_type: 'department_manager' | 'job_role';
+  approver_job_role_id: string | null;
+  approver_job_role_name: string | null;
+  approver_job_role_name_en: string | null;
+  step_label: string;
+  step_label_en: string | null;
+}
+
 export interface ServiceRequestType {
   id: string;
   category_id: string | null;
@@ -24,6 +38,12 @@ export interface ServiceRequestType {
   description: string | null;
   description_en: string | null;
   is_hr_sensitive: boolean;
+  // MIGRATION_072 — does this specific request type gate a new ticket behind an
+  // approval chain before it can be resolved/closed? Off by default for every
+  // request type (incidents/fault reports are meant to stay off permanently —
+  // see that migration's header). approval_steps is only meaningful when true.
+  requires_approval: boolean;
+  approval_steps: RequestTypeApprovalStep[];
   created_at: string;
   updated_at: string;
 }
@@ -95,6 +115,13 @@ interface ServiceCatalogState {
   createRequestType: (data: ServiceRequestTypeInput) => Promise<void>;
   updateRequestType: (id: string, data: Partial<ServiceRequestTypeInput> & { category_id?: string | null; department_id?: string | null }) => Promise<void>;
   removeRequestType: (id: string) => Promise<void>;
+  // MIGRATION_072 — replaces the request type's requires_approval toggle AND its
+  // whole step list atomically (see the backend endpoint's own header for why).
+  setApprovalSteps: (
+    id: string,
+    requiresApproval: boolean,
+    steps: Array<{ approver_type: 'department_manager' | 'job_role'; approver_job_role_id?: string | null; step_label: string; step_label_en?: string | null }>
+  ) => Promise<void>;
 
   createCustomField: (data: ServiceCustomFieldInput) => Promise<void>;
   updateCustomField: (id: string, data: Partial<ServiceCustomFieldInput>) => Promise<void>;
@@ -176,6 +203,11 @@ export const useServiceCatalogStore = create<ServiceCatalogState>()((set, getSto
     await del(`/service-request-types/${id}`);
     // Same cascade reasoning as removeCategory — its custom fields go too.
     await Promise.all([getStore().fetchRequestTypes(), getStore().fetchCustomFields()]);
+  },
+
+  setApprovalSteps: async (id, requiresApproval, steps) => {
+    await put(`/service-request-types/${id}/approval-steps`, { requires_approval: requiresApproval, steps });
+    await getStore().fetchRequestTypes();
   },
 
   createCustomField: async (data) => {
