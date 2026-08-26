@@ -252,7 +252,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({
     companyId,
     userId: req.auth!.userId,
-    action: new_password !== undefined ? 'user_password_reset' : 'user_updated',
+    action: new_password !== undefined ? 'user_password_reset' : role !== undefined ? 'user_role_changed' : 'user_updated',
     entityType: 'users',
     entityId: user.id,
     req,

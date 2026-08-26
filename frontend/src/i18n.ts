@@ -64,6 +64,9 @@ const en = {
     discardChanges: 'Discard changes',
     keepEditing: 'Keep editing',
     confirmDeleteTitle: 'Confirm delete',
+    previous: 'Previous',
+    next: 'Next',
+    pageOf: (page: number, totalPages: number) => `Page ${page} of ${totalPages}`,
   },
   nav: {
     groupGeneral: 'General',
@@ -1339,6 +1342,8 @@ const en = {
     systemUser: 'System',
     empty: 'No activity recorded yet.',
     loadFailed: 'Failed to load the activity log',
+    sensitive: 'Sensitive',
+    sensitiveOnly: 'Sensitive actions only',
   },
   shiftSchedule: {
     title: 'Shift Roster',
@@ -2282,6 +2287,9 @@ const ar: typeof en = {
     discardChanges: 'تجاهل التعديلات',
     keepEditing: 'الرجوع للتعديل',
     confirmDeleteTitle: 'تأكيد الحذف',
+    previous: 'السابق',
+    next: 'التالي',
+    pageOf: (page: number, totalPages: number) => `صفحة ${page} من ${totalPages}`,
   },
   nav: {
     groupGeneral: 'عام',
@@ -3535,6 +3543,8 @@ const ar: typeof en = {
     systemUser: 'النظام',
     empty: 'ما فيه نشاط مسجّل بعد.',
     loadFailed: 'فشل تحميل سجل النشاط',
+    sensitive: 'حساسة',
+    sensitiveOnly: 'الحركات الحساسة فقط',
   },
   shiftSchedule: {
     title: 'جدولة الورديات',

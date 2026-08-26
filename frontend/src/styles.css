@@ -252,6 +252,7 @@ textarea:focus {
 .badge.received { background: var(--emerald-50); color: var(--emerald-700); }
 .badge.cancelled { background: var(--surface-alt); color: var(--muted); }
 .badge.paid { background: var(--emerald-50); color: var(--emerald-700); }
+.badge.sensitive { background: var(--red-50); color: var(--red-600); }
 
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .product-tile {
