@@ -8,6 +8,12 @@ export interface AuthUser {
   role: string;
   company_id: string;
   email_verified?: boolean;
+  // 2026-08-26 HR-visibility fix — a login-time snapshot from hrScope.ts
+  // (backend/src/utils/hrScope.ts). UI hint only for Layout.tsx's sidebar
+  // filtering; every real HR/Users endpoint re-checks independently on the
+  // server regardless of what this says.
+  hr_access_level?: 'full' | 'department' | 'self';
+  can_access_users?: boolean;
 }
 
 export interface AuthCompany {

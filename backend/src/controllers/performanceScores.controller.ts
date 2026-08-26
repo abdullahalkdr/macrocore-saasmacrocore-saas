@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
+import { getHrScope } from '../utils/hrScope';
 import { logAudit } from '../utils/audit';
 
 const SCORE_FIELDS = `id, employee_id, cycle_id, okr_score, feedback_score, final_score, bonus_amount, payroll_adjustment_id, status, created_by, created_at, updated_at`;
@@ -14,13 +15,22 @@ export const listScores = asyncHandler(async (req: Request, res: Response) => {
   const params: unknown[] = [companyId];
   let where = 'ps.company_id = $1';
 
-  if (req.auth!.role === 'employee') {
+  // Department-scoped since the 2026-08-26 HR-visibility fix (hrScope.ts) —
+  // same override-can-only-narrow pattern as attendance/leaveRequests list().
+  const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+  if (scope.level === 'self') {
     const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
     params.push(ownEmployeeId);
     where += ` AND ps.employee_id = $${params.length}`;
-  } else if (typeof employee_id === 'string') {
-    params.push(employee_id);
-    where += ` AND ps.employee_id = $${params.length}`;
+  } else {
+    if (scope.level === 'department') {
+      params.push(scope.departmentIds);
+      where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+    }
+    if (typeof employee_id === 'string') {
+      params.push(employee_id);
+      where += ` AND ps.employee_id = $${params.length}`;
+    }
   }
   if (typeof cycle_id === 'string') {
     params.push(cycle_id);

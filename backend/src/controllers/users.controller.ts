@@ -7,6 +7,7 @@ import { isValidEmail } from '../utils/validate';
 import { hashPassword } from '../utils/password';
 import { parsePagination } from '../utils/pagination';
 import { logAudit } from '../utils/audit';
+import { getHrScope, canAccessUsersList } from '../utils/hrScope';
 
 const ROLES = ['admin', 'manager', 'employee', 'viewer'];
 const STATUSES = ['active', 'suspended', 'inactive'];
@@ -22,6 +23,14 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
   );
   const user = result.rows[0];
   if (!user) throw new AppError(404, 'User not found');
+
+  // Same login-time snapshot fields as auth.controller.ts's login() — kept
+  // fresh here too so a page reload (which re-hits /users/me, not /auth/login)
+  // still reflects the current HR/Users access level.
+  const hrScope = await getHrScope(user.company_id, user.id, user.role);
+  user.hr_access_level = hrScope.level;
+  user.can_access_users = await canAccessUsersList(user.company_id, user.id, user.role);
+
   res.status(200).json({ success: true, user });
 });
 
@@ -81,8 +90,22 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
   res.status(200).json({ success: true, user });
 });
 
+// 2026-08-26 HR-visibility fix (hrScope.ts) — this endpoint had NO role gate
+// at all before this: any authenticated employee could pull every user
+// account's email, role and active/suspended status company-wide. Account/
+// access administration is realistically an IT function (or admin/owner),
+// not something every employee needs. BUT this same endpoint also backs the
+// Support Tickets assignee picker (SupportTicketsPage.tsx, §8.2's smart
+// suggestion feature) for whoever manages tickets — blocking the whole
+// endpoint for non-admin/non-IT callers would break that already-shipped,
+// live-verified feature. Resolution: redact rather than block — a caller
+// without full Users access still gets the id/name/department fields the
+// assignee picker actually needs, just without the administrative fields
+// (email, role, status, phone, job_title, employee_id, created_at) that
+// make this look like an account-admin list.
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
+  const hasFullAccess = await canAccessUsersList(companyId, req.auth!.userId, req.auth!.role);
   const { page, limit, offset } = parsePagination(req);
   const role = typeof req.query.role === 'string' ? req.query.role : null;
 
@@ -118,7 +141,17 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     params
   );
 
-  res.status(200).json({ success: true, users: usersResult.rows, total: totalResult.rows[0].n, page });
+  const users = hasFullAccess
+    ? usersResult.rows
+    : usersResult.rows.map((u) => ({
+        id: u.id,
+        full_name: u.full_name,
+        department_id: u.department_id,
+        department_name: u.department_name,
+        department_name_en: u.department_name_en,
+      }));
+
+  res.status(200).json({ success: true, users, total: totalResult.rows[0].n, page });
 });
 
 // No email service yet (Phase 3) — returns a temp_password instead of "invitation sent".

@@ -120,7 +120,7 @@ export default function App() {
             <Route
               path="/users"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresUsersAccess>
                   <UsersPage />
                 </RequireRole>
               }
@@ -284,7 +284,7 @@ export default function App() {
             <Route
               path="/payroll"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} minHrAccess="full" permission="manage_payroll">
                   <PayrollPage />
                 </RequireRole>
               }
@@ -292,7 +292,7 @@ export default function App() {
             <Route
               path="/hr-dashboard"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} minHrAccess="full">
                   <HRDashboardPage />
                 </RequireRole>
               }
@@ -300,7 +300,7 @@ export default function App() {
             <Route
               path="/performance"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} minHrAccess="department">
                   <PerformancePage />
                 </RequireRole>
               }
@@ -336,7 +336,7 @@ export default function App() {
             <Route
               path="/departments"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} minHrAccess="full">
                   <DepartmentsPage />
                 </RequireRole>
               }

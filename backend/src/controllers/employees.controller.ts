@@ -4,6 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { isForeignKeyViolation } from '../utils/dbErrors';
+import { getHrScope } from '../utils/hrScope';
 
 interface Certificate {
   name: string;
@@ -88,19 +89,41 @@ function withExpiries<T extends { civil_id_expiry: string | null; residency_expi
   };
 }
 
+// Department-scoped since the 2026-08-26 HR-visibility fix (hrScope.ts) — a
+// non-HR manager only sees their own department (+ descendants), a plain
+// employee only sees themself. admin and HR-department members are
+// unrestricted, same as this endpoint's original company-wide behavior.
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
+  const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+
+  const params: unknown[] = [companyId];
+  let where = 'e.company_id = $1';
+  if (scope.level === 'self') {
+    params.push(scope.employeeId);
+    where += ` AND e.id = $${params.length}`;
+  } else if (scope.level === 'department') {
+    params.push(scope.departmentIds);
+    where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+  }
+
   const result = await pool.query(
     `SELECT ${SELECT_COLUMNS_JOINED}, l.name AS location_name, d.name AS department_name, d.name_en AS department_name_en
      FROM employees e
      LEFT JOIN locations l ON l.id = e.location_id AND l.company_id = e.company_id
      LEFT JOIN departments d ON d.id = e.department_id AND d.company_id = e.company_id
-     WHERE e.company_id = $1 ORDER BY e.created_at DESC`,
-    [companyId]
+     WHERE ${where} ORDER BY e.created_at DESC`,
+    params
   );
   res.status(200).json({ success: true, employees: result.rows.map((r) => withExpiries(withAge(r))) });
 });
 
+// Same department scoping as list() above, applied to the single-record
+// fetch too — otherwise a manager could reach another department's employee
+// directly by id (e.g. an id seen in a company-wide picker elsewhere) even
+// though list() no longer returns it. Not found (not forbidden) on a
+// scope miss, consistent with how this endpoint already reports a
+// wrong/deleted id.
 export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
@@ -112,8 +135,14 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
      WHERE e.id = $1 AND e.company_id = $2`,
     [id, companyId]
   );
-  if (!result.rows[0]) throw new AppError(404, 'Employee not found');
-  res.status(200).json({ success: true, employee: withExpiries(withAge(result.rows[0])) });
+  const employee = result.rows[0];
+  if (!employee) throw new AppError(404, 'Employee not found');
+
+  const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+  if (scope.level === 'self' && employee.id !== scope.employeeId) throw new AppError(404, 'Employee not found');
+  if (scope.level === 'department' && !scope.departmentIds.includes(employee.department_id)) throw new AppError(404, 'Employee not found');
+
+  res.status(200).json({ success: true, employee: withExpiries(withAge(employee)) });
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

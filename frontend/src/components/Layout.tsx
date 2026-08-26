@@ -42,6 +42,21 @@ interface NavItem {
   // it. Only ever WIDENS visibility on top of the role check below, never narrows it —
   // an item with no `permission` set behaves exactly as before this existed.
   permission?: string;
+  // 2026-08-26 HR-visibility fix — narrows an HR-sensitive item beyond
+  // managerOnly: 'department' requires at least department-scoped HR access
+  // (a non-HR manager sees their own team; admin/HR-department members
+  // always qualify), 'full' requires company-wide HR access (admin or an
+  // HR-department member only — a non-HR manager never sees this item, no
+  // matter their role). Backed by user.hr_access_level (hrScope.ts,
+  // login-time snapshot) — see AuthUser. Items every employee needs for
+  // THEIR OWN data (shift schedule, attendance, leave requests, policies)
+  // deliberately do NOT set this — the backend already row-scopes those to
+  // 'self' for a plain employee, and the page itself is still the right one
+  // for them to view their own record on.
+  minHrAccess?: 'department' | 'full';
+  // Same idea, for the Users/accounts-administration item specifically —
+  // backed by user.can_access_users (admin, or an IT-department member).
+  requiresUsersAccess?: boolean;
 }
 interface NavGroup {
   label: string;
@@ -260,15 +275,21 @@ export default function Layout() {
       parentLabel: t.nav.groupHR,
       parentIcon: IconEmployee,
       items: [
-        { to: '/employees', label: t.nav.employees, icon: IconEmployee, managerOnly: true, minPlan: 2 },
-        { to: '/departments', label: t.nav.departments, icon: IconEmployee, managerOnly: true },
-        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, managerOnly: true, minPlan: 3, permission: 'manage_payroll' },
+        // 2026-08-26 HR-visibility fix — minHrAccess replaces managerOnly on
+        // the items below: 'department' lets a non-HR manager in (scoped to
+        // their own team by the backend), 'full' is admin/HR-department
+        // only. shift-schedule/attendance/leave-requests/policies are
+        // deliberately untouched — every employee needs those for their own
+        // record, and the backend already row-scopes them to 'self'.
+        { to: '/employees', label: t.nav.employees, icon: IconEmployee, minHrAccess: 'department', minPlan: 2 },
+        { to: '/departments', label: t.nav.departments, icon: IconEmployee, minHrAccess: 'full' },
+        { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, minHrAccess: 'full', minPlan: 3, permission: 'manage_payroll' },
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
         { to: '/attendance', label: t.nav.attendance, icon: IconAttendance, minPlan: 2 },
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
         { to: '/policies', label: t.nav.policies, icon: IconReports, minPlan: 2 },
-        { to: '/hr-dashboard', label: t.nav.hrDashboard, icon: IconReports, managerOnly: true, minPlan: 3 },
-        { to: '/performance', label: t.nav.performance, icon: IconEmployee, managerOnly: true, minPlan: 3 },
+        { to: '/hr-dashboard', label: t.nav.hrDashboard, icon: IconReports, minHrAccess: 'full', minPlan: 3 },
+        { to: '/performance', label: t.nav.performance, icon: IconEmployee, minHrAccess: 'department', minPlan: 3 },
       ],
     },
     {
@@ -291,14 +312,21 @@ export default function Layout() {
       parentLabel: t.nav.groupSettings,
       parentIcon: IconSettings,
       items: [
-        { to: '/users', label: t.nav.users, icon: IconSettings, managerOnly: true },
         { to: '/permissions', label: t.nav.permissions, icon: IconSettings, adminOnly: true, minPlan: 3 },
         { to: '/settings', label: t.nav.settings, icon: IconSettings, managerOnly: true },
       ],
     },
     // MIGRATION_056 — Helpdesk/Service Catalog moved out of Settings & Support into
     // its own accordion group, per the ITSM multi-step approval upgrade request.
-    // Same three routes as before (unchanged), just regrouped.
+    // Same three routes as before (unchanged), just regrouped. 2026-08-26 — Users
+    // (account/access administration) moved in here too, from the old Settings
+    // group: real companies treat user-account provisioning as an IT function
+    // (matches the researched IT department template's Service Desk role — see
+    // claude/it-department-structure-context-handoff.md §5.5), and "Settings &
+    // Support" had been a stale name ever since Helpdesk left it in MIGRATION_056 —
+    // Users was the last piece of that leftover naming. Gated by
+    // requiresUsersAccess (admin or IT-department member), not managerOnly — a
+    // non-IT manager no longer sees this item at all.
     {
       label: '',
       accordion: true,
@@ -306,6 +334,7 @@ export default function Layout() {
       parentLabel: t.nav.groupItSupport,
       parentIcon: IconSettings,
       items: [
+        { to: '/users', label: t.nav.users, icon: IconSettings, requiresUsersAccess: true },
         { to: '/support', label: t.nav.support, icon: IconSettings },
         { to: '/service-catalog', label: t.nav.serviceCatalog, icon: IconSettings, managerOnly: true },
         { to: '/sla-management', label: t.nav.slaManagement, icon: IconSettings, managerOnly: true, minPlan: 3 },
@@ -322,6 +351,18 @@ export default function Layout() {
   const isAdmin = user?.role === 'admin';
   const companyPlanLevel = planLevelOf(livePlan ?? company?.plan);
   const openUpgradeModal = useUpgradeModalStore((s) => s.openModal);
+  // 2026-08-26 HR-visibility fix — hr_access_level is a login-time snapshot
+  // (hrScope.ts) that only ever WIDENS or NARROWS which HR items show, same
+  // spirit as the permission override below; the actual enforcement is
+  // server-side regardless (employees/attendance/leaveRequests/
+  // performanceScores/payroll controllers all independently re-check).
+  // Missing hr_access_level (e.g. a user object cached from before this
+  // field existed) is treated as the most restrictive level, never the most
+  // permissive, so a stale/incomplete snapshot can only under-show a menu
+  // item, never over-show one.
+  const hrAccessRank: Record<'self' | 'department' | 'full', number> = { self: 0, department: 1, full: 2 };
+  const hrAccessLevel = user?.hr_access_level ?? 'self';
+  const canAccessUsers = isAdmin || !!user?.can_access_users;
   // Role gating still hides the item outright (an employee was never going to see
   // Payroll regardless of plan). Plan gating is different on purpose, matching the
   // Wafeq reference the user pointed to: the item stays visible with a tier badge, and
@@ -332,7 +373,11 @@ export default function Layout() {
     .map((group) => ({
       ...group,
       items: group.items.filter((i) => {
-        const roleOk = (!('managerOnly' in i) || !i.managerOnly || isManager) && (!('adminOnly' in i) || !i.adminOnly || isAdmin);
+        const roleOk =
+          (!('managerOnly' in i) || !i.managerOnly || isManager) &&
+          (!('adminOnly' in i) || !i.adminOnly || isAdmin) &&
+          (!i.minHrAccess || hrAccessRank[hrAccessLevel] >= hrAccessRank[i.minHrAccess]) &&
+          (!i.requiresUsersAccess || canAccessUsers);
         if (roleOk) return true;
         // Permission override (MIGRATION_054): only fires when roleOk is false, so this
         // can never hide an item the role check already shows — see NavItem.permission.

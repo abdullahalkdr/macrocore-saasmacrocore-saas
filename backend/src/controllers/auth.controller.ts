@@ -18,6 +18,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
 import { sendEmail, verificationEmailHtml, passwordResetEmailHtml } from '../utils/email';
+import { getHrScope, canAccessUsersList } from '../utils/hrScope';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID || undefined);
@@ -376,6 +377,17 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
     trialDaysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
   }
 
+  // 2026-08-26 HR-visibility fix — a login-time snapshot of the user's HR/
+  // Users-admin access level, computed once here (hrScope.ts) so the
+  // frontend sidebar (Layout.tsx) can hide HR/Users nav items it has no
+  // real access to, without re-deriving department membership itself. This
+  // is a UX convenience only — every actual HR/Users endpoint re-checks
+  // independently on the server, so a stale snapshot (e.g. after a
+  // department reassignment mid-session) can at most mis-hide/mis-show a
+  // menu item, never grant real access.
+  const hrScope = await getHrScope(row.company_id, row.id, row.role);
+  const canAccessUsers = await canAccessUsersList(row.company_id, row.id, row.role);
+
   res.status(200).json({
     success: true,
     user: {
@@ -385,6 +397,8 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
       role: row.role,
       company_id: row.company_id,
       email_verified: !!row.email_verified_at,
+      hr_access_level: hrScope.level,
+      can_access_users: canAccessUsers,
     },
     token,
     trial_days_remaining: trialDaysRemaining,

@@ -6,6 +6,7 @@ import { isUniqueViolation, isForeignKeyViolation } from '../utils/dbErrors';
 import { computeLateMinutes, computeDeduction } from '../utils/attendance';
 import { logAudit } from '../utils/audit';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
+import { getHrScope } from '../utils/hrScope';
 
 export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -87,15 +88,25 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const params: unknown[] = [companyId];
   let where = 'ar.company_id = $1';
 
-  if (req.auth!.role === 'employee') {
-    // Forced ownership filter: an employee can only ever see their own attendance +
-    // payroll-deduction history. Any employee_id they pass in the query is ignored.
+  // Department-scoped since the 2026-08-26 HR-visibility fix (hrScope.ts).
+  // Forced ownership/department filter overrides whatever employee_id the
+  // caller passed for 'self'/'department' scope — a non-HR manager can still
+  // additionally filter down to one employee via employee_id, but only ever
+  // within their own department (the AND below can never widen the scope).
+  const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+  if (scope.level === 'self') {
     const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
     params.push(ownEmployeeId);
     where += ` AND ar.employee_id = $${params.length}`;
-  } else if (typeof employee_id === 'string') {
-    params.push(employee_id);
-    where += ` AND ar.employee_id = $${params.length}`;
+  } else {
+    if (scope.level === 'department') {
+      params.push(scope.departmentIds);
+      where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+    }
+    if (typeof employee_id === 'string') {
+      params.push(employee_id);
+      where += ` AND ar.employee_id = $${params.length}`;
+    }
   }
   if (typeof date === 'string') {
     params.push(date);

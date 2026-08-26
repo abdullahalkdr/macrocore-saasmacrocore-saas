@@ -6,6 +6,7 @@ import { isForeignKeyViolation } from '../utils/dbErrors';
 import { logAudit } from '../utils/audit';
 import { notifyRoles } from '../utils/notifications';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
+import { getHrScope } from '../utils/hrScope';
 
 // "Absences" — two sub-sections. category='leave' uses LEAVE_TYPES for `type`.
 // category='absence_permission' pins `type` to the fixed 'permission' value and
@@ -157,14 +158,23 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   // Same finding #2 fix: list() had no per-row ownership filter — any employee could
   // pull every other employee's leave/absence-permission requests (type, reason,
   // attachment) for the whole company. Force the filter for role='employee', ignore
-  // any employee_id they pass in the query.
-  if (req.auth!.role === 'employee') {
+  // any employee_id they pass in the query. Extended 2026-08-26 (hrScope.ts) with a
+  // department-wide filter for a non-HR manager, same override-can-only-narrow
+  // pattern as attendance.controller.ts's list().
+  const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+  if (scope.level === 'self') {
     const ownEmployeeId = await getOwnEmployeeId(req.auth!.userId, companyId);
     params.push(ownEmployeeId);
     where += ` AND lr.employee_id = $${params.length}`;
-  } else if (typeof employee_id === 'string') {
-    params.push(employee_id);
-    where += ` AND lr.employee_id = $${params.length}`;
+  } else {
+    if (scope.level === 'department') {
+      params.push(scope.departmentIds);
+      where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+    }
+    if (typeof employee_id === 'string') {
+      params.push(employee_id);
+      where += ` AND lr.employee_id = $${params.length}`;
+    }
   }
   if (typeof status === 'string') {
     params.push(status);

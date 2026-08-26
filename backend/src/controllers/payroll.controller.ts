@@ -6,17 +6,25 @@ import { logAudit } from '../utils/audit';
 import { assertPeriodOpen } from '../utils/periodGuard';
 import { hasPermission } from '../utils/permissions';
 import { getLatestApproval, fileApprovalRequest } from '../utils/financialApprovals';
+import { getHrScope } from '../utils/hrScope';
 
-// list()/getOne() are reachable by any authenticated user (see payroll.routes.ts) — a
-// plain employee with no 'manage_payroll' grant only ever sees their OWN payroll rows
-// (salary/deduction amounts are personal financial data, same reasoning as the
-// attendance-list fix in MIGRATION_040). Returns the employee_id to filter by, or null
-// meaning "no filter, see everyone" for admin/manager or a manage_payroll grant.
-async function ownEmployeeIdFilter(req: Request): Promise<string | null | undefined> {
-  if (req.auth!.role === 'admin' || req.auth!.role === 'manager') return undefined;
-  if (await hasPermission(req.auth!.userId, 'manage_payroll')) return undefined;
-  const u = await pool.query('SELECT employee_id FROM users WHERE id = $1', [req.auth!.userId]);
-  return u.rows[0]?.employee_id ?? null; // null = linked to no employee -> sees nothing, not everyone
+// list()/getOne() are reachable by any authenticated user (see payroll.routes.ts). Salary
+// amounts are the single most sensitive HR data point in the system — MORE restricted than
+// the general employees/attendance/leaveRequests/performanceScores department-scope pattern
+// (hrScope.ts) on purpose: a plain department manager does NOT get automatic visibility into
+// their team's pay the way they do into e.g. attendance/leave, matching how real companies
+// keep compensation data need-to-know even from a direct manager. Only an HR-department/admin
+// user (hrScope 'full'), or anyone explicitly granted the 'manage_payroll' permission (e.g. a
+// Finance/Payroll role that isn't HR), sees the whole company; everyone else sees only their
+// own record. Mirrors the Layout.tsx sidebar gate for Payroll (minHrAccess: 'full' + the
+// manage_payroll permission widening it) — added 2026-08-26.
+type PayrollFilter = { type: 'all' } | { type: 'own'; employeeId: string | null };
+
+async function resolvePayrollFilter(req: Request): Promise<PayrollFilter> {
+  if (await hasPermission(req.auth!.userId, 'manage_payroll')) return { type: 'all' };
+  const scope = await getHrScope(req.auth!.companyId, req.auth!.userId, req.auth!.role);
+  if (scope.level === 'full') return { type: 'all' };
+  return { type: 'own', employeeId: scope.level === 'self' ? scope.employeeId : null };
 }
 
 interface AdjustmentInput {
@@ -59,7 +67,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { month } = req.query;
 
-  const ownEmployeeId = await ownEmployeeIdFilter(req);
+  const filter = await resolvePayrollFilter(req);
 
   const params: unknown[] = [companyId];
   let where = 'p.company_id = $1';
@@ -68,8 +76,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     params.push(month);
     where += ` AND p.month_year = $${params.length}`;
   }
-  if (ownEmployeeId !== undefined) {
-    params.push(ownEmployeeId);
+  if (filter.type === 'own') {
+    params.push(filter.employeeId);
     where += ` AND p.employee_id = $${params.length}`;
   }
 
@@ -94,12 +102,12 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
-  const ownEmployeeId = await ownEmployeeIdFilter(req);
+  const filter = await resolvePayrollFilter(req);
 
   const params: unknown[] = [id, companyId];
   let where = 'p.id = $1 AND p.company_id = $2';
-  if (ownEmployeeId !== undefined) {
-    params.push(ownEmployeeId);
+  if (filter.type === 'own') {
+    params.push(filter.employeeId);
     where += ` AND p.employee_id = $${params.length}`;
   }
 
