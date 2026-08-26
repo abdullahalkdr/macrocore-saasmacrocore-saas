@@ -23,17 +23,86 @@ const EXPORT_ROW_CAP = 5000;
 // the ~9 SENSITIVE_ACTIONS call sites that were updated to pass old/new values into
 // logAudit(); every other entry returns an empty list, which the frontend treats as
 // "no field-level detail recorded" rather than an error.
+//
+// Also resolves `target` — who/what the change was actually applied to. A field
+// diff alone only says "role: employee -> manager"; without a target, a reader has
+// no way to know WHICH user this happened to (Abdullah flagged this gap directly:
+// an audit trail that doesn't say who is incomplete). Resolution prefers a live
+// join (current name), falling back to the name captured in old_values/new_values
+// at the time of the action — so it still resolves after the record is deleted.
 export const getChanges = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const result = await pool.query(
-    `SELECT field_name, old_value, new_value, created_at FROM audit_log_field_changes
-     WHERE audit_log_id = $1 AND company_id = $2
-     ORDER BY field_name`,
-    [id, companyId]
-  );
-  res.status(200).json({ success: true, changes: result.rows });
+
+  const [changesResult, logResult] = await Promise.all([
+    pool.query(
+      `SELECT field_name, old_value, new_value, created_at FROM audit_log_field_changes
+       WHERE audit_log_id = $1 AND company_id = $2
+       ORDER BY field_name`,
+      [id, companyId]
+    ),
+    pool.query(
+      `SELECT entity_type, entity_id, old_values, new_values FROM audit_logs WHERE id = $1 AND company_id = $2
+       UNION ALL
+       SELECT entity_type, entity_id, old_values, new_values FROM audit_logs_archive WHERE id = $1 AND company_id = $2
+       LIMIT 1`,
+      [id, companyId]
+    ),
+  ]);
+
+  const log = logResult.rows[0] ?? null;
+  const target = log ? await resolveTarget(companyId, log) : null;
+
+  res.status(200).json({ success: true, changes: changesResult.rows, target });
 });
+
+// Best-effort "who/what was this change applied to" label for getChanges(). Every
+// entity_type used by a SENSITIVE_ACTIONS call site (see utils/audit.ts) is handled
+// explicitly; anything else falls through to { type: entity_type, label: null } and
+// the frontend just shows the entity type with no name.
+async function resolveTarget(
+  companyId: string,
+  log: { entity_type: string | null; entity_id: string | null; old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null }
+): Promise<{ type: string | null; label: string | null }> {
+  const { entity_type, entity_id, old_values, new_values } = log;
+  const snapshot: Record<string, unknown> = { ...(old_values || {}), ...(new_values || {}) };
+
+  if (!entity_id) return { type: entity_type, label: null };
+
+  if (entity_type === 'users' || entity_type === 'user_permissions') {
+    const r = await pool.query('SELECT full_name, email FROM users WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const row = r.rows[0];
+    const label = (row?.full_name || row?.email || snapshot.full_name || snapshot.email || null) as string | null;
+    return { type: 'users', label };
+  }
+
+  if (entity_type === 'employees') {
+    const r = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const label = (r.rows[0]?.name || snapshot.name || null) as string | null;
+    return { type: 'employees', label };
+  }
+
+  if (entity_type === 'payroll') {
+    const r = await pool.query(
+      `SELECT e.name FROM payroll p JOIN employees e ON e.id = p.employee_id WHERE p.id = $1 AND p.company_id = $2`,
+      [entity_id, companyId]
+    );
+    let label = (r.rows[0]?.name || null) as string | null;
+    if (!label && snapshot.employee_id) {
+      const e = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [snapshot.employee_id, companyId]);
+      label = (e.rows[0]?.name || null) as string | null;
+    }
+    return { type: 'employees', label };
+  }
+
+  if (entity_type === 'job_role_permissions') {
+    const r = await pool.query('SELECT name, name_en FROM job_roles WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const label = (r.rows[0]?.name || r.rows[0]?.name_en || null) as string | null;
+    return { type: 'job_roles', label };
+  }
+
+  return { type: entity_type, label: null };
+}
 
 // Read-only — logAudit() (utils/audit.ts) has been writing to this table from nearly
 // every controller in the app all along; this is just the first UI to actually view it.

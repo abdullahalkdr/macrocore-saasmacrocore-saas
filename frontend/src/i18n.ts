@@ -1353,6 +1353,8 @@ const en = {
     viewChanges: 'View changes',
     hideChanges: 'Hide changes',
     noChanges: 'No field-level changes recorded for this entry.',
+    changesFor: (name: string) => `Applied to: ${name}`,
+    changesForUnknown: 'Applied to: unknown / deleted record',
   },
   shiftSchedule: {
     title: 'Shift Roster',
@@ -3563,6 +3565,8 @@ const ar: typeof en = {
     viewChanges: 'عرض التفاصيل',
     hideChanges: 'إخفاء التفاصيل',
     noChanges: 'لا توجد تفاصيل تغييرات مسجلة لهذي الحركة.',
+    changesFor: (name: string) => `طبّقت على: ${name}`,
+    changesForUnknown: 'طبّقت على: سجل محذوف / غير معروف',
   },
   shiftSchedule: {
     title: 'جدولة الورديات',

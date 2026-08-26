@@ -23,6 +23,11 @@ interface FieldChange {
   new_value: string | null;
 }
 
+interface ChangeTarget {
+  type: string | null;
+  label: string | null;
+}
+
 // Pure presentation — turns 'employee_deleted' into 'employee deleted', no translation
 // table needed for the dozens of distinct action strings scattered across controllers.
 function humanize(s: string): string {
@@ -48,6 +53,7 @@ export default function AuditLogPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [changes, setChanges] = useState<FieldChange[]>([]);
+  const [changeTarget, setChangeTarget] = useState<ChangeTarget | null>(null);
   const [changesLoading, setChangesLoading] = useState(false);
 
   function currentFilterParams() {
@@ -117,10 +123,17 @@ export default function AuditLogPage() {
     }
     setExpandedId(id);
     setChanges([]);
+    setChangeTarget(null);
     setChangesLoading(true);
-    get<{ changes: FieldChange[] }>(`/audit-log/${id}/changes`)
-      .then((r) => setChanges(r.changes))
-      .catch(() => setChanges([]))
+    get<{ changes: FieldChange[]; target: ChangeTarget | null }>(`/audit-log/${id}/changes`)
+      .then((r) => {
+        setChanges(r.changes);
+        setChangeTarget(r.target ?? null);
+      })
+      .catch(() => {
+        setChanges([]);
+        setChangeTarget(null);
+      })
       .finally(() => setChangesLoading(false));
   }
 
@@ -247,15 +260,28 @@ export default function AuditLogPage() {
                       ) : changes.length === 0 ? (
                         <span className="muted">{t.auditLog.noChanges}</span>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {changes.map((c, i) => (
-                            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
-                              <span style={{ fontWeight: 600, minWidth: 140 }}>{humanize(c.field_name)}</span>
-                              <span className="muted">{c.old_value ?? '—'}</span>
-                              <span>→</span>
-                              <span>{c.new_value ?? '—'}</span>
-                            </div>
-                          ))}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>
+                            {changeTarget?.label
+                              ? t.auditLog.changesFor(changeTarget.label)
+                              : t.auditLog.changesForUnknown}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            {changes.map((c, i) => (
+                              // direction: 'ltr' is deliberate, not cosmetic — under the app's
+                              // RTL layout (html dir="rtl"), a plain flex row reverses the visual
+                              // order of these spans while the arrow glyph keeps pointing right,
+                              // which reads as "new -> old" on screen even though old_value/
+                              // new_value are correctly ordered in the data and in the DOM. Same
+                              // fix already used for value columns in PayrollPage/ReportsPage.
+                              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 13, direction: 'ltr' }}>
+                                <span style={{ fontWeight: 600, minWidth: 140 }}>{humanize(c.field_name)}</span>
+                                <span className="muted">{c.old_value ?? '—'}</span>
+                                <span>→</span>
+                                <span>{c.new_value ?? '—'}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </td>
