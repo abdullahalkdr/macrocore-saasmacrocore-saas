@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { get, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
@@ -15,6 +15,12 @@ interface AuditLogEntry {
   user_name: string | null;
   user_email: string | null;
   is_sensitive: boolean;
+}
+
+interface FieldChange {
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
 }
 
 // Pure presentation — turns 'employee_deleted' into 'employee deleted', no translation
@@ -40,6 +46,9 @@ export default function AuditLogPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [changes, setChanges] = useState<FieldChange[]>([]);
+  const [changesLoading, setChangesLoading] = useState(false);
 
   function currentFilterParams() {
     const params = new URLSearchParams();
@@ -96,6 +105,23 @@ export default function AuditLogPage() {
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : t.auditLog.exportFailed))
       .finally(() => setExportBusy(false));
+  }
+
+  // Field-level detail (version_history, MIGRATION_067) only exists for the ~9
+  // sensitive actions whose controllers were updated to pass old/new values into
+  // logAudit() — an empty result here just means "nothing recorded," not an error.
+  function toggleDetails(id: string) {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(id);
+    setChanges([]);
+    setChangesLoading(true);
+    get<{ changes: FieldChange[] }>(`/audit-log/${id}/changes`)
+      .then((r) => setChanges(r.changes))
+      .catch(() => setChanges([]))
+      .finally(() => setChangesLoading(false));
   }
 
   // Filter change resets to page 1 (a stale page number past the new, smaller result
@@ -180,20 +206,62 @@ export default function AuditLogPage() {
             </thead>
             <tbody>
               {items.map((entry) => (
-                <tr key={entry.id}>
+                <Fragment key={entry.id}>
+                <tr>
                   <td className="num">{new Date(entry.created_at).toLocaleString()}</td>
                   <td>{entry.user_name || entry.user_email || t.auditLog.systemUser}</td>
                   <td style={{ fontWeight: 700 }}>
                     {humanize(entry.action)}
                     {entry.is_sensitive && (
-                      <span className="badge sensitive" style={{ marginInlineStart: 8 }}>
-                        {t.auditLog.sensitive}
-                      </span>
+                      <>
+                        <span className="badge sensitive" style={{ marginInlineStart: 8 }}>
+                          {t.auditLog.sensitive}
+                        </span>
+                        <button
+                          onClick={() => toggleDetails(entry.id)}
+                          style={{
+                            marginInlineStart: 8,
+                            fontSize: 12,
+                            fontWeight: 400,
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--blue-700)',
+                            textDecoration: 'underline',
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        >
+                          {expandedId === entry.id ? t.auditLog.hideChanges : t.auditLog.viewChanges}
+                        </button>
+                      </>
                     )}
                   </td>
                   <td>{humanize(entry.entity_type)}</td>
                   <td className="num muted">{entry.ip_address || '—'}</td>
                 </tr>
+                {entry.is_sensitive && expandedId === entry.id && (
+                  <tr>
+                    <td colSpan={5} style={{ background: 'var(--stone-50)' }}>
+                      {changesLoading ? (
+                        <span className="muted">{t.common.loading}</span>
+                      ) : changes.length === 0 ? (
+                        <span className="muted">{t.auditLog.noChanges}</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {changes.map((c, i) => (
+                            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
+                              <span style={{ fontWeight: 600, minWidth: 140 }}>{humanize(c.field_name)}</span>
+                              <span className="muted">{c.old_value ?? '—'}</span>
+                              <span>→</span>
+                              <span>{c.new_value ?? '—'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
               {items.length === 0 && (
                 <tr>

@@ -137,6 +137,12 @@ export const setForUser = asyncHandler(async (req: Request, res: Response) => {
 
   const userCheck = await pool.query(`SELECT id, role FROM users WHERE id = $1 AND company_id = $2`, [userId, companyId]);
   if (!userCheck.rows[0]) throw new AppError(404, 'User not found');
+
+  const oldGrants = await pool.query(
+    'SELECT permission_key FROM user_permissions WHERE user_id = $1 AND company_id = $2',
+    [userId, companyId]
+  );
+  const oldKeys = oldGrants.rows.map((r) => r.permission_key);
   if (userCheck.rows[0].role !== 'employee') {
     const disallowed = permission_keys.find((k: string) => !ANY_ROLE_KEYS.includes(k));
     if (disallowed !== undefined) {
@@ -172,6 +178,8 @@ export const setForUser = asyncHandler(async (req: Request, res: Response) => {
     entityType: 'user_permissions',
     entityId: userId as string,
     req,
+    oldValues: { permission_keys: oldKeys },
+    newValues: { permission_keys },
   });
 
   res.status(200).json({ success: true, permission_keys });
@@ -236,6 +244,12 @@ export const setForJobRole = asyncHandler(async (req: Request, res: Response) =>
   const roleCheck = await pool.query(`SELECT id FROM job_roles WHERE id = $1 AND company_id = $2`, [jobRoleId, companyId]);
   if (!roleCheck.rows[0]) throw new AppError(404, 'Job role not found');
 
+  const oldGrants = await pool.query(
+    'SELECT permission_key FROM job_role_permissions WHERE job_role_id = $1 AND company_id = $2',
+    [jobRoleId, companyId]
+  );
+  const oldKeys = oldGrants.rows.map((r) => r.permission_key);
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -261,6 +275,8 @@ export const setForJobRole = asyncHandler(async (req: Request, res: Response) =>
     entityType: 'job_role_permissions',
     entityId: jobRoleId as string,
     req,
+    oldValues: { permission_keys: oldKeys },
+    newValues: { permission_keys },
   });
 
   res.status(200).json({ success: true, permission_keys });

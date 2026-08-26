@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { list } from '../controllers/auditLog.controller';
+import { list, getChanges } from '../controllers/auditLog.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRoleOrPermission } from '../middleware/requirePermission';
 
@@ -10,5 +10,6 @@ router.use(requireAuth);
 // anyone individually or job-role granted it (e.g. IT department staff) without
 // changing what admin/manager already see.
 router.get('/', requireRoleOrPermission(['admin', 'manager'], 'view_audit_log'), list);
+router.get('/:id/changes', requireRoleOrPermission(['admin', 'manager'], 'view_audit_log'), getChanges);
 
 export default router;

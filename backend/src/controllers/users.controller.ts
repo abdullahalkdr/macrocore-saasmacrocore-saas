@@ -181,6 +181,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { role, status, full_name, email, new_password, employee_id } = req.body ?? {};
 
+  // Fetched before any mutation so logAudit can record a real before/after diff for
+  // sensitive changes (currently: role changes — see SENSITIVE_ACTIONS). Never
+  // selects password_hash — that value must never appear in old_values/new_values.
+  const beforeResult = await pool.query(
+    `SELECT role, status, full_name, email, employee_id FROM users WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
+  );
+  const oldUser = beforeResult.rows[0] ?? null;
+
   const sets: string[] = [];
   const params: unknown[] = [];
 
@@ -256,6 +265,8 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     entityType: 'users',
     entityId: user.id,
     req,
+    oldValues: oldUser,
+    newValues: { role: user.role, status: user.status, full_name: user.full_name, email: user.email, employee_id: user.employee_id },
   });
 
   res.status(200).json({ success: true, user });
@@ -267,8 +278,12 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 
   if (id === req.auth!.userId) throw new AppError(400, "You can't delete your own account");
 
-  const target = await pool.query('SELECT role FROM users WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const target = await pool.query(
+    'SELECT role, status, full_name, email, employee_id FROM users WHERE id = $1 AND company_id = $2',
+    [id, companyId]
+  );
   if (!target.rows[0]) throw new AppError(404, 'User not found');
+  const oldUser = target.rows[0];
 
   if (target.rows[0].role === 'admin') {
     const admins = await pool.query(
@@ -280,7 +295,16 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 
   await pool.query('DELETE FROM users WHERE id = $1 AND company_id = $2', [id, companyId]);
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'user_deleted', entityType: 'users', entityId: id as string, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'user_deleted',
+    entityType: 'users',
+    entityId: id as string,
+    req,
+    oldValues: oldUser,
+    newValues: null,
+  });
 
   res.status(200).json({ success: true, message: 'User deleted' });
 });

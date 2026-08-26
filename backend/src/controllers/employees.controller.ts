@@ -377,6 +377,9 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
+  const before = await pool.query(`SELECT ${SELECT_COLUMNS} FROM employees WHERE id = $1 AND company_id = $2`, [id, companyId]);
+  const oldEmployee = before.rows[0] ?? null;
+
   try {
     const result = await pool.query('DELETE FROM employees WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
     if (result.rows.length === 0) throw new AppError(404, 'Employee not found');
@@ -387,7 +390,16 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
     throw err;
   }
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'employee_deleted', entityType: 'employees', entityId: id as string, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'employee_deleted',
+    entityType: 'employees',
+    entityId: id as string,
+    req,
+    oldValues: oldEmployee,
+    newValues: null,
+  });
 
   res.status(200).json({ success: true });
 });

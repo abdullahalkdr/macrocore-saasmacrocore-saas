@@ -50,10 +50,15 @@ async function run() {
 
         if (batchSize > 0) {
           const ids = rows.map((r) => r.id);
+          // hash/prev_hash (MIGRATION_066) are carried over as-is, not recomputed —
+          // the whole point of the chain is that a row's hash never changes after
+          // it's written, archiving included. See MIGRATION_066's header comment for
+          // how new inserts into audit_logs find the correct tip once a company's
+          // most recent rows have moved here.
           await client.query(
             `INSERT INTO audit_logs_archive
-               (id, company_id, user_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, created_at)
-             SELECT id, company_id, user_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, created_at
+               (id, company_id, user_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, created_at, prev_hash, hash)
+             SELECT id, company_id, user_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent, created_at, prev_hash, hash
              FROM audit_logs
              WHERE id = ANY($1)
              ON CONFLICT (id) DO NOTHING`,

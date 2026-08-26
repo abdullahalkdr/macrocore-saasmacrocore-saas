@@ -1350,6 +1350,9 @@ const en = {
     exportFailed: 'Failed to export the activity log',
     exportTruncated: (shown: number, total: number) =>
       `Export includes the most recent ${shown} of ${total} matching entries — narrow the date range to export everything.`,
+    viewChanges: 'View changes',
+    hideChanges: 'Hide changes',
+    noChanges: 'No field-level changes recorded for this entry.',
   },
   shiftSchedule: {
     title: 'Shift Roster',
@@ -3557,6 +3560,9 @@ const ar: typeof en = {
     exportFailed: 'فشل تصدير سجل الحركات',
     exportTruncated: (shown: number, total: number) =>
       `التصدير يشمل آخر ${shown} من أصل ${total} عملية مطابقة — ضيّق نطاق التاريخ لتصدير الكل.`,
+    viewChanges: 'عرض التفاصيل',
+    hideChanges: 'إخفاء التفاصيل',
+    noChanges: 'لا توجد تفاصيل تغييرات مسجلة لهذي الحركة.',
   },
   shiftSchedule: {
     title: 'جدولة الورديات',

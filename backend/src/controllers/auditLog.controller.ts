@@ -2,24 +2,12 @@ import { Request, Response } from 'express';
 import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { parsePagination } from '../utils/pagination';
+import { SENSITIVE_ACTIONS } from '../utils/audit';
 
-// Actions worth flagging as "sensitive" in the UI: role/permission changes, deleting a
-// person, and anything that touches payroll money. Classified at READ time (not a
-// stored column) on purpose — it applies retroactively to every historical row, and
-// adding a new sensitive action later is a one-line change here, no migration needed.
-// Phase 02 (real-time alerts) and Phase 04 (compliance reports) are expected to import
-// this same set rather than keeping their own copy — see the Activity Log roadmap.
-export const SENSITIVE_ACTIONS = new Set([
-  'user_role_changed',
-  'user_deleted',
-  'user_permissions_updated',
-  'job_role_permissions_updated',
-  'employee_deleted',
-  'payroll_generated',
-  'payroll_updated',
-  'payroll_deleted',
-  'payroll_paid',
-]);
+// Re-exported for backward compatibility — utils/audit.ts is now the source of truth
+// (it needs the set too, to decide which logAudit() calls write to version_history,
+// and a controller importing from a util is the right direction, not the reverse).
+export { SENSITIVE_ACTIONS };
 
 // Hard cap on a single CSV export (?format=csv) — still respects every filter below,
 // just skips the page/limit constraint so the download matches "everything matching
@@ -28,6 +16,23 @@ export const SENSITIVE_ACTIONS = new Set([
 // the answer, not raising this number indefinitely (the roadmap's own growth
 // assumption is millions of rows within a couple of years — no unbounded export).
 const EXPORT_ROW_CAP = 5000;
+
+// GET /audit-log/:id/changes — field-level diff detail for one entry (MIGRATION_067's
+// version_history). Only ever has rows for the ~9 SENSITIVE_ACTIONS call sites that
+// were updated to pass old/new values into logAudit(); every other entry returns an
+// empty list, which the frontend treats as "no field-level detail recorded" rather
+// than an error.
+export const getChanges = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id } = req.params;
+  const result = await pool.query(
+    `SELECT field_name, old_value, new_value, created_at FROM version_history
+     WHERE audit_log_id = $1 AND company_id = $2
+     ORDER BY field_name`,
+    [id, companyId]
+  );
+  res.status(200).json({ success: true, changes: result.rows });
+});
 
 // Read-only — logAudit() (utils/audit.ts) has been writing to this table from nearly
 // every controller in the app all along; this is just the first UI to actually view it.

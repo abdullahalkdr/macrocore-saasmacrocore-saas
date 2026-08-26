@@ -260,7 +260,16 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 
   const savedAdjustments = await fetchAdjustments(payroll.id);
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'payroll_generated', entityType: 'payroll', entityId: payroll.id, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'payroll_generated',
+    entityType: 'payroll',
+    entityId: payroll.id,
+    req,
+    oldValues: null,
+    newValues: payroll,
+  });
 
   res.status(201).json({ success: true, payroll, adjustments: savedAdjustments });
 });
@@ -387,7 +396,16 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const savedAdjustments = await fetchAdjustments(id as string);
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'payroll_updated', entityType: 'payroll', entityId: id as string, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'payroll_updated',
+    entityType: 'payroll',
+    entityId: id as string,
+    req,
+    oldValues: cur,
+    newValues: payroll,
+  });
 
   res.status(200).json({ success: true, payroll, adjustments: savedAdjustments });
 });
@@ -397,17 +415,32 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
-  const existing = await pool.query('SELECT month_year FROM payroll WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const existing = await pool.query(
+    `SELECT employee_id, month_year, base_salary, attendance_bonus, other_deductions, wage_type,
+            hourly_rate, hours_worked, attendance_deduction, total_paid, status, paid_date
+     FROM payroll WHERE id = $1 AND company_id = $2`,
+    [id, companyId]
+  );
   if (!existing.rows[0]) throw new AppError(404, 'Payroll record not found');
+  const oldPayroll = existing.rows[0];
   {
-    const [guardYear, guardMonth] = (existing.rows[0].month_year as string).split('-').map(Number);
+    const [guardYear, guardMonth] = (oldPayroll.month_year as string).split('-').map(Number);
     await assertPeriodOpen(companyId, guardYear, guardMonth);
   }
 
   const result = await pool.query('DELETE FROM payroll WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
   if (result.rows.length === 0) throw new AppError(404, 'Payroll record not found');
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'payroll_deleted', entityType: 'payroll', entityId: id as string, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'payroll_deleted',
+    entityType: 'payroll',
+    entityId: id as string,
+    req,
+    oldValues: oldPayroll,
+    newValues: null,
+  });
 
   res.status(200).json({ success: true });
 });
@@ -416,7 +449,10 @@ export const pay = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
 
-  const existing = await pool.query('SELECT id, status, month_year FROM payroll WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const existing = await pool.query(
+    'SELECT id, status, paid_date, month_year FROM payroll WHERE id = $1 AND company_id = $2',
+    [id, companyId]
+  );
   if (!existing.rows[0]) throw new AppError(404, 'Payroll record not found');
   if (existing.rows[0].status === 'paid') throw new AppError(400, 'Already paid');
   {
@@ -458,7 +494,16 @@ export const pay = asyncHandler(async (req: Request, res: Response) => {
   );
   const payroll = result.rows[0];
 
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'payroll_paid', entityType: 'payroll', entityId: payroll.id, req });
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'payroll_paid',
+    entityType: 'payroll',
+    entityId: payroll.id,
+    req,
+    oldValues: { status: existing.rows[0].status, paid_date: existing.rows[0].paid_date },
+    newValues: { status: payroll.status, paid_date: payroll.paid_date },
+  });
 
   res.status(200).json({ success: true, payroll });
 });
