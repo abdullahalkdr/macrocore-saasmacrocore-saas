@@ -3,6 +3,7 @@ import { get, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Pagination from '../components/Pagination';
+import { exportRowsToCsv } from '../utils/csv';
 
 interface AuditLogEntry {
   id: string;
@@ -37,14 +38,21 @@ export default function AuditLogPage() {
   const [dateTo, setDateTo] = useState('');
   const [sensitiveOnly, setSensitiveOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
-  function load(pageToLoad: number) {
+  function currentFilterParams() {
     const params = new URLSearchParams();
     if (actionFilter) params.set('action', actionFilter);
     if (entityFilter) params.set('entity_type', entityFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     if (sensitiveOnly) params.set('sensitive_only', 'true');
+    return params;
+  }
+
+  function load(pageToLoad: number) {
+    const params = currentFilterParams();
     params.set('page', String(pageToLoad));
     params.set('limit', String(LIMIT));
     get<{ audit_logs: AuditLogEntry[]; actions: string[]; entity_types: string[]; total: number }>(
@@ -57,6 +65,37 @@ export default function AuditLogPage() {
         setTotal(r.total);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : t.auditLog.loadFailed));
+  }
+
+  // ?format=csv pulls every row matching the current filters (up to the backend's
+  // export cap), not just the visible page — a plain page-slice export would silently
+  // under-report a filtered date range with more than one page of results.
+  function exportCsv() {
+    setError(null);
+    setNotice(null);
+    setExportBusy(true);
+    const params = currentFilterParams();
+    params.set('format', 'csv');
+    get<{ audit_logs: AuditLogEntry[]; total: number }>(`/audit-log?${params.toString()}`)
+      .then((r) => {
+        exportRowsToCsv(
+          `activity-log_${dateFrom || 'all'}_${dateTo || 'all'}.csv`,
+          [t.auditLog.when, t.auditLog.who, t.auditLog.action, t.auditLog.sensitive, t.auditLog.entityType, t.auditLog.ip],
+          r.audit_logs.map((entry) => [
+            new Date(entry.created_at).toLocaleString(),
+            entry.user_name || entry.user_email || t.auditLog.systemUser,
+            humanize(entry.action),
+            entry.is_sensitive ? t.common.yes : t.common.no,
+            humanize(entry.entity_type),
+            entry.ip_address || '',
+          ])
+        );
+        if (r.total > r.audit_logs.length) {
+          setNotice(t.auditLog.exportTruncated(r.audit_logs.length, r.total));
+        }
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.auditLog.exportFailed))
+      .finally(() => setExportBusy(false));
   }
 
   // Filter change resets to page 1 (a stale page number past the new, smaller result
@@ -74,6 +113,7 @@ export default function AuditLogPage() {
     <div>
       <PageHeader title={t.auditLog.title} subtitle={t.auditLog.subtitle} />
       {error && <div className="error-banner">{error}</div>}
+      {notice && <div className="success-banner">{notice}</div>}
 
       <div className="card">
         <div className="form-row">
@@ -121,6 +161,9 @@ export default function AuditLogPage() {
 
       <div className="section-title-row">
         <span className="muted">{t.auditLog.count(total)}</span>
+        <button className="btn btn-secondary btn-sm" onClick={exportCsv} disabled={exportBusy}>
+          {t.auditLog.exportCsv}
+        </button>
       </div>
 
       <div className="card">

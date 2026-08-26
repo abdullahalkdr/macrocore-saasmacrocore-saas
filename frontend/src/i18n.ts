@@ -67,6 +67,8 @@ const en = {
     previous: 'Previous',
     next: 'Next',
     pageOf: (page: number, totalPages: number) => `Page ${page} of ${totalPages}`,
+    yes: 'Yes',
+    no: 'No',
   },
   nav: {
     groupGeneral: 'General',
@@ -1344,6 +1346,10 @@ const en = {
     loadFailed: 'Failed to load the activity log',
     sensitive: 'Sensitive',
     sensitiveOnly: 'Sensitive actions only',
+    exportCsv: 'Export CSV',
+    exportFailed: 'Failed to export the activity log',
+    exportTruncated: (shown: number, total: number) =>
+      `Export includes the most recent ${shown} of ${total} matching entries — narrow the date range to export everything.`,
   },
   shiftSchedule: {
     title: 'Shift Roster',
@@ -2290,6 +2296,8 @@ const ar: typeof en = {
     previous: 'السابق',
     next: 'التالي',
     pageOf: (page: number, totalPages: number) => `صفحة ${page} من ${totalPages}`,
+    yes: 'نعم',
+    no: 'لا',
   },
   nav: {
     groupGeneral: 'عام',
@@ -3545,6 +3553,10 @@ const ar: typeof en = {
     loadFailed: 'فشل تحميل سجل النشاط',
     sensitive: 'حساسة',
     sensitiveOnly: 'الحركات الحساسة فقط',
+    exportCsv: 'تصدير CSV',
+    exportFailed: 'فشل تصدير سجل الحركات',
+    exportTruncated: (shown: number, total: number) =>
+      `التصدير يشمل آخر ${shown} من أصل ${total} عملية مطابقة — ضيّق نطاق التاريخ لتصدير الكل.`,
   },
   shiftSchedule: {
     title: 'جدولة الورديات',

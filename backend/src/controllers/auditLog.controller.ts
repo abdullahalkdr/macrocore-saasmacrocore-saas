@@ -21,15 +21,19 @@ export const SENSITIVE_ACTIONS = new Set([
   'payroll_paid',
 ]);
 
+// Hard cap on a single CSV export (?format=csv) — still respects every filter below,
+// just skips the page/limit constraint so the download matches "everything matching
+// these filters" instead of "the current page." 5000 rows is generous for today's
+// volume; if a company's filtered result ever exceeds it, narrowing the date range is
+// the answer, not raising this number indefinitely (the roadmap's own growth
+// assumption is millions of rows within a couple of years — no unbounded export).
+const EXPORT_ROW_CAP = 5000;
+
 // Read-only — logAudit() (utils/audit.ts) has been writing to this table from nearly
 // every controller in the app all along; this is just the first UI to actually view it.
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { entity_type, action, user_id, date_from, date_to, sensitive_only } = req.query;
-  // Real offset pagination — previously this endpoint only accepted a raw ?limit
-  // capped at 500 with no way to page past it. 25/page, 100 max, matches the same
-  // parsePagination() convention already used by users.controller.ts's list().
-  const { page, limit, offset } = parsePagination(req, 25, 100);
+  const { entity_type, action, user_id, date_from, date_to, sensitive_only, format } = req.query;
 
   const params: unknown[] = [companyId];
   let where = 'a.company_id = $1';
@@ -57,6 +61,14 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     params.push(Array.from(SENSITIVE_ACTIONS));
     where += ` AND a.action = ANY($${params.length})`;
   }
+
+  // ?format=csv (the Export CSV button) ignores normal pagination and pulls up to
+  // EXPORT_ROW_CAP matching rows in one request — same filters, same query shape,
+  // just no page constraint. Still returns plain JSON; the frontend does the actual
+  // CSV conversion via the same exportRowsToCsv() helper Expenses/Payroll/Reports
+  // already use, so this endpoint doesn't need to know anything about CSV formatting.
+  const isExport = format === 'csv';
+  const { page, limit, offset } = isExport ? { page: 1, limit: EXPORT_ROW_CAP, offset: 0 } : parsePagination(req, 25, 100);
 
   // COUNT(*) on the same filter — fine at today's row counts. Once audit_logs is in
   // the millions (the roadmap's own growth assumption), this is the first query to
