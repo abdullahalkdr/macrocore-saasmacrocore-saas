@@ -5,7 +5,7 @@ import { parsePagination } from '../utils/pagination';
 import { SENSITIVE_ACTIONS } from '../utils/audit';
 
 // Re-exported for backward compatibility — utils/audit.ts is now the source of truth
-// (it needs the set too, to decide which logAudit() calls write to version_history,
+// (it needs the set too, to decide which logAudit() calls write to audit_log_field_changes,
 // and a controller importing from a util is the right direction, not the reverse).
 export { SENSITIVE_ACTIONS };
 
@@ -17,16 +17,17 @@ export { SENSITIVE_ACTIONS };
 // assumption is millions of rows within a couple of years — no unbounded export).
 const EXPORT_ROW_CAP = 5000;
 
-// GET /audit-log/:id/changes — field-level diff detail for one entry (MIGRATION_067's
-// version_history). Only ever has rows for the ~9 SENSITIVE_ACTIONS call sites that
-// were updated to pass old/new values into logAudit(); every other entry returns an
-// empty list, which the frontend treats as "no field-level detail recorded" rather
-// than an error.
+// GET /audit-log/:id/changes — field-level diff detail for one entry
+// (MIGRATION_067's audit_log_field_changes — named to avoid colliding with this
+// schema's pre-existing, unrelated version_history table). Only ever has rows for
+// the ~9 SENSITIVE_ACTIONS call sites that were updated to pass old/new values into
+// logAudit(); every other entry returns an empty list, which the frontend treats as
+// "no field-level detail recorded" rather than an error.
 export const getChanges = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
   const result = await pool.query(
-    `SELECT field_name, old_value, new_value, created_at FROM version_history
+    `SELECT field_name, old_value, new_value, created_at FROM audit_log_field_changes
      WHERE audit_log_id = $1 AND company_id = $2
      ORDER BY field_name`,
     [id, companyId]

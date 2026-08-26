@@ -22,7 +22,7 @@ interface AuditParams {
 // column) on purpose — it applies retroactively to every historical row, and adding
 // a new sensitive action later is a one-line change here, no migration needed. This
 // same set also gates which logAudit() calls get a field-level diff written to
-// version_history (MIGRATION_067) — see the diffing logic below.
+// audit_log_field_changes (MIGRATION_067) — see the diffing logic below.
 //
 // Source of truth lives here (not in auditLog.controller.ts, which only reads it) so
 // this file can use it without an import cycle. Phase 02 (real-time alerts) and
@@ -68,18 +68,19 @@ export async function logAudit({
       ]
     );
 
-    // Field-level diffs (version_history) are only written for actions already
-    // flagged sensitive — Abdullah's locked scope for this sprint, matching the
-    // Activity Log roadmap's Phase 01 item exactly (sensitive-only, not every
-    // action in the app). Silently skipped when the caller didn't supply anything
-    // to diff — true for every logAudit() call site outside the ~9 that were
-    // updated for this, so none of them needed to change.
+    // Field-level diffs (audit_log_field_changes — named to avoid colliding with
+    // this schema's pre-existing, unrelated version_history table) are only written
+    // for actions already flagged sensitive — Abdullah's locked scope for this
+    // sprint, matching the Activity Log roadmap's Phase 01 item exactly
+    // (sensitive-only, not every action in the app). Silently skipped when the
+    // caller didn't supply anything to diff — true for every logAudit() call site
+    // outside the ~9 that were updated for this, so none of them needed to change.
     if (SENSITIVE_ACTIONS.has(action) && (oldValues || newValues)) {
       const auditLogId = result.rows[0].id;
       const diffs = diffFields(oldValues ?? {}, newValues ?? {});
       for (const d of diffs) {
         await pool.query(
-          `INSERT INTO version_history (audit_log_id, company_id, field_name, old_value, new_value)
+          `INSERT INTO audit_log_field_changes (audit_log_id, company_id, field_name, old_value, new_value)
            VALUES ($1, $2, $3, $4, $5)`,
           [auditLogId, companyId, d.field, d.oldValue, d.newValue]
         );
@@ -93,9 +94,9 @@ export async function logAudit({
 }
 
 // Shallow field-by-field diff over two plain objects. Values are stringified (JSON
-// for objects/arrays, plain text otherwise) since version_history stores everything
-// as TEXT — good enough for "what changed" auditing, not meant to be a deep
-// structural diff tool. A key missing from newValues (e.g. a delete, where the
+// for objects/arrays, plain text otherwise) since audit_log_field_changes stores
+// everything as TEXT — good enough for "what changed" auditing, not meant to be a
+// deep structural diff tool. A key missing from newValues (e.g. a delete, where the
 // caller passes newValues: null) shows as "had a value, now null" — deliberate: it
 // records what existed right before deletion.
 function diffFields(

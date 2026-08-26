@@ -107,7 +107,7 @@ export default function AuditLogPage() {
       .finally(() => setExportBusy(false));
   }
 
-  // Field-level detail (version_history, MIGRATION_067) only exists for the ~9
+  // Field-level detail (audit_log_field_changes, MIGRATION_067) only exists for the ~9
   // sensitive actions whose controllers were updated to pass old/new values into
   // logAudit() — an empty result here just means "nothing recorded," not an error.
   function toggleDetails(id: string) {
