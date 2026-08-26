@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { useT } from '../i18n';
 import { get, ApiError } from '../api/client';
 import { useDepartmentsStore, Department, DepartmentTemplateKey } from '../store/useDepartmentsStore';
@@ -48,6 +48,34 @@ function emptyDepartmentForm(): DepartmentFormState {
 // template), then the 5 generalized 2026-08-26.
 const DEPARTMENT_TEMPLATE_KEYS: DepartmentTemplateKey[] = ['IT', 'HR', 'FINANCE', 'MARKETING', 'LEGAL', 'OPERATIONS'];
 
+// Found live 2026-08-26: with all 6 templates loaded, the flat department
+// list (ORDER BY d.name on the backend — departments.controller.ts's list())
+// interleaves every division from every template alphabetically by Arabic
+// name, so a company that's loaded several templates can't visually tell
+// which departments came from which one. Rather than change the page's
+// underlying sort (bigger blast radius — affects every company, including
+// ones with hand-built trees that don't follow the template naming), this
+// adds a client-side category filter derived from each root department's
+// `code` prefix (e.g. 'OPS-BRANCH' -> 'OPS') — the same prefix every
+// division in a given template shares. A root department with no code (or a
+// code that doesn't match any known template prefix) falls into "no code"/
+// an as-is "other" bucket rather than being hidden.
+const TEMPLATE_KEY_TO_CODE_PREFIX: Record<DepartmentTemplateKey, string> = {
+  IT: 'IT',
+  HR: 'HR',
+  FINANCE: 'FIN',
+  MARKETING: 'MKT',
+  LEGAL: 'LGL',
+  OPERATIONS: 'OPS',
+};
+const UNCATEGORIZED_FILTER_VALUE = '__none__';
+
+function departmentCodePrefix(d: Department): string {
+  if (!d.code) return UNCATEGORIZED_FILTER_VALUE;
+  const dash = d.code.indexOf('-');
+  return dash === -1 ? d.code : d.code.slice(0, dash);
+}
+
 export default function DepartmentsPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
@@ -70,6 +98,7 @@ export default function DepartmentsPage() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [templateKeyToApply, setTemplateKeyToApply] = useState<DepartmentTemplateKey | ''>('');
   const [templateConfirmKey, setTemplateConfirmKey] = useState<DepartmentTemplateKey | null>(null);
   const [applyingTemplate, setApplyingTemplate] = useState(false);
@@ -81,6 +110,45 @@ export default function DepartmentsPage() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Category filter options — one per code-prefix actually present among the
+  // company's root departments right now, ordered: known template categories
+  // first (in the same fixed order as the "Load Template" picker), then any
+  // other/custom-coded roots, then an "uncategorized" bucket last for roots
+  // with no code at all (hand-added departments, or ones from before
+  // MIGRATION_057 seeded codes).
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of departmentTree) {
+      const key = departmentCodePrefix(d);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [departmentTree]);
+
+  const categoryOptions = useMemo(() => {
+    const options: { value: string; label: string; count: number }[] = [];
+    const knownPrefixes = new Set(Object.values(TEMPLATE_KEY_TO_CODE_PREFIX));
+    for (const templateKey of DEPARTMENT_TEMPLATE_KEYS) {
+      const prefix = TEMPLATE_KEY_TO_CODE_PREFIX[templateKey];
+      const count = categoryCounts.get(prefix);
+      if (count) options.push({ value: prefix, label: t.departments.templateLabels[templateKey], count });
+    }
+    for (const [key, count] of categoryCounts) {
+      if (key === UNCATEGORIZED_FILTER_VALUE || knownPrefixes.has(key)) continue;
+      options.push({ value: key, label: key, count });
+    }
+    const uncategorizedCount = categoryCounts.get(UNCATEGORIZED_FILTER_VALUE);
+    if (uncategorizedCount) {
+      options.push({ value: UNCATEGORIZED_FILTER_VALUE, label: t.departments.categoryUncategorized, count: uncategorizedCount });
+    }
+    return options;
+  }, [categoryCounts, t]);
+
+  const visibleDepartmentTree = useMemo(
+    () => (categoryFilter ? departmentTree.filter((d) => departmentCodePrefix(d) === categoryFilter) : departmentTree),
+    [departmentTree, categoryFilter]
+  );
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -207,7 +275,24 @@ export default function DepartmentsPage() {
       <div className="card">
         <div className="card-body">
           <div className="section-title-row">
-            <span className="muted">{departments.length}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="muted">{departments.length}</span>
+              {categoryOptions.length > 1 && (
+                <select
+                  className="form-input"
+                  style={{ width: 'auto' }}
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                >
+                  <option value="">{t.departments.categoryFilterAll}</option>
+                  {categoryOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.count})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 8 }}>
               {isAdmin && (
                 <>
@@ -255,8 +340,8 @@ export default function DepartmentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {renderRows(departmentTree, 0)}
-                {departmentTree.length === 0 && !loading && (
+                {renderRows(visibleDepartmentTree, 0)}
+                {visibleDepartmentTree.length === 0 && !loading && (
                   <tr>
                     <td colSpan={7}>
                       <div className="empty-state">{t.departments.empty}</div>

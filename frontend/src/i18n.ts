@@ -1250,6 +1250,8 @@ const en = {
     templateConfirmMessage: (label: string) =>
       `This replaces your company's current ${label} department and job roles with the full researched ${label} Department Template (its divisions, their internal sections, and job titles). Employees currently assigned to the old ${label} department or its job roles keep their employee record but lose that assignment — you'll need to reassign them afterward. This cannot be undone. Continue?`,
     templateFailed: 'Failed to apply the department template',
+    categoryFilterAll: 'All departments',
+    categoryUncategorized: 'No code',
     templateApplied: (label: string, r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
       `${label} department template applied: ${r.divisionsCreated} divisions, ${r.sectionsCreated} sections, ${r.rolesCreated} job roles created. ${r.employeesAffected} employee(s) previously under the old ${label} department lost that assignment and need reassigning.`,
   },
@@ -3505,6 +3507,8 @@ const ar: typeof en = {
     templateConfirmMessage: (label: string) =>
       `بذا تستبدل قسم ${label} الحالي بشركتك والمسميات الوظيفية اللي فيه بالقالب التنظيمي الكامل (إداراته الفرعية وأقسامها الداخلية ومسمياتها الوظيفية، مبني على بحث لهيكلة شركات كبيرة). الموظفين المعينين حالياً على قسم ${label} القديم أو مسمياته يحتفظون بسجلهم بس يفقدون هذا الربط — لازم تعيد ربطهم بعدين يدوياً. هذا الإجراء ما يترجع. تكمل؟`,
     templateFailed: 'فشل تحميل قالب الإدارة',
+    categoryFilterAll: 'كل الإدارات',
+    categoryUncategorized: 'بدون رمز',
     templateApplied: (label: string, r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
       `تم تحميل قالب إدارة ${label}: ${r.divisionsCreated} إدارات، ${r.sectionsCreated} أقسام فرعية، ${r.rolesCreated} مسمى وظيفي. ${r.employeesAffected} موظف كانوا تحت القسم القديم فقدوا الربط ولازم تعيد تعيينهم.`,
   },
