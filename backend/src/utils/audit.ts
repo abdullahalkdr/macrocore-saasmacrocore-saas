@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { pool } from '../db/pool';
+import { sendWhatsAppAlert, buildSensitiveActionMessage } from './whatsapp';
 
 interface AuditParams {
   companyId: string;
@@ -85,6 +86,18 @@ export async function logAudit({
           [auditLogId, companyId, d.field, d.oldValue, d.newValue]
         );
       }
+
+      // Phase 02 of the Activity Log roadmap — real-time WhatsApp alert for every
+      // sensitive action (Abdullah's locked scope: ALL of SENSITIVE_ACTIONS, one
+      // fixed number per company — see MIGRATION_068 and utils/whatsapp.ts).
+      // sendWhatsAppAlert() is a safe no-op until Abdullah's Meta Business
+      // Platform credentials exist as env vars; never throws, never delays or
+      // fails the request — the audit write above already succeeded regardless.
+      const [target, actor] = await Promise.all([
+        resolveTarget(companyId, { entity_type: entityType, entity_id: entityId ?? null, old_values: oldValues ?? null, new_values: newValues ?? null }),
+        userId ? getActorLabel(companyId, userId) : Promise.resolve(null),
+      ]);
+      await sendWhatsAppAlert(companyId, buildSensitiveActionMessage({ action, actorLabel: actor, target, diffs }));
     }
   } catch (err) {
     // an audit-log failure should never fail the request it's logging.
@@ -119,4 +132,59 @@ function stringifyValue(v: unknown): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+// Best-effort "who/what was this change applied to" label — shared by the
+// real-time WhatsApp alert above and GET /audit-log/:id/changes
+// (auditLog.controller.ts, which imports this instead of keeping its own copy).
+// Every entity_type used by a SENSITIVE_ACTIONS call site is handled explicitly;
+// anything else falls through to { type: entity_type, label: null }.
+export async function resolveTarget(
+  companyId: string,
+  log: { entity_type: string | null; entity_id: string | null; old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null }
+): Promise<{ type: string | null; label: string | null }> {
+  const { entity_type, entity_id, old_values, new_values } = log;
+  const snapshot: Record<string, unknown> = { ...(old_values || {}), ...(new_values || {}) };
+
+  if (!entity_id) return { type: entity_type, label: null };
+
+  if (entity_type === 'users' || entity_type === 'user_permissions') {
+    const r = await pool.query('SELECT full_name, email FROM users WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const row = r.rows[0];
+    const label = (row?.full_name || row?.email || snapshot.full_name || snapshot.email || null) as string | null;
+    return { type: 'users', label };
+  }
+
+  if (entity_type === 'employees') {
+    const r = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const label = (r.rows[0]?.name || snapshot.name || null) as string | null;
+    return { type: 'employees', label };
+  }
+
+  if (entity_type === 'payroll') {
+    const r = await pool.query(
+      `SELECT e.name FROM payroll p JOIN employees e ON e.id = p.employee_id WHERE p.id = $1 AND p.company_id = $2`,
+      [entity_id, companyId]
+    );
+    let label = (r.rows[0]?.name || null) as string | null;
+    if (!label && snapshot.employee_id) {
+      const e = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [snapshot.employee_id, companyId]);
+      label = (e.rows[0]?.name || null) as string | null;
+    }
+    return { type: 'employees', label };
+  }
+
+  if (entity_type === 'job_role_permissions') {
+    const r = await pool.query('SELECT name, name_en FROM job_roles WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
+    const label = (r.rows[0]?.name || r.rows[0]?.name_en || null) as string | null;
+    return { type: 'job_roles', label };
+  }
+
+  return { type: entity_type, label: null };
+}
+
+async function getActorLabel(companyId: string, userId: string): Promise<string | null> {
+  const r = await pool.query('SELECT full_name, email FROM users WHERE id = $1 AND company_id = $2', [userId, companyId]);
+  const row = r.rows[0];
+  return (row?.full_name || row?.email || null) as string | null;
 }

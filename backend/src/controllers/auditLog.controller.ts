@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { parsePagination } from '../utils/pagination';
-import { SENSITIVE_ACTIONS } from '../utils/audit';
+import { SENSITIVE_ACTIONS, resolveTarget } from '../utils/audit';
 
 // Re-exported for backward compatibility — utils/audit.ts is now the source of truth
 // (it needs the set too, to decide which logAudit() calls write to audit_log_field_changes,
@@ -55,54 +55,6 @@ export const getChanges = asyncHandler(async (req: Request, res: Response) => {
 
   res.status(200).json({ success: true, changes: changesResult.rows, target });
 });
-
-// Best-effort "who/what was this change applied to" label for getChanges(). Every
-// entity_type used by a SENSITIVE_ACTIONS call site (see utils/audit.ts) is handled
-// explicitly; anything else falls through to { type: entity_type, label: null } and
-// the frontend just shows the entity type with no name.
-async function resolveTarget(
-  companyId: string,
-  log: { entity_type: string | null; entity_id: string | null; old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null }
-): Promise<{ type: string | null; label: string | null }> {
-  const { entity_type, entity_id, old_values, new_values } = log;
-  const snapshot: Record<string, unknown> = { ...(old_values || {}), ...(new_values || {}) };
-
-  if (!entity_id) return { type: entity_type, label: null };
-
-  if (entity_type === 'users' || entity_type === 'user_permissions') {
-    const r = await pool.query('SELECT full_name, email FROM users WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
-    const row = r.rows[0];
-    const label = (row?.full_name || row?.email || snapshot.full_name || snapshot.email || null) as string | null;
-    return { type: 'users', label };
-  }
-
-  if (entity_type === 'employees') {
-    const r = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
-    const label = (r.rows[0]?.name || snapshot.name || null) as string | null;
-    return { type: 'employees', label };
-  }
-
-  if (entity_type === 'payroll') {
-    const r = await pool.query(
-      `SELECT e.name FROM payroll p JOIN employees e ON e.id = p.employee_id WHERE p.id = $1 AND p.company_id = $2`,
-      [entity_id, companyId]
-    );
-    let label = (r.rows[0]?.name || null) as string | null;
-    if (!label && snapshot.employee_id) {
-      const e = await pool.query('SELECT name FROM employees WHERE id = $1 AND company_id = $2', [snapshot.employee_id, companyId]);
-      label = (e.rows[0]?.name || null) as string | null;
-    }
-    return { type: 'employees', label };
-  }
-
-  if (entity_type === 'job_role_permissions') {
-    const r = await pool.query('SELECT name, name_en FROM job_roles WHERE id = $1 AND company_id = $2', [entity_id, companyId]);
-    const label = (r.rows[0]?.name || r.rows[0]?.name_en || null) as string | null;
-    return { type: 'job_roles', label };
-  }
-
-  return { type: entity_type, label: null };
-}
 
 // Read-only — logAudit() (utils/audit.ts) has been writing to this table from nearly
 // every controller in the app all along; this is just the first UI to actually view it.

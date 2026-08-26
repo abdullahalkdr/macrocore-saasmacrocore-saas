@@ -23,6 +23,8 @@ interface CompanyMe {
   inventory_enabled: boolean;
   delivery_notifications_enabled: boolean;
   two_factor_required: boolean;
+  whatsapp_alert_number: string | null;
+  whatsapp_alerts_enabled: boolean;
 }
 
 const COUNTRIES = [
@@ -126,12 +128,33 @@ export default function CompanySection() {
     }
   }
 
-  async function togglePref(key: 'inventory_enabled' | 'delivery_notifications_enabled' | 'two_factor_required', value: boolean) {
+  async function togglePref(
+    key: 'inventory_enabled' | 'delivery_notifications_enabled' | 'two_factor_required' | 'whatsapp_alerts_enabled',
+    value: boolean
+  ) {
     try {
       await patch('/company/me', { [key]: value });
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.account.saveFailed);
+    }
+  }
+
+  const [whatsappSaving, setWhatsappSaving] = useState(false);
+
+  async function saveWhatsappNumber(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setWhatsappSaving(true);
+    try {
+      await patch('/company/me', { whatsapp_alert_number: form.whatsapp_alert_number || null });
+      setSuccess(t.account.saved);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.account.saveFailed);
+    } finally {
+      setWhatsappSaving(false);
     }
   }
 
@@ -281,6 +304,43 @@ export default function CompanySection() {
               <input type="file" accept="image/*" onChange={handleStampChange} style={{ display: 'none' }} />
             </label>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, maxWidth: 420 }}>{t.account.company.stampHint}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <h2>{t.account.company.whatsappAlerts}</h2>
+        </div>
+        <div className="card-body">
+          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            {t.account.company.whatsappAlertsHint}
+          </p>
+          <form onSubmit={saveWhatsappNumber} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+            <div className="field" style={{ flex: '1 1 220px', margin: 0 }}>
+              <label>{t.account.company.whatsappNumber}</label>
+              <input
+                type="tel"
+                dir="ltr"
+                placeholder={t.account.company.whatsappNumberPlaceholder}
+                value={form.whatsapp_alert_number || ''}
+                onChange={(e) => setForm({ ...form, whatsapp_alert_number: e.target.value })}
+              />
+            </div>
+            <button type="submit" className="btn btn-secondary btn-sm" disabled={whatsappSaving}>
+              {t.common.save}
+            </button>
+          </form>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+            <span style={{ fontSize: 13 }}>{t.account.company.whatsappAlertsEnabled}</span>
+            <button
+              type="button"
+              className={`badge ${data.whatsapp_alerts_enabled ? 'open' : 'closed'}`}
+              style={{ cursor: 'pointer', border: 'none' }}
+              onClick={() => togglePref('whatsapp_alerts_enabled', !data.whatsapp_alerts_enabled)}
+            >
+              {data.whatsapp_alerts_enabled ? t.account.company.enabled : t.account.company.disabled}
+            </button>
           </div>
         </div>
       </div>
