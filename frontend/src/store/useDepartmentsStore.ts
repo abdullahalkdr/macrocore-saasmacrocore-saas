@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { get, post, put, patch, del, ApiError } from '../api/client';
 
+// Mirrors backend/src/utils/departmentTemplates.ts's DepartmentTemplateKey —
+// kept as a small local literal union rather than importing backend code
+// into the frontend build.
+export type DepartmentTemplateKey = 'IT' | 'HR' | 'FINANCE' | 'MARKETING' | 'LEGAL' | 'OPERATIONS';
+
 export interface JobRole {
   id: string;
   department_id: string;
@@ -63,10 +68,11 @@ interface DepartmentsState {
   updateRole: (id: string, data: { name?: string; name_en?: string; responsibilities?: string }) => Promise<void>;
   removeRole: (id: string) => Promise<void>;
 
-  // MIGRATION_069 — admin-only, replaces this company's IT-named department
-  // tree with the full researched IT Department Template. Re-fetches the
-  // tree on success, same convention every other mutation here uses.
-  applyItTemplate: () => Promise<{
+  // MIGRATION_069 for IT, generalized 2026-08-26 to all 6 default department
+  // templates — admin-only, replaces the named department's tree with the
+  // full researched org template for that key. Re-fetches the tree on
+  // success, same convention every other mutation here uses.
+  applyTemplate: (key: DepartmentTemplateKey) => Promise<{
     divisionsCreated: number;
     sectionsCreated: number;
     rolesCreated: number;
@@ -133,7 +139,7 @@ export const useDepartmentsStore = create<DepartmentsState>()((set, getStore) =>
     await getStore().fetchAll();
   },
 
-  applyItTemplate: async () => {
+  applyTemplate: async (key) => {
     const r = await post<{
       success: boolean;
       divisionsCreated: number;
@@ -141,7 +147,7 @@ export const useDepartmentsStore = create<DepartmentsState>()((set, getStore) =>
       rolesCreated: number;
       permissionsGranted: number;
       employeesAffected: number;
-    }>('/departments/it-template/apply');
+    }>(`/departments/template/${key}/apply`);
     await getStore().fetchAll();
     return r;
   },

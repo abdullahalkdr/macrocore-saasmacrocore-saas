@@ -13,7 +13,9 @@ import { PoolClient } from 'pg';
 //   1. Applies to new companies automatically (auth.controller.ts calls this
 //      at signup) AND to existing companies as an admin-triggered action
 //      that REPLACES whatever "IT"-named department tree already exists for
-//      that company (POST /api/departments/it-template/apply).
+//      that company (POST /api/departments/template/IT/apply — generalized
+//      2026-08-26 to all 6 default department templates, see
+//      departmentTemplates.ts).
 //   2. Full 3-tier hierarchy: division (root department) -> section (child
 //      department, parent_department_id = division) -> job title (job_roles
 //      row on the division OR its most relevant section). The source
@@ -36,7 +38,16 @@ import { PoolClient } from 'pg';
 //      template library") — revisit that abstraction later if/when the same
 //      is wanted for Finance/HR/Sales.
 
-interface TemplateRole {
+// the 2026-08-26 multi-department template rebuild (code-only, no schema change) — these three interfaces + applyDepartmentTemplate() below were
+// generalized out of this file (originally IT-only) so the same "division ->
+// section -> job title" engine could be reused for the other 5 default
+// departments (HR/Finance/Marketing/Legal/Operations — see
+// utils/departmentTemplates.ts) without duplicating the apply logic 5 more
+// times. IT_DEPARTMENT_TEMPLATE and applyItDepartmentTemplate() below are
+// unchanged in behavior — kept as the IT-specific data + a thin wrapper so
+// every existing caller (auth.controller.ts, departments.controller.ts)
+// keeps working without modification.
+export interface TemplateRole {
   name: string;
   name_en: string;
   responsibilities: string;
@@ -46,14 +57,14 @@ interface TemplateRole {
   permission_keys?: string[];
 }
 
-interface TemplateSection {
+export interface TemplateSection {
   /** Local key used only to link roles -> section within this file, not persisted. */
   code: string;
   name: string;
   name_en: string;
 }
 
-interface TemplateDivision {
+export interface TemplateDivision {
   code: string; // departments.code
   name: string;
   name_en: string;
@@ -231,33 +242,35 @@ export const IT_DEPARTMENT_TEMPLATE: TemplateDivision[] = [
   },
 ];
 
-// Every name_en this template has ever used, plus the legacy flat "IT"
-// department MIGRATION_049 seeded — the full replace-set for one company.
-// Kept as a function (not a module-level const) so it always reflects the
-// template array above even if it's edited later.
-function allTemplateNames(): string[] {
-  const names = new Set<string>(['IT']);
-  for (const division of IT_DEPARTMENT_TEMPLATE) {
-    names.add(division.name_en);
-    for (const section of division.sections) names.add(section.name_en);
-  }
-  return [...names];
-}
-
-export interface ApplyItTemplateResult {
+export interface ApplyDepartmentTemplateResult {
   divisionsCreated: number;
   sectionsCreated: number;
   rolesCreated: number;
   permissionsGranted: number;
   employeesAffected: number;
 }
+// Back-compat alias — existing callers (auth.controller.ts, departments.controller.ts)
+// were written against this name before the 2026-08-26 multi-department template rebuild (code-only, no schema change) generalized the engine.
+export type ApplyItTemplateResult = ApplyDepartmentTemplateResult;
 
-// Replaces whatever IT-template-named department tree already exists for
-// this company (the legacy flat "IT" department on a first run, or a
-// previous application of this same template on a re-run) with a fresh
-// build of IT_DEPARTMENT_TEMPLATE. Runs inside the caller's transaction
-// (auth.controller.ts's signup transaction, or departments.controller.ts's
-// applyItTemplate endpoint) — a single client, no BEGIN/COMMIT here.
+// the 2026-08-26 multi-department template rebuild (code-only, no schema change) — generic version of the engine originally written IT-only. Every
+// name_en a template has ever used, plus whatever legacy department name(s) it
+// replaces, is the full "replace set" for one company — computed fresh from the
+// template array each call so it always reflects the current data.
+function allTemplateNames(template: TemplateDivision[], legacyNames: string[]): string[] {
+  const names = new Set<string>(legacyNames);
+  for (const division of template) {
+    names.add(division.name_en);
+    for (const section of division.sections) names.add(section.name_en);
+  }
+  return [...names];
+}
+
+// Replaces whatever template-named (or legacy flat) department tree already exists
+// for this company with a fresh build of the given template. Runs inside the
+// caller's transaction (auth.controller.ts's signup transaction, or
+// departments.controller.ts's applyTemplate endpoint) — a single client, no
+// BEGIN/COMMIT here.
 //
 // Deleting a division's row does NOT cascade-delete its section children
 // (departments.parent_department_id is ON DELETE SET NULL, MIGRATION_049
@@ -267,8 +280,13 @@ export interface ApplyItTemplateResult {
 // department (department_id is ON DELETE CASCADE), so no separate cleanup
 // is needed there; job_role_permissions cascade-deletes with its job_role
 // the same way.
-export async function applyItDepartmentTemplate(client: PoolClient, companyId: string): Promise<ApplyItTemplateResult> {
-  const names = allTemplateNames();
+export async function applyDepartmentTemplate(
+  client: PoolClient,
+  companyId: string,
+  template: TemplateDivision[],
+  legacyNames: string[]
+): Promise<ApplyDepartmentTemplateResult> {
+  const names = allTemplateNames(template, legacyNames);
 
   const affectedResult = await client.query(
     `SELECT COUNT(DISTINCT e.id)::int AS count
@@ -286,7 +304,7 @@ export async function applyItDepartmentTemplate(client: PoolClient, companyId: s
   let rolesCreated = 0;
   let permissionsGranted = 0;
 
-  for (const division of IT_DEPARTMENT_TEMPLATE) {
+  for (const division of template) {
     const divisionResult = await client.query(
       `INSERT INTO departments (company_id, name, name_en, code, status) VALUES ($1, $2, $3, $4, 'active') RETURNING id`,
       [companyId, division.name, division.name_en, division.code]
@@ -296,15 +314,16 @@ export async function applyItDepartmentTemplate(client: PoolClient, companyId: s
 
     const sectionIds: Record<string, string> = {};
     for (const section of division.sections) {
-      // BUGFIX (found live, 2026-08-26) — sections originally got no `code`
-      // at all, which silently degraded MIGRATION_057's ticket smart-
-      // numbering: an employee placed at the more natural, specific section
-      // level (not the division level) fell back to the generic 'GEN-...'
-      // prefix instead of an IT one, because generateTicketNumber() resolves
+      // BUGFIX (found live, 2026-08-26, originally IT-only) — sections originally got
+      // no `code` at all, which silently degraded MIGRATION_057's ticket smart-
+      // numbering: an employee placed at the more natural, specific section level
+      // (not the division level) fell back to the generic 'GEN-...' prefix instead
+      // of a department-specific one, because generateTicketNumber() resolves
       // strictly from the REQUESTER'S OWN department row's `code` column
-      // (supportTickets.controller.ts), not from any ancestor. Sections now
-      // inherit their division's code, so ticket numbering is IT-prefixed
-      // no matter which level of the tree an employee actually sits at.
+      // (supportTickets.controller.ts), not from any ancestor. Sections now inherit
+      // their division's code, so ticket numbering is prefixed correctly no matter
+      // which level of the tree an employee actually sits at — applies to every
+      // template through this shared engine, not just IT.
       const sectionResult = await client.query(
         `INSERT INTO departments (company_id, name, name_en, code, parent_department_id, status) VALUES ($1, $2, $3, $4, $5, 'active') RETURNING id`,
         [companyId, section.name, section.name_en, division.code, divisionId]
@@ -333,4 +352,10 @@ export async function applyItDepartmentTemplate(client: PoolClient, companyId: s
   }
 
   return { divisionsCreated, sectionsCreated, rolesCreated, permissionsGranted, employeesAffected };
+}
+
+// Thin, behavior-preserving wrapper — every existing caller keeps working exactly
+// as before the 2026-08-26 multi-department template rebuild (code-only, no schema change)'s generalization.
+export async function applyItDepartmentTemplate(client: PoolClient, companyId: string): Promise<ApplyItTemplateResult> {
+  return applyDepartmentTemplate(client, companyId, IT_DEPARTMENT_TEMPLATE, ['IT']);
 }

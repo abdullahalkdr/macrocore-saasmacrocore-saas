@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useT } from '../i18n';
 import { get, ApiError } from '../api/client';
-import { useDepartmentsStore, Department } from '../store/useDepartmentsStore';
+import { useDepartmentsStore, Department, DepartmentTemplateKey } from '../store/useDepartmentsStore';
 import { useLangStore } from '../store/langStore';
 import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
@@ -43,6 +43,11 @@ function emptyDepartmentForm(): DepartmentFormState {
   return { name: '', name_en: '', code: '', parent_department_id: '', manager_id: '', cost_center_code: '', status: 'active' };
 }
 
+// Same 6 keys/order as backend/src/utils/departmentTemplates.ts's
+// DEPARTMENT_TEMPLATES registry — IT first (the original MIGRATION_069
+// template), then the 5 generalized 2026-08-26.
+const DEPARTMENT_TEMPLATE_KEYS: DepartmentTemplateKey[] = ['IT', 'HR', 'FINANCE', 'MARKETING', 'LEGAL', 'OPERATIONS'];
+
 export default function DepartmentsPage() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
@@ -57,7 +62,7 @@ export default function DepartmentsPage() {
   const createRole = useDepartmentsStore((s) => s.createRole);
   const updateRole = useDepartmentsStore((s) => s.updateRole);
   const removeRole = useDepartmentsStore((s) => s.removeRole);
-  const applyItTemplate = useDepartmentsStore((s) => s.applyItTemplate);
+  const applyTemplate = useDepartmentsStore((s) => s.applyTemplate);
 
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === 'admin';
@@ -65,7 +70,8 @@ export default function DepartmentsPage() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [itTemplateConfirmOpen, setItTemplateConfirmOpen] = useState(false);
+  const [templateKeyToApply, setTemplateKeyToApply] = useState<DepartmentTemplateKey | ''>('');
+  const [templateConfirmKey, setTemplateConfirmKey] = useState<DepartmentTemplateKey | null>(null);
   const [applyingTemplate, setApplyingTemplate] = useState(false);
 
   useEffect(() => {
@@ -146,16 +152,18 @@ export default function DepartmentsPage() {
     }
   }
 
-  async function handleApplyItTemplate() {
-    setItTemplateConfirmOpen(false);
+  async function handleApplyTemplate() {
+    const key = templateConfirmKey;
+    setTemplateConfirmKey(null);
+    if (!key) return;
     setApplyingTemplate(true);
     setError(null);
     setNotice(null);
     try {
-      const r = await applyItTemplate();
-      setNotice(t.departments.itTemplateApplied(r));
+      const r = await applyTemplate(key);
+      setNotice(t.departments.templateApplied(t.departments.templateLabels[key], r));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.departments.itTemplateFailed);
+      setError(err instanceof ApiError ? err.message : t.departments.templateFailed);
     } finally {
       setApplyingTemplate(false);
     }
@@ -202,14 +210,30 @@ export default function DepartmentsPage() {
             <span className="muted">{departments.length}</span>
             <div style={{ display: 'flex', gap: 8 }}>
               {isAdmin && (
-                <button
-                  className="btn btn-secondary btn-sm"
-                  type="button"
-                  onClick={() => setItTemplateConfirmOpen(true)}
-                  disabled={applyingTemplate}
-                >
-                  {applyingTemplate ? t.common.loading : t.departments.itTemplateButton}
-                </button>
+                <>
+                  <select
+                    className="form-input"
+                    style={{ width: 'auto' }}
+                    value={templateKeyToApply}
+                    onChange={(e) => setTemplateKeyToApply(e.target.value as DepartmentTemplateKey | '')}
+                    disabled={applyingTemplate}
+                  >
+                    <option value="">{t.departments.templateSelectPlaceholder}</option>
+                    {DEPARTMENT_TEMPLATE_KEYS.map((key) => (
+                      <option key={key} value={key}>
+                        {t.departments.templateLabels[key]}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    type="button"
+                    onClick={() => templateKeyToApply && setTemplateConfirmKey(templateKeyToApply)}
+                    disabled={applyingTemplate || !templateKeyToApply}
+                  >
+                    {applyingTemplate ? t.common.loading : t.departments.templateButton}
+                  </button>
+                </>
               )}
               <button className="btn btn-primary btn-sm" type="button" onClick={openCreate}>
                 <IconPlus /> {t.departments.addDepartment}
@@ -338,11 +362,11 @@ export default function DepartmentsPage() {
         />
       )}
 
-      {itTemplateConfirmOpen && (
+      {templateConfirmKey && (
         <ConfirmDialog
-          message={t.departments.itTemplateConfirmMessage}
-          onConfirm={handleApplyItTemplate}
-          onCancel={() => setItTemplateConfirmOpen(false)}
+          message={t.departments.templateConfirmMessage(t.departments.templateLabels[templateConfirmKey])}
+          onConfirm={handleApplyTemplate}
+          onCancel={() => setTemplateConfirmKey(null)}
         />
       )}
     </div>

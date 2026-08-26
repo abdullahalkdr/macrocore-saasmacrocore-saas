@@ -8,7 +8,7 @@ import {
   createRole,
   updateRole,
   removeRole,
-  applyItTemplate,
+  applyTemplate,
 } from '../controllers/departments.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/requireRole';
@@ -22,11 +22,12 @@ router.use(requireAuth);
 // remove departments and their job roles, same split serviceCategories.routes.ts
 // uses for its own company-config resource.
 router.get('/', list);
-// MIGRATION_069 — admin-only, replaces this company's IT-named department
-// tree with the full researched IT org template. Placed before the '/:id'
-// routes for readability; the literal 'it-template' segment never collides
-// with a real department id.
-router.post('/it-template/apply', requireRole('admin'), applyItTemplate);
+// MIGRATION_069 for IT, generalized 2026-08-26 to all 6 default department
+// templates — admin-only, replaces the named department's tree with the
+// full researched org template for that key (IT/HR/FINANCE/MARKETING/
+// LEGAL/OPERATIONS). Placed before the '/:id' routes for readability; the
+// literal 'template' segment never collides with a real department id.
+router.post('/template/:key/apply', requireRole('admin'), applyTemplate);
 router.post('/', requireRole('admin', 'manager'), create);
 router.put('/:id', requireRole('admin', 'manager'), update);
 router.delete('/:id', requireRole('admin', 'manager'), remove);

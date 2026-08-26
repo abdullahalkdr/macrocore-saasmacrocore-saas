@@ -3,7 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
-import { applyItDepartmentTemplate } from '../utils/itDepartmentTemplate';
+import { applyDepartmentTemplateByKey, isDepartmentTemplateKey, DepartmentTemplateKey } from '../utils/departmentTemplates';
 
 // Dynamic, per-company corporate departments (MIGRATION_048), upgraded to an
 // Enterprise "Corporate Departments" model by MIGRATION_049: a simple
@@ -231,23 +231,32 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 });
 
 // ========================================================================
-// IT Department Template (MIGRATION_069) — admin-triggered, replaces any
-// existing "IT"-named department tree for this company with the full 8-
-// division / section / job-title structure researched in
-// claude/it-department-structure-context-handoff.md. New companies get this
-// automatically at signup (auth.controller.ts); existing companies opt in
-// here. Runs in its own transaction (not nested in the outer request's pool)
-// since this is the only write in the request.
+// Department Templates (MIGRATION_069 for IT, generalized 2026-08-26 to
+// cover all 6 default departments — IT, HR, Finance, Marketing, Legal,
+// Operations) — admin-triggered, replaces the named department's current
+// tree for this company with the full researched division / section /
+// job-title structure (see claude/it-department-structure-context-handoff.md
+// §9/§10). New companies get every template automatically at signup
+// (auth.controller.ts); existing companies opt in per department here.
+// Runs in its own transaction (not nested in the outer request's pool)
+// since this is the only write in the request. Code-only change — reuses
+// the existing departments/job_roles/permissions schema, no new migration.
 // ========================================================================
 
-export const applyItTemplate = asyncHandler(async (req: Request, res: Response) => {
+export const applyTemplate = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
+  const key = req.params.key as string;
+
+  if (!isDepartmentTemplateKey(key)) {
+    throw new AppError(400, `Unknown department template: ${key}`);
+  }
+  const templateKey: DepartmentTemplateKey = key;
 
   const client = await pool.connect();
   let result;
   try {
     await client.query('BEGIN');
-    result = await applyItDepartmentTemplate(client, companyId);
+    result = await applyDepartmentTemplateByKey(client, companyId, templateKey);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -259,11 +268,11 @@ export const applyItTemplate = asyncHandler(async (req: Request, res: Response) 
   await logAudit({
     companyId,
     userId: req.auth!.userId,
-    action: 'it_department_template_applied',
+    action: 'department_template_applied',
     entityType: 'departments',
     entityId: companyId,
     req,
-    newValues: { ...result } as Record<string, unknown>,
+    newValues: { templateKey, ...result } as Record<string, unknown>,
   });
 
   res.status(200).json({ success: true, ...result });

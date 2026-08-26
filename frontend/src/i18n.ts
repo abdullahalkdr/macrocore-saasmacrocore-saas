@@ -1237,12 +1237,21 @@ const en = {
     roleNameRequired: 'Role name (Arabic) is required',
     deleteRoleConfirm: 'Delete this job role? Employees already assigned to it keep it as free text.',
     responsibilitiesLabel: 'Responsibilities (reference text, not enforced)',
-    itTemplateButton: 'Load IT Department Template',
-    itTemplateConfirmMessage:
-      "This replaces your company's current IT department and job roles with the full IT Department Template (8 divisions, their internal sections, and job titles researched for a large modern IT org). Employees currently assigned to the old IT department or its job roles keep their employee record but lose that assignment — you'll need to reassign them afterward. This cannot be undone. Continue?",
-    itTemplateFailed: 'Failed to apply the IT department template',
-    itTemplateApplied: (r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
-      `IT department template applied: ${r.divisionsCreated} divisions, ${r.sectionsCreated} sections, ${r.rolesCreated} job roles created. ${r.employeesAffected} employee(s) previously under the old IT department lost that assignment and need reassigning.`,
+    templateButton: 'Load Department Template',
+    templateSelectPlaceholder: 'Select a department template...',
+    templateLabels: {
+      IT: 'IT',
+      HR: 'Human Resources',
+      FINANCE: 'Finance',
+      MARKETING: 'Marketing',
+      LEGAL: 'Legal',
+      OPERATIONS: 'Operations',
+    } as Record<'IT' | 'HR' | 'FINANCE' | 'MARKETING' | 'LEGAL' | 'OPERATIONS', string>,
+    templateConfirmMessage: (label: string) =>
+      `This replaces your company's current ${label} department and job roles with the full researched ${label} Department Template (its divisions, their internal sections, and job titles). Employees currently assigned to the old ${label} department or its job roles keep their employee record but lose that assignment — you'll need to reassign them afterward. This cannot be undone. Continue?`,
+    templateFailed: 'Failed to apply the department template',
+    templateApplied: (label: string, r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
+      `${label} department template applied: ${r.divisionsCreated} divisions, ${r.sectionsCreated} sections, ${r.rolesCreated} job roles created. ${r.employeesAffected} employee(s) previously under the old ${label} department lost that assignment and need reassigning.`,
   },
   settings: {
     title: 'Settings',
@@ -3483,12 +3492,21 @@ const ar: typeof en = {
     roleNameRequired: 'المسمى الوظيفي (عربي) مطلوب',
     deleteRoleConfirm: 'تحذف هذا المسمى الوظيفي الموظفين المعينين عليه-يحتفظون فيه كنص حر.',
     responsibilitiesLabel: 'الصلاحيات / المسؤوليات (نص مرجعي، غير مفعّل بالنظام)',
-    itTemplateButton: 'تحميل قالب إدارة تقنية المعلومات',
-    itTemplateConfirmMessage:
-      'بذا تستبدل قسم تقنية المعلومات الحالي بشركتك والمسميات الوظيفية اللي فيه بالقالب التنظيمي الكامل (8 إدارات بأقسامها الداخلية ومسمياتها الوظيفية، مبني على بحث لهيكلة شركات الـ IT الكبيرة). الموظفين المعينين حالياً على قسم IT القديم أو مسمياته يحتفظون بسجلهم بس يفقدون هذا الربط — لازم تعيد ربطهم بعدين يدوياً. هذا الإجراء ما يترجع. تكمل؟',
-    itTemplateFailed: 'فشل تحميل قالب تقنية المعلومات',
-    itTemplateApplied: (r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
-      `تم تحميل قالب إدارة تقنية المعلومات: ${r.divisionsCreated} إدارات، ${r.sectionsCreated} أقسام فرعية، ${r.rolesCreated} مسمى وظيفي. ${r.employeesAffected} موظف كانوا تحت قسم IT القديم فقدوا الربط ولازم تعيد تعيينهم.`,
+    templateButton: 'تحميل قالب إدارة',
+    templateSelectPlaceholder: 'اختر قالب إدارة...',
+    templateLabels: {
+      IT: 'تقنية المعلومات',
+      HR: 'الموارد البشرية',
+      FINANCE: 'المالية',
+      MARKETING: 'التسويق',
+      LEGAL: 'الشؤون القانونية',
+      OPERATIONS: 'العمليات',
+    } as Record<'IT' | 'HR' | 'FINANCE' | 'MARKETING' | 'LEGAL' | 'OPERATIONS', string>,
+    templateConfirmMessage: (label: string) =>
+      `بذا تستبدل قسم ${label} الحالي بشركتك والمسميات الوظيفية اللي فيه بالقالب التنظيمي الكامل (إداراته الفرعية وأقسامها الداخلية ومسمياتها الوظيفية، مبني على بحث لهيكلة شركات كبيرة). الموظفين المعينين حالياً على قسم ${label} القديم أو مسمياته يحتفظون بسجلهم بس يفقدون هذا الربط — لازم تعيد ربطهم بعدين يدوياً. هذا الإجراء ما يترجع. تكمل؟`,
+    templateFailed: 'فشل تحميل قالب الإدارة',
+    templateApplied: (label: string, r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
+      `تم تحميل قالب إدارة ${label}: ${r.divisionsCreated} إدارات، ${r.sectionsCreated} أقسام فرعية، ${r.rolesCreated} مسمى وظيفي. ${r.employeesAffected} موظف كانوا تحت القسم القديم فقدوا الربط ولازم تعيد تعيينهم.`,
   },
   settings: {
     title: 'الإعدادات',
