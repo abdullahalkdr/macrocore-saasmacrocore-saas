@@ -24,7 +24,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const result = await pool.query(
-    `SELECT id, category_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at
+    `SELECT id, category_id, department_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at
      FROM service_request_types WHERE company_id = $1${categoryFilter} ORDER BY name`,
     params
   );
@@ -33,7 +33,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
-  const { category_id, name, name_en, description, description_en, is_hr_sensitive } = req.body ?? {};
+  const { category_id, department_id, name, name_en, description, description_en, is_hr_sensitive } = req.body ?? {};
 
   if (typeof name !== 'string' || name.trim().length < 1) throw new AppError(400, 'name is required');
   if (name_en !== undefined && name_en !== null && typeof name_en !== 'string') throw new AppError(400, 'name_en must be a string');
@@ -53,13 +53,26 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     finalCategoryId = category_id;
   }
 
+  // MIGRATION_071 — same optional, company-scoped-FK pattern as category_id
+  // above. Which department "owns" this specific service (e.g. "مشكلة شبكة"
+  // -> Networking & Telecom) — used client-side to suggest an assignee, see
+  // that migration's header comment.
+  let finalDepartmentId: string | null = null;
+  if (department_id !== undefined && department_id !== null) {
+    if (typeof department_id !== 'string') throw new AppError(400, 'department_id must be a string');
+    const deptCheck = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
+    if (!deptCheck.rows[0]) throw new AppError(400, 'department_id does not belong to this company');
+    finalDepartmentId = department_id;
+  }
+
   const result = await pool.query(
-    `INSERT INTO service_request_types (company_id, category_id, name, name_en, description, description_en, is_hr_sensitive)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, category_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at`,
+    `INSERT INTO service_request_types (company_id, category_id, department_id, name, name_en, description, description_en, is_hr_sensitive)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, category_id, department_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at`,
     [
       companyId,
       finalCategoryId,
+      finalDepartmentId,
       name.trim(),
       typeof name_en === 'string' ? name_en.trim() : null,
       typeof description === 'string' ? description.trim() : null,
@@ -77,7 +90,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
-  const { category_id, name, name_en, description, description_en, is_hr_sensitive } = req.body ?? {};
+  const { category_id, department_id, name, name_en, description, description_en, is_hr_sensitive } = req.body ?? {};
 
   if (name !== undefined && (typeof name !== 'string' || name.trim().length < 1)) throw new AppError(400, 'name must be a non-empty string');
   if (name_en !== undefined && name_en !== null && typeof name_en !== 'string') throw new AppError(400, 'name_en must be a string');
@@ -102,20 +115,37 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     }
   }
 
+  // MIGRATION_071 — same explicit-null-vs-omitted CASE WHEN pattern as
+  // category_id above.
+  let touchesDepartment = false;
+  let nextDepartmentId: string | null = null;
+  if (department_id !== undefined) {
+    touchesDepartment = true;
+    if (department_id !== null) {
+      if (typeof department_id !== 'string') throw new AppError(400, 'department_id must be a string or null');
+      const deptCheck = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
+      if (!deptCheck.rows[0]) throw new AppError(400, 'department_id does not belong to this company');
+      nextDepartmentId = department_id;
+    }
+  }
+
   const result = await pool.query(
     `UPDATE service_request_types
      SET category_id = CASE WHEN $1 THEN $2::uuid ELSE category_id END,
-         name = COALESCE($3, name),
-         name_en = COALESCE($4, name_en),
-         description = COALESCE($5, description),
-         description_en = COALESCE($6, description_en),
-         is_hr_sensitive = COALESCE($7, is_hr_sensitive),
+         department_id = CASE WHEN $3 THEN $4::uuid ELSE department_id END,
+         name = COALESCE($5, name),
+         name_en = COALESCE($6, name_en),
+         description = COALESCE($7, description),
+         description_en = COALESCE($8, description_en),
+         is_hr_sensitive = COALESCE($9, is_hr_sensitive),
          updated_at = NOW()
-     WHERE id = $8 AND company_id = $9
-     RETURNING id, category_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at`,
+     WHERE id = $10 AND company_id = $11
+     RETURNING id, category_id, department_id, name, name_en, description, description_en, is_hr_sensitive, created_at, updated_at`,
     [
       touchesCategory,
       nextCategoryId,
+      touchesDepartment,
+      nextDepartmentId,
       typeof name === 'string' ? name.trim() : null,
       typeof name_en === 'string' ? name_en.trim() : null,
       typeof description === 'string' ? description.trim() : null,

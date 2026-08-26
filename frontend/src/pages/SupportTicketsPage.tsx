@@ -5,6 +5,7 @@ import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import { useAuthStore } from '../store/authStore';
 import { useServiceCatalogStore, ServiceCategory, ServiceRequestType, ServiceCustomField } from '../store/useServiceCatalogStore';
+import { useDepartmentsStore, Department } from '../store/useDepartmentsStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -93,6 +94,7 @@ interface CompanyUser {
   // MIGRATION_048 — resolved server-side through employee_id -> employees.department_id
   // -> departments (users.controller.ts's list()). Null for a user with no linked
   // employee record, or one whose employee record has no department set.
+  department_id: string | null;
   department_name: string | null;
   department_name_en: string | null;
 }
@@ -196,6 +198,43 @@ export default function SupportTicketsPage() {
       .then((r) => setCompanyUsers(r.users))
       .catch(() => {});
   }, [isManager]);
+
+  // MIGRATION_071 — the flat department list, used to (a) resolve a ticket's
+  // suggested department via its request type and (b) build the "same
+  // department, or a parent/child of it" match set for the Assignee
+  // suggestion grouping below. Manager-only, same gate as companyUsers —
+  // a plain employee never sees the Assignee picker this feeds.
+  const departments = useDepartmentsStore((s) => s.departments);
+  const fetchAllDepartments = useDepartmentsStore((s) => s.fetchAll);
+  useEffect(() => {
+    if (!isManager) return;
+    fetchAllDepartments();
+  }, [isManager, fetchAllDepartments]);
+
+  function resolvedDepartmentId(tk: Ticket | TicketDetail | undefined | null): string | null {
+    if (!tk?.request_type_id) return null;
+    return requestTypes.find((rt) => rt.id === tk.request_type_id)?.department_id ?? null;
+  }
+  function departmentLabelFor(deptId: string | null): string | null {
+    if (!deptId) return null;
+    const dep = departments.find((d) => d.id === deptId);
+    return dep ? localName(dep) : null;
+  }
+  // A ticket's suggested-assignee set: the resolved department itself, its
+  // direct parent, and its direct children — covers an employee placed one
+  // level up or down from the exact department a request type was tagged
+  // with (e.g. a division-level ticket still surfaces someone in one of its
+  // sections, and vice versa), without needing a full tree walk since the
+  // department tree here is only ever 2 levels deep (division/section).
+  function matchingDepartmentIds(deptId: string): Set<string> {
+    const dep = departments.find((d) => d.id === deptId);
+    const ids = new Set<string>([deptId]);
+    if (dep?.parent_department_id) ids.add(dep.parent_department_id);
+    for (const d of departments) {
+      if (d.parent_department_id === deptId) ids.add(d.id);
+    }
+    return ids;
+  }
   // MIGRATION_048 — "Ahmad Khaled (IT)" instead of a flat, unlabeled name,
   // so an admin/manager can actually tell who's IT/HR/etc. when assigning a
   // ticket. No department shown at all (not even an empty "()") for a user
@@ -638,7 +677,12 @@ export default function SupportTicketsPage() {
                   </td>
                   {isManager && <td className="muted">{userLabel(tk.created_by)}</td>}
                   {isManager && <td className="muted">{userLabel(tk.assigned_to)}</td>}
-                  <td className="muted">{ticketTypeLabel(tk)}</td>
+                  <td className="muted">
+                    {ticketTypeLabel(tk)}
+                    {isManager && departmentLabelFor(resolvedDepartmentId(tk)) && (
+                      <span style={{ display: 'block', fontSize: 11 }}>{departmentLabelFor(resolvedDepartmentId(tk))}</span>
+                    )}
+                  </td>
                   <td>
                     <Tag color={priorityTagColor(tk.priority)}>{priorityLabel[tk.priority] || tk.priority}</Tag>
                   </td>
@@ -691,6 +735,9 @@ export default function SupportTicketsPage() {
                 <AttachmentGallery attachments={detail.attachments} />
                 <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
                   {t.support.requestType}: {ticketTypeLabel(detail)}
+                  {isManager && departmentLabelFor(resolvedDepartmentId(detail)) && (
+                    <> · {t.support.responsibleDepartment}: {departmentLabelFor(resolvedDepartmentId(detail))}</>
+                  )}
                 </div>
               </div>
             </div>
@@ -878,20 +925,39 @@ export default function SupportTicketsPage() {
                   </div>
                 )}
               </div>
-              {isManager && (
-                <div className="field" style={{ maxWidth: 220 }}>
-                  <label>{t.support.assignee}</label>
-                  <select value={detail.assigned_to || ''} onChange={(e) => changeAssignee(e.target.value)}>
-                    <option value="">{t.support.assignTo}</option>
-                    {companyUsers.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name || u.email}
-                        {departmentSuffix(u)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              {isManager && (() => {
+                // MIGRATION_071 — when the ticket's request type carries a
+                // department, group the picker into "مقترحون" (this
+                // department, its parent, or its children) ahead of
+                // everyone else, instead of forcing/filtering the choice —
+                // any user is still pickable either way.
+                const deptId = resolvedDepartmentId(detail);
+                const matchSet = deptId ? matchingDepartmentIds(deptId) : null;
+                const suggested = matchSet ? companyUsers.filter((u) => u.department_id && matchSet.has(u.department_id)) : [];
+                const rest = matchSet ? companyUsers.filter((u) => !(u.department_id && matchSet.has(u.department_id))) : companyUsers;
+                const userOption = (u: CompanyUser) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name || u.email}
+                    {departmentSuffix(u)}
+                  </option>
+                );
+                return (
+                  <div className="field" style={{ maxWidth: 220 }}>
+                    <label>{t.support.assignee}</label>
+                    <select value={detail.assigned_to || ''} onChange={(e) => changeAssignee(e.target.value)}>
+                      <option value="">{t.support.assignTo}</option>
+                      {matchSet && suggested.length > 0 ? (
+                        <>
+                          <optgroup label={t.support.suggestedAssignees}>{suggested.map(userOption)}</optgroup>
+                          <optgroup label={t.support.otherAssignees}>{rest.map(userOption)}</optgroup>
+                        </>
+                      ) : (
+                        companyUsers.map(userOption)
+                      )}
+                    </select>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="hr" />

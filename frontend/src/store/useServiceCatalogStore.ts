@@ -15,6 +15,10 @@ export interface ServiceCategory {
 export interface ServiceRequestType {
   id: string;
   category_id: string | null;
+  // MIGRATION_071 — which department "owns" this specific service (e.g.
+  // "مشكلة شبكة" -> Networking & Telecom). Used by SupportTicketsPage.tsx
+  // to suggest an assignee and to show a department tag; not enforced.
+  department_id: string | null;
   name: string;
   name_en: string | null;
   description: string | null;
@@ -48,6 +52,7 @@ export interface ServiceCategoryInput {
 
 export interface ServiceRequestTypeInput {
   category_id?: string | null;
+  department_id?: string | null;
   name: string;
   name_en?: string | null;
   description?: string | null;
@@ -88,7 +93,7 @@ interface ServiceCatalogState {
   removeCategory: (id: string) => Promise<void>;
 
   createRequestType: (data: ServiceRequestTypeInput) => Promise<void>;
-  updateRequestType: (id: string, data: Partial<ServiceRequestTypeInput> & { category_id?: string | null }) => Promise<void>;
+  updateRequestType: (id: string, data: Partial<ServiceRequestTypeInput> & { category_id?: string | null; department_id?: string | null }) => Promise<void>;
   removeRequestType: (id: string) => Promise<void>;
 
   createCustomField: (data: ServiceCustomFieldInput) => Promise<void>;

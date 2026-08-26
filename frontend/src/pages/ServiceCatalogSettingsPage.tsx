@@ -9,6 +9,7 @@ import {
   ServiceCustomField,
   CustomFieldType,
 } from '../store/useServiceCatalogStore';
+import { useDepartmentsStore } from '../store/useDepartmentsStore';
 import PageHeader from '../components/PageHeader';
 import Tag from '../components/Tag';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -45,9 +46,16 @@ export default function ServiceCatalogSettingsPage() {
   const updateCustomField = useServiceCatalogStore((s) => s.updateCustomField);
   const removeCustomField = useServiceCatalogStore((s) => s.removeCustomField);
 
+  // MIGRATION_071 — the Request Types tab's Department picker below needs
+  // the flat department list (divisions + sections, including the IT
+  // Department Template's tree if applied).
+  const departments = useDepartmentsStore((s) => s.departments);
+  const fetchAllDepartments = useDepartmentsStore((s) => s.fetchAll);
+
   useEffect(() => {
     fetchAll();
-  }, [fetchAll]);
+    fetchAllDepartments();
+  }, [fetchAll, fetchAllDepartments]);
 
   const [tab, setTab] = useState<'categories' | 'requestTypes' | 'customFields'>('categories');
   const [error, setError] = useState<string | null>(null);
@@ -146,11 +154,12 @@ export default function ServiceCatalogSettingsPage() {
   // --- Request types tab ---
   interface RequestTypeDraft {
     category_id: string;
+    department_id: string;
     name: string;
     name_en: string;
     is_hr_sensitive: boolean;
   }
-  const EMPTY_REQUEST_TYPE: RequestTypeDraft = { category_id: '', name: '', name_en: '', is_hr_sensitive: false };
+  const EMPTY_REQUEST_TYPE: RequestTypeDraft = { category_id: '', department_id: '', name: '', name_en: '', is_hr_sensitive: false };
   const [rtDrafts, setRtDrafts] = useState<Record<string, RequestTypeDraft>>({});
   const [newRequestType, setNewRequestType] = useState<RequestTypeDraft>(EMPTY_REQUEST_TYPE);
 
@@ -158,7 +167,13 @@ export default function ServiceCatalogSettingsPage() {
     setRtDrafts((d) => {
       const next = { ...d };
       for (const rt of requestTypes) {
-        next[rt.id] = { category_id: rt.category_id || '', name: rt.name, name_en: rt.name_en || '', is_hr_sensitive: rt.is_hr_sensitive };
+        next[rt.id] = {
+          category_id: rt.category_id || '',
+          department_id: rt.department_id || '',
+          name: rt.name,
+          name_en: rt.name_en || '',
+          is_hr_sensitive: rt.is_hr_sensitive,
+        };
       }
       return next;
     });
@@ -172,6 +187,7 @@ export default function ServiceCatalogSettingsPage() {
     try {
       await updateRequestType(id, {
         category_id: draft.category_id || null,
+        department_id: draft.department_id || null,
         name: draft.name.trim(),
         name_en: draft.name_en.trim() || null,
         is_hr_sensitive: draft.is_hr_sensitive,
@@ -192,6 +208,7 @@ export default function ServiceCatalogSettingsPage() {
     try {
       await createRequestType({
         category_id: newRequestType.category_id || null,
+        department_id: newRequestType.department_id || null,
         name: newRequestType.name.trim(),
         name_en: newRequestType.name_en.trim() || null,
         is_hr_sensitive: newRequestType.is_hr_sensitive,
@@ -398,8 +415,9 @@ export default function ServiceCatalogSettingsPage() {
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr>
+                    <tr>
                     <th>{t.serviceCatalog.parentCategoryLabel}</th>
+                    <th>{t.serviceCatalog.departmentLabel}</th>
                     <th>{t.serviceCatalog.nameLabel}</th>
                     <th>{t.serviceCatalog.nameEnLabel}</th>
                     <th>{t.serviceCatalog.hrSensitive}</th>
@@ -417,6 +435,16 @@ export default function ServiceCatalogSettingsPage() {
                             {categories.map((c) => (
                               <option key={c.id} value={c.id}>
                                 {localName(c)}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select value={draft.department_id} onChange={(e) => setRtDrafts((d) => ({ ...d, [rt.id]: { ...d[rt.id], department_id: e.target.value } }))}>
+                            <option value="">{t.serviceCatalog.noDepartment}</option>
+                            {departments.map((dep) => (
+                              <option key={dep.id} value={dep.id}>
+                                {localName(dep)}
                               </option>
                             ))}
                           </select>
@@ -450,7 +478,7 @@ export default function ServiceCatalogSettingsPage() {
                   })}
                   {requestTypes.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <div className="empty-state">{t.serviceCatalog.requestTypesEmpty}</div>
                       </td>
                     </tr>
@@ -461,7 +489,7 @@ export default function ServiceCatalogSettingsPage() {
 
             <div className="hr" style={{ margin: '16px 0' }} />
 
-            <form onSubmit={handleAddRequestType} className="form-row">
+            <form onSubmit={handleAddRequestType} className="form-row" style={{ flexWrap: 'wrap' }}>
               <div className="field" style={{ flex: 1 }}>
                 <label>{t.serviceCatalog.parentCategoryLabel}</label>
                 <select value={newRequestType.category_id} onChange={(e) => setNewRequestType((d) => ({ ...d, category_id: e.target.value }))}>
@@ -469,6 +497,17 @@ export default function ServiceCatalogSettingsPage() {
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {localName(c)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field" style={{ flex: 1 }}>
+                <label>{t.serviceCatalog.departmentLabel}</label>
+                <select value={newRequestType.department_id} onChange={(e) => setNewRequestType((d) => ({ ...d, department_id: e.target.value }))}>
+                  <option value="">{t.serviceCatalog.noDepartment}</option>
+                  {departments.map((dep) => (
+                    <option key={dep.id} value={dep.id}>
+                      {localName(dep)}
                     </option>
                   ))}
                 </select>
