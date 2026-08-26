@@ -296,9 +296,18 @@ export async function applyItDepartmentTemplate(client: PoolClient, companyId: s
 
     const sectionIds: Record<string, string> = {};
     for (const section of division.sections) {
+      // BUGFIX (found live, 2026-08-26) — sections originally got no `code`
+      // at all, which silently degraded MIGRATION_057's ticket smart-
+      // numbering: an employee placed at the more natural, specific section
+      // level (not the division level) fell back to the generic 'GEN-...'
+      // prefix instead of an IT one, because generateTicketNumber() resolves
+      // strictly from the REQUESTER'S OWN department row's `code` column
+      // (supportTickets.controller.ts), not from any ancestor. Sections now
+      // inherit their division's code, so ticket numbering is IT-prefixed
+      // no matter which level of the tree an employee actually sits at.
       const sectionResult = await client.query(
-        `INSERT INTO departments (company_id, name, name_en, parent_department_id, status) VALUES ($1, $2, $3, $4, 'active') RETURNING id`,
-        [companyId, section.name, section.name_en, divisionId]
+        `INSERT INTO departments (company_id, name, name_en, code, parent_department_id, status) VALUES ($1, $2, $3, $4, $5, 'active') RETURNING id`,
+        [companyId, section.name, section.name_en, division.code, divisionId]
       );
       sectionIds[section.code] = sectionResult.rows[0].id as string;
       sectionsCreated++;
