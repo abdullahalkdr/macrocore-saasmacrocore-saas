@@ -100,11 +100,18 @@ export default function App() {
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/shift" element={<ShiftPage />} />
+            <Route
+              path="/shift"
+              element={
+                <RequireRole requiresInventory>
+                  <ShiftPage />
+                </RequireRole>
+              }
+            />
             <Route
               path="/products"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <ProductsPage />
                 </RequireRole>
               }
@@ -129,7 +136,7 @@ export default function App() {
             <Route
               path="/raw-materials"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <RawMaterialsPage />
                 </RequireRole>
               }
@@ -137,7 +144,7 @@ export default function App() {
             <Route
               path="/raw-material-batches"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <RawMaterialBatchesPage />
                 </RequireRole>
               }
@@ -145,7 +152,7 @@ export default function App() {
             <Route
               path="/inventory"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <InventoryOverviewPage />
                 </RequireRole>
               }
@@ -153,7 +160,7 @@ export default function App() {
             <Route
               path="/stock-transfers"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <StockTransfersPage />
                 </RequireRole>
               }
@@ -193,7 +200,7 @@ export default function App() {
             <Route
               path="/suppliers"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <SuppliersPage />
                 </RequireRole>
               }
@@ -201,7 +208,7 @@ export default function App() {
             <Route
               path="/purchase-orders"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} requiresInventory>
                   <PurchaseOrdersPage />
                 </RequireRole>
               }
@@ -280,7 +287,14 @@ export default function App() {
                 </RequireRole>
               }
             />
-            <Route path="/waste" element={<WasteRecordsPage />} />
+            <Route
+              path="/waste"
+              element={
+                <RequireRole requiresInventory>
+                  <WasteRecordsPage />
+                </RequireRole>
+              }
+            />
             <Route
               path="/payroll"
               element={

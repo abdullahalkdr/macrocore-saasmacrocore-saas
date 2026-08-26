@@ -58,6 +58,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
 import { requirePlanLevel } from './middleware/requirePlan';
+import { requireInventoryEnabled } from './middleware/requireInventoryEnabled';
 
 export const app = express();
 
@@ -88,20 +89,27 @@ const guarded = [requireAuth, requireActiveSubscription];
 // reads as future product positioning, not something safe to enforce against the
 // current single-flow POS. Locations are similarly never route-gated (every plan
 // needs at least one location to open a shift); "multiple locations" is enforced as a
-// quantity cap instead — see locations.controller.ts create().
+// quantity cap instead — see locations.controller.ts create(). (This is about PLAN
+// tier only — /shifts and /sales ARE gated below by inv(), the separate business-type
+// flag: a services-only company genuinely has no POS to run.)
 const silver = (label: string) => [...guarded, requirePlanLevel(2, label)];
 const gold = (label: string) => [...guarded, requirePlanLevel(3, label)];
+// Business-type gating (companies.inventory_enabled) layered the same way as plan-tier
+// gating above — composes with silver()/gold(), never replaces them. See
+// requireInventoryEnabled.ts for what this flag covers and why.
+const inv = (label: string) => [...guarded, requireInventoryEnabled(label)];
+const invSilver = (label: string) => [...guarded, requirePlanLevel(2, label), requireInventoryEnabled(label)];
 
 app.use('/api/auth', authRoutes);
 app.use('/api/company', companyRoutes);
 app.use('/api/users', ...guarded, usersRoutes);
-app.use('/api/products', ...guarded, productsRoutes);
-app.use('/api/shifts', ...guarded, shiftsRoutes);
-app.use('/api/sales', ...guarded, salesRoutes);
-app.use('/api/raw-materials', ...guarded, rawMaterialsRoutes);
-app.use('/api/raw-material-batches', ...silver('Raw material batches'), rawMaterialBatchesRoutes);
-app.use('/api/stock-transfers', ...silver('Stock transfers'), stockTransfersRoutes);
-app.use('/api/inventory', ...silver('Inventory overview'), inventoryRoutes);
+app.use('/api/products', ...inv('Products'), productsRoutes);
+app.use('/api/shifts', ...inv('Point of sale / shifts'), shiftsRoutes);
+app.use('/api/sales', ...inv('Point of sale / shifts'), salesRoutes);
+app.use('/api/raw-materials', ...inv('Raw materials'), rawMaterialsRoutes);
+app.use('/api/raw-material-batches', ...invSilver('Raw material batches'), rawMaterialBatchesRoutes);
+app.use('/api/stock-transfers', ...invSilver('Stock transfers'), stockTransfersRoutes);
+app.use('/api/inventory', ...invSilver('Inventory overview'), inventoryRoutes);
 app.use('/api/employees', ...silver('Employee management'), employeesRoutes);
 // MIGRATION_048 — deliberately NOT silver-gated like /api/employees above,
 // even though its main UI is the department field on that page. A
@@ -113,7 +121,7 @@ app.use('/api/departments', ...guarded, departmentsRoutes);
 app.use('/api/locations', ...guarded, locationsRoutes);
 app.use('/api/reports', ...guarded, reportsRoutes);
 app.use('/api/expenses', ...guarded, expensesRoutes);
-app.use('/api/waste-records', ...silver('Waste tracking'), wasteRecordsRoutes);
+app.use('/api/waste-records', ...invSilver('Waste tracking'), wasteRecordsRoutes);
 app.use('/api/payroll', ...gold('Payroll'), payrollRoutes);
 app.use('/api/support/tickets', supportTicketsRoutes);
 // Category *management* (not filing/reading a ticket) is normal tenant
@@ -141,8 +149,8 @@ app.use('/api/custom-fields', ...gold('Custom fields'), customFieldsRoutes);
 app.use('/api/document-templates', ...gold('Document templates'), documentTemplatesRoutes);
 app.use('/api/audit-log', ...gold('Audit log'), auditLogRoutes);
 app.use('/api/shift-schedules', ...silver('Shift scheduling'), shiftSchedulesRoutes);
-app.use('/api/suppliers', ...silver('Suppliers'), suppliersRoutes);
-app.use('/api/purchase-orders', ...silver('Purchase orders'), purchaseOrdersRoutes);
+app.use('/api/suppliers', ...invSilver('Suppliers'), suppliersRoutes);
+app.use('/api/purchase-orders', ...invSilver('Purchase orders'), purchaseOrdersRoutes);
 // my-permissions is read-only, works on every plan (see permissions.routes.ts for why
 // it's a separate router instance rather than one route inside the gold-gated one below).
 app.use('/api/permissions', ...guarded, myPermissionsRouter);

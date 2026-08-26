@@ -57,6 +57,12 @@ interface NavItem {
   // Same idea, for the Users/accounts-administration item specifically —
   // backed by user.can_access_users (admin, or an IT-department member).
   requiresUsersAccess?: boolean;
+  // Business-type module gating (2026-08-26, requireInventoryEnabled.ts) — POS/
+  // Products/Warehouses items a services-only company (no physical products) doesn't
+  // need. Backed by company.inventory_enabled (defaulted from the chosen industry at
+  // signup, editable later from Company Settings > Preferences). Independent of every
+  // other check above — a manager still needs managerOnly/permission/etc to pass too.
+  requiresInventory?: boolean;
 }
 interface NavGroup {
   label: string;
@@ -129,15 +135,17 @@ export default function Layout() {
   const [planGatingBypassed, setPlanGatingBypassed] = useState(false);
   const updateCompany = useAuthStore((s) => s.updateCompany);
   useEffect(() => {
-    get<{ plan: string; plan_gating_bypassed?: boolean }>('/company/me')
+    get<{ plan: string; plan_gating_bypassed?: boolean; inventory_enabled?: boolean }>('/company/me')
       .then((r) => {
         setLivePlan(r.plan);
         setPlanGatingBypassed(!!r.plan_gating_bypassed);
         // Also push into the shared authStore so pages that don't poll /company/me
         // themselves (e.g. PayrollPage.tsx's Performance-linked adjustments check)
         // can read the live bypass state via useAuthStore(s => s.company) instead of
-        // duplicating this fetch.
-        updateCompany({ plan: r.plan, plan_gating_bypassed: !!r.plan_gating_bypassed });
+        // duplicating this fetch. inventory_enabled rides along the same way, same
+        // reasoning as plan_gating_bypassed — it can flip any time from Company
+        // Settings > Preferences while this tab is already open.
+        updateCompany({ plan: r.plan, plan_gating_bypassed: !!r.plan_gating_bypassed, inventory_enabled: r.inventory_enabled !== false });
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -220,9 +228,9 @@ export default function Layout() {
     {
       label: t.nav.groupDailyOps,
       items: [
-        { to: '/shift', label: t.nav.shift, icon: IconSales },
+        { to: '/shift', label: t.nav.shift, icon: IconSales, requiresInventory: true },
         { to: '/expenses', label: t.nav.expenses, icon: IconExpense },
-        { to: '/waste', label: t.nav.waste, icon: IconTrash, minPlan: 2 },
+        { to: '/waste', label: t.nav.waste, icon: IconTrash, minPlan: 2, requiresInventory: true },
       ],
     },
     {
@@ -245,7 +253,7 @@ export default function Layout() {
     },
     {
       label: t.nav.groupProducts,
-      items: [{ to: '/products', label: t.nav.products, icon: IconProduct, managerOnly: true }],
+      items: [{ to: '/products', label: t.nav.products, icon: IconProduct, managerOnly: true, requiresInventory: true }],
     },
     // Warehouses, HR, Reports & Documents, and Settings & Support — same accordion
     // flyout treatment as Sales above, converted because each grew to 4-7 flat items
@@ -259,13 +267,13 @@ export default function Layout() {
       parentLabel: t.nav.groupWarehouses,
       parentIcon: IconBuilding,
       items: [
-        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true, minPlan: 2 },
-        { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true },
-        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true, minPlan: 2 },
-        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true, minPlan: 2 },
+        { to: '/inventory', label: t.nav.inventory, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
+        { to: '/raw-materials', label: t.nav.rawMaterials, icon: IconProduct, managerOnly: true, requiresInventory: true },
+        { to: '/raw-material-batches', label: t.nav.rawMaterialBatches, icon: IconProduct, managerOnly: true, minPlan: 2, requiresInventory: true },
+        { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
         { to: '/locations', label: t.nav.locations, icon: IconBuilding, managerOnly: true },
-        { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true, minPlan: 2 },
-        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true, minPlan: 2 },
+        { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
+        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
       ],
     },
     {
@@ -363,6 +371,12 @@ export default function Layout() {
   const hrAccessRank: Record<'self' | 'department' | 'full', number> = { self: 0, department: 1, full: 2 };
   const hrAccessLevel = user?.hr_access_level ?? 'self';
   const canAccessUsers = isAdmin || !!user?.can_access_users;
+  // !== false (not just truthy) so it defaults to visible before the /company/me fetch
+  // resolves (AuthCompany from the login response doesn't carry this field yet — see
+  // authStore.ts) and for any older cached session — same "under-show, never
+  // over-show" caution as hr_access_level above, just inverted since this one's DB
+  // default is true.
+  const inventoryEnabled = company?.inventory_enabled !== false;
   // Role gating still hides the item outright (an employee was never going to see
   // Payroll regardless of plan). Plan gating is different on purpose, matching the
   // Wafeq reference the user pointed to: the item stays visible with a tier badge, and
@@ -373,6 +387,10 @@ export default function Layout() {
     .map((group) => ({
       ...group,
       items: group.items.filter((i) => {
+        // Business-type gating is a hard company-level switch, not a per-user
+        // permission — unlike every other check below, nothing (not even an explicit
+        // `permission` grant) overrides it. See NavItem.requiresInventory.
+        if (i.requiresInventory && !inventoryEnabled) return false;
         const roleOk =
           (!('managerOnly' in i) || !i.managerOnly || isManager) &&
           (!('adminOnly' in i) || !i.adminOnly || isAdmin) &&

@@ -4,6 +4,7 @@ import { get, patch, del, ApiError } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import { useLangStore } from '../../store/langStore';
 import { useT } from '../../i18n';
+import ConfirmDialog from '../../components/ConfirmDialog';
 
 interface CompanyMe {
   name: string;
@@ -137,6 +138,26 @@ export default function CompanySection() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.account.saveFailed);
+    }
+  }
+
+  // 2026-08-26 business-type module gating (requireInventoryEnabled.ts) — this ONE
+  // toggle, out of the plain preferences loop below, now controls a lot more than its
+  // original "raw-material/FIFO nav" scope: POS/Shifts, Sales-from-a-shift, Products,
+  // Inventory overview, Raw materials, Stock transfers, Suppliers, Purchase orders, and
+  // Waste tracking all come back at once. Defaulted off for services-only companies at
+  // signup (see RegisterPage.tsx) — turning it back ON here is a deliberate override,
+  // so unlike the other three preferences it goes through a confirmation dialog first
+  // (Abdullah: "المفروض... يتم تنبيهه بذلك" — the owner should be warned when they
+  // change the default). Turning it OFF only hides things, so that path stays a plain
+  // instant toggle like the rest.
+  const [confirmEnableInventory, setConfirmEnableInventory] = useState(false);
+
+  function handleInventoryToggleClick(nextValue: boolean) {
+    if (nextValue) {
+      setConfirmEnableInventory(true);
+    } else {
+      togglePref('inventory_enabled', false);
     }
   }
 
@@ -353,9 +374,22 @@ export default function CompanySection() {
           <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
             {t.account.company.preferencesHint}
           </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div style={{ fontSize: 13 }}>{t.account.company.inventoryEnabled}</div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{t.account.company.inventoryEnabledHint}</div>
+            </div>
+            <button
+              type="button"
+              className={`badge ${data.inventory_enabled ? 'open' : 'closed'}`}
+              style={{ cursor: 'pointer', border: 'none' }}
+              onClick={() => handleInventoryToggleClick(!data.inventory_enabled)}
+            >
+              {data.inventory_enabled ? t.account.company.enabled : t.account.company.disabled}
+            </button>
+          </div>
           {(
             [
-              ['inventory_enabled', t.account.company.inventoryEnabled],
               ['delivery_notifications_enabled', t.account.company.deliveryNotifications],
               ['two_factor_required', t.account.company.twoFactorRequired],
             ] as const
@@ -373,6 +407,20 @@ export default function CompanySection() {
             </div>
           ))}
         </div>
+        {confirmEnableInventory && (
+          <ConfirmDialog
+            title={t.account.company.inventoryEnableConfirmTitle}
+            message={t.account.company.inventoryEnableConfirmMessage}
+            confirmLabel={t.account.company.enableConfirm}
+            cancelLabel={t.common.cancel}
+            danger={false}
+            onConfirm={() => {
+              setConfirmEnableInventory(false);
+              togglePref('inventory_enabled', true);
+            }}
+            onCancel={() => setConfirmEnableInventory(false)}
+          />
+        )}
       </div>
 
       <div className="card" style={{ borderColor: 'var(--red-100)' }}>

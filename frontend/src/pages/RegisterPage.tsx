@@ -41,25 +41,24 @@ interface GoogleHandoffState {
   lastName: string;
 }
 
-const INDUSTRIES_AR = [
-  'كشك طعام',
-  'مطعم أو مقهى',
-  'محل ملابس / بوتيك',
-  'مشروع منزلي',
-  'تجزئة عامة',
-  'مواد بناء وتشييد',
-  'خدمات إدارية ودعم',
-  'أخرى',
-];
-const INDUSTRIES_EN = [
-  'Food kiosk',
-  'Restaurant / cafe',
-  'Clothing shop / boutique',
-  'Home business',
-  'General retail',
-  'Construction & building materials',
-  'Admin services & support',
-  'Other',
+// 2026-08-26 — paired with a `needsInventory` flag (business-type module gating, see
+// requireInventoryEnabled.ts): every industry here has physical products/stock except
+// the explicit services-only one, per Abdullah's own example (a support/services company
+// signing up has no reason to see POS/Products/Warehouses by default). Drives
+// inventory_enabled at signup time — kept editable later from Company Settings >
+// Preferences, this is only the one-time default. `industry` itself keeps being stored
+// as whichever display label was shown (Arabic or English text, unchanged from before) —
+// matched back to this list by label below rather than switching storage to a key, to
+// avoid touching every other place `industry` is displayed as free text.
+const INDUSTRIES: { ar: string; en: string; needsInventory: boolean }[] = [
+  { ar: 'كشك طعام', en: 'Food kiosk', needsInventory: true },
+  { ar: 'مطعم أو مقهى', en: 'Restaurant / cafe', needsInventory: true },
+  { ar: 'محل ملابس / بوتيك', en: 'Clothing shop / boutique', needsInventory: true },
+  { ar: 'مشروع منزلي', en: 'Home business', needsInventory: true },
+  { ar: 'تجزئة عامة', en: 'General retail', needsInventory: true },
+  { ar: 'مواد بناء وتشييد', en: 'Construction & building materials', needsInventory: true },
+  { ar: 'خدمات إدارية ودعم', en: 'Admin services & support', needsInventory: false },
+  { ar: 'أخرى', en: 'Other', needsInventory: true },
 ];
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
@@ -99,6 +98,9 @@ export default function RegisterPage() {
   // Step 3
   const [companyName, setCompanyName] = useState('');
   const [industry, setIndustry] = useState('');
+  // Default true (matches the pre-2026-08-26 behavior / DB default) until an industry
+  // that maps to false is actually picked — see INDUSTRIES above.
+  const [inventoryEnabled, setInventoryEnabled] = useState(true);
   const [employeeCount, setEmployeeCount] = useState('');
   const [country, setCountry] = useState('KW');
   const [inviteInput, setInviteInput] = useState('');
@@ -108,7 +110,13 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [invitedResults, setInvitedResults] = useState<{ email: string; temp_password: string }[] | null>(null);
 
-  const industries = lang === 'en' ? INDUSTRIES_EN : INDUSTRIES_AR;
+  const industries = lang === 'en' ? INDUSTRIES.map((i) => i.en) : INDUSTRIES.map((i) => i.ar);
+
+  function handleIndustryChange(value: string) {
+    setIndustry(value);
+    const match = INDUSTRIES.find((i) => i.ar === value || i.en === value);
+    setInventoryEnabled(match ? match.needsInventory : true);
+  }
 
   function addInviteFromInput() {
     const value = inviteInput.trim().replace(/,$/, '');
@@ -188,6 +196,7 @@ export default function RegisterPage() {
         employee_count_range: employeeCount || undefined,
         country,
         invite_emails: invites.length > 0 ? invites : undefined,
+        inventory_enabled: inventoryEnabled,
       });
       setAuth(res.token, res.user, res.company);
       if (res.invited_users?.length > 0) {
@@ -361,7 +370,7 @@ export default function RegisterPage() {
               <div className="field-grid">
                 <div className="field">
                   <label>{t.auth.industryLabel}</label>
-                  <select value={industry} onChange={(e) => setIndustry(e.target.value)} required>
+                  <select value={industry} onChange={(e) => handleIndustryChange(e.target.value)} required>
                     <option value="" disabled>
                       {t.auth.rolePlaceholder}
                     </option>

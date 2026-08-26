@@ -23,20 +23,31 @@ import { useHasPermission } from '../store/usePermissionsStore';
 // underlying GET /departments route is deliberately left open to every role
 // (see departments.routes.ts, relied on by pickers elsewhere), so this is
 // the actual UI-level gate for the full department-management page itself.
+//
+// Optional `requiresInventory` — same day, business-type module gating (see
+// requireInventoryEnabled.ts / Layout.tsx's matching NavItem field). Unlike
+// every other check here, nothing overrides it — not `permission`, not admin —
+// it's a company-level switch, not a per-user access level. `roles` is now
+// optional so a route with no role restriction at all (e.g. /shift, open to
+// every role including plain employees running the register) can still be
+// wrapped just for this check.
 export default function RequireRole({
   roles,
   permission,
   minHrAccess,
   requiresUsersAccess,
+  requiresInventory,
   children,
 }: {
-  roles: string[];
+  roles?: string[];
   permission?: string;
   minHrAccess?: 'department' | 'full';
   requiresUsersAccess?: boolean;
+  requiresInventory?: boolean;
   children: ReactNode;
 }) {
   const user = useAuthStore((s) => s.user);
+  const company = useAuthStore((s) => s.company);
   const t = useT();
   const hasPermission = useHasPermission(permission ?? '__none__');
 
@@ -45,7 +56,18 @@ export default function RequireRole({
   const hrAccessLevel = user?.hr_access_level ?? 'self';
   const hrAccessOk = !minHrAccess || isAdmin || hrAccessRank[hrAccessLevel] >= hrAccessRank[minHrAccess];
   const usersAccessOk = !requiresUsersAccess || isAdmin || !!user?.can_access_users;
-  const roleOk = !user || (roles.includes(user.role) && hrAccessOk && usersAccessOk);
+  const roleOk = !user || ((!roles || roles.includes(user.role)) && hrAccessOk && usersAccessOk);
+
+  // Hard block, checked before everything else and never overridden (see comment
+  // above) — !== false so it defaults to visible before /company/me's live fetch
+  // resolves, same reasoning as Layout.tsx's inventoryEnabled.
+  if (user && requiresInventory && company?.inventory_enabled === false) {
+    return (
+      <div className="empty-state" style={{ padding: '50px 20px' }}>
+        {t.common.restricted}
+      </div>
+    );
+  }
 
   // `permission`, same as the matching nav-item field in Layout.tsx, is a full
   // override on top of every other check above — not just the role check — so a

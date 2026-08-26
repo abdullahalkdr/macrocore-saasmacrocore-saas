@@ -28,6 +28,12 @@ export interface AuthCompany {
   // /company/me poll pushes the current value in here via updateCompany() so any
   // page reading useAuthStore(s => s.company) can see it without its own fetch.
   plan_gating_bypassed?: boolean;
+  // Business-type module gating (2026-08-26, requireInventoryEnabled.ts) — same
+  // "not part of the login response, pushed live from /company/me" reasoning as
+  // plan_gating_bypassed above: this can change any time from Company Settings >
+  // Preferences while the tab is already open, so it isn't part of AuthUser's
+  // login-time snapshot either.
+  inventory_enabled?: boolean;
 }
 
 interface AuthState {

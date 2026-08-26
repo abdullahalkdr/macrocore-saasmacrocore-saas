@@ -42,6 +42,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     employee_count_range,
     country,
     invite_emails,
+    inventory_enabled,
   } = req.body ?? {};
 
   // Two ways to reach here: normal email+password signup, or the tail end of the Google
@@ -107,15 +108,26 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   try {
     await client.query('BEGIN');
 
+    // inventory_enabled — 2026-08-26 business-type module gating (see
+    // requireInventoryEnabled.ts). RegisterPage.tsx computes this from the chosen
+    // industry (true for every physical-goods industry, false for the explicit
+    // services-only one) and sends it explicitly, rather than this endpoint trying to
+    // infer it from the free-text `industry` string later — `industry` itself is
+    // stored as whatever label the signup form showed in whichever language the user
+    // signed up in (Arabic or English text, not a stable code), so matching against it
+    // here would be fragile. Defaults to true (today's existing behavior, and the safe
+    // choice for any caller — direct API integration included — that doesn't send it)
+    // if missing or not a boolean.
     const companyResult = await client.query(
-      `INSERT INTO companies (name, industry, employee_count_range, country)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, plan, subscription_status, trial_start_date, trial_end_date, industry, employee_count_range, country`,
+      `INSERT INTO companies (name, industry, employee_count_range, country, inventory_enabled)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, plan, subscription_status, trial_start_date, trial_end_date, industry, employee_count_range, country, inventory_enabled`,
       [
         company_name.trim(),
         typeof industry === 'string' ? industry : null,
         typeof employee_count_range === 'string' ? employee_count_range : null,
         typeof country === 'string' && country.length === 2 ? country.toUpperCase() : 'KW',
+        typeof inventory_enabled === 'boolean' ? inventory_enabled : true,
       ]
     );
     company = companyResult.rows[0];
