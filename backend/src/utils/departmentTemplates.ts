@@ -316,7 +316,7 @@ export const MARKETING_DEPARTMENT_TEMPLATE: TemplateDivision[] = [
     ],
   },
   {
-    code: 'MKT-DIGITAL',
+    code: 'MKT-DIG',
     name: 'إدارة التسويق الرقمي',
     name_en: 'Digital Marketing',
     sections: [],
@@ -328,7 +328,7 @@ export const MARKETING_DEPARTMENT_TEMPLATE: TemplateDivision[] = [
     ],
   },
   {
-    code: 'MKT-CONTENT',
+    code: 'MKT-CONT',
     name: 'إدارة المحتوى والإبداع',
     name_en: 'Content & Creative',
     sections: [],
@@ -339,7 +339,7 @@ export const MARKETING_DEPARTMENT_TEMPLATE: TemplateDivision[] = [
     ],
   },
   {
-    code: 'MKT-RESEARCH',
+    code: 'MKT-RSCH',
     name: 'إدارة أبحاث السوق والتحليلات',
     name_en: 'Market Research & Analytics',
     sections: [],
