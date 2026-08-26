@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { pool } from '../db/pool';
+import { applyItDepartmentTemplate } from '../utils/itDepartmentTemplate';
 import { hashPassword, comparePassword } from '../utils/password';
 import {
   signToken,
@@ -118,24 +119,33 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     );
     company = companyResult.rows[0];
 
-    // MIGRATION_048 — every new company starts with the same 6 generic
-    // corporate departments the existing-company data migration seeded
-    // (Human Resources / Operations / Marketing / IT / Finance / Legal).
-    // Same transaction as the company/user insert below, so this can never
-    // partially succeed — a company either gets fully set up or the whole
-    // registration rolls back. Purely a starting point, not a fixed list —
-    // departments.controller.ts lets admin/manager rename, delete, or add
-    // more anytime afterward (see that migration's decision 1).
+    // MIGRATION_048 — every new company starts with 5 generic corporate
+    // departments (Human Resources / Operations / Marketing / Finance /
+    // Legal) the existing-company data migration originally seeded (that
+    // migration also included a flat "IT" row — MIGRATION_069 replaced that
+    // with the full IT Department Template below instead). Same transaction
+    // as the company/user insert, so this can never partially succeed — a
+    // company either gets fully set up or the whole registration rolls
+    // back. Purely a starting point, not a fixed list — departments.controller.ts
+    // lets admin/manager rename, delete, or add more anytime afterward (see
+    // MIGRATION_049's decision 1).
     await client.query(
       `INSERT INTO departments (company_id, name, name_en) VALUES
          ($1, 'الموارد البشرية', 'Human Resources'),
          ($1, 'العمليات', 'Operations'),
          ($1, 'التسويق', 'Marketing'),
-         ($1, 'تقنية المعلومات', 'IT'),
          ($1, 'المالية', 'Finance'),
          ($1, 'الشؤون القانونية', 'Legal')`,
       [company.id]
     );
+
+    // MIGRATION_069 — "IT" is no longer seeded as a flat one-line department
+    // like the 5 above. Every new company gets the full 8-division IT
+    // Department Template (departments -> sections -> job titles) instead,
+    // same transaction so signup either fully succeeds or fully rolls back.
+    // See backend/src/utils/itDepartmentTemplate.ts for the structure and
+    // claude/it-department-structure-context-handoff.md for why.
+    await applyItDepartmentTemplate(client, company.id);
 
     const passwordHash = googleSub ? null : await hashPassword(password);
     // Google already verified this mailbox (see googleStart's `payload.email_verified`

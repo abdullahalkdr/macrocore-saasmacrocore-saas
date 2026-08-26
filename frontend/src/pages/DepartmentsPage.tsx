@@ -3,6 +3,7 @@ import { useT } from '../i18n';
 import { get, ApiError } from '../api/client';
 import { useDepartmentsStore, Department } from '../store/useDepartmentsStore';
 import { useLangStore } from '../store/langStore';
+import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -56,9 +57,16 @@ export default function DepartmentsPage() {
   const createRole = useDepartmentsStore((s) => s.createRole);
   const updateRole = useDepartmentsStore((s) => s.updateRole);
   const removeRole = useDepartmentsStore((s) => s.removeRole);
+  const applyItTemplate = useDepartmentsStore((s) => s.applyItTemplate);
+
+  const currentUser = useAuthStore((s) => s.user);
+  const isAdmin = currentUser?.role === 'admin';
 
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [itTemplateConfirmOpen, setItTemplateConfirmOpen] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
 
   useEffect(() => {
     fetchAll();
@@ -138,6 +146,21 @@ export default function DepartmentsPage() {
     }
   }
 
+  async function handleApplyItTemplate() {
+    setItTemplateConfirmOpen(false);
+    setApplyingTemplate(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await applyItTemplate();
+      setNotice(t.departments.itTemplateApplied(r));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.departments.itTemplateFailed);
+    } finally {
+      setApplyingTemplate(false);
+    }
+  }
+
   function renderRows(nodes: Department[], depth: number): ReactNode[] {
     return nodes.flatMap((d) => [
       <tr key={d.id}>
@@ -171,14 +194,27 @@ export default function DepartmentsPage() {
     <div>
       <PageHeader title={t.departments.title} subtitle={t.departments.subtitle} />
       {error && <div className="error-banner">{error}</div>}
+      {notice && <div className="success-banner">{notice}</div>}
 
       <div className="card">
         <div className="card-body">
           <div className="section-title-row">
             <span className="muted">{departments.length}</span>
-            <button className="btn btn-primary btn-sm" type="button" onClick={openCreate}>
-              <IconPlus /> {t.departments.addDepartment}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {isAdmin && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  onClick={() => setItTemplateConfirmOpen(true)}
+                  disabled={applyingTemplate}
+                >
+                  {applyingTemplate ? t.common.loading : t.departments.itTemplateButton}
+                </button>
+              )}
+              <button className="btn btn-primary btn-sm" type="button" onClick={openCreate}>
+                <IconPlus /> {t.departments.addDepartment}
+              </button>
+            </div>
           </div>
 
           <div className="table-wrap">
@@ -301,6 +337,14 @@ export default function DepartmentsPage() {
           onCancel={() => setConfirmDeleteId(null)}
         />
       )}
+
+      {itTemplateConfirmOpen && (
+        <ConfirmDialog
+          message={t.departments.itTemplateConfirmMessage}
+          onConfirm={handleApplyItTemplate}
+          onCancel={() => setItTemplateConfirmOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -311,6 +355,7 @@ export default function DepartmentsPage() {
 interface RoleDraft {
   name: string;
   name_en: string;
+  responsibilities: string;
 }
 
 function ManageRolesModal({
@@ -322,8 +367,8 @@ function ManageRolesModal({
 }: {
   department: Department;
   onClose: () => void;
-  createRole: (departmentId: string, data: { name: string; name_en?: string }) => Promise<void>;
-  updateRole: (id: string, data: { name?: string; name_en?: string }) => Promise<void>;
+  createRole: (departmentId: string, data: { name: string; name_en?: string; responsibilities?: string }) => Promise<void>;
+  updateRole: (id: string, data: { name?: string; name_en?: string; responsibilities?: string }) => Promise<void>;
   removeRole: (id: string) => Promise<void>;
 }) {
   const t = useT();
@@ -332,15 +377,19 @@ function ManageRolesModal({
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null); // a role id, or 'new'
   const [drafts, setDrafts] = useState<Record<string, RoleDraft>>({});
-  const [newRole, setNewRole] = useState<RoleDraft>({ name: '', name_en: '' });
+  const [newRole, setNewRole] = useState<RoleDraft>({ name: '', name_en: '', responsibilities: '' });
   const [confirmDeleteRoleId, setConfirmDeleteRoleId] = useState<string | null>(null);
 
   useEffect(() => {
-    setDrafts(Object.fromEntries(department.roles.map((r) => [r.id, { name: r.name, name_en: r.name_en || '' }])));
+    setDrafts(
+      Object.fromEntries(
+        department.roles.map((r) => [r.id, { name: r.name, name_en: r.name_en || '', responsibilities: r.responsibilities || '' }])
+      )
+    );
   }, [department.roles]);
 
   function draftFor(id: string): RoleDraft {
-    return drafts[id] ?? { name: '', name_en: '' };
+    return drafts[id] ?? { name: '', name_en: '', responsibilities: '' };
   }
 
   async function handleSave(id: string) {
@@ -349,7 +398,11 @@ function ManageRolesModal({
     setSavingId(id);
     setError(null);
     try {
-      await updateRole(id, { name: draft.name.trim(), name_en: draft.name_en.trim() || undefined });
+      await updateRole(id, {
+        name: draft.name.trim(),
+        name_en: draft.name_en.trim() || undefined,
+        responsibilities: draft.responsibilities.trim() || undefined,
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.departments.saveFailed);
     } finally {
@@ -363,8 +416,12 @@ function ManageRolesModal({
     setSavingId('new');
     setError(null);
     try {
-      await createRole(department.id, { name: newRole.name.trim(), name_en: newRole.name_en.trim() || undefined });
-      setNewRole({ name: '', name_en: '' });
+      await createRole(department.id, {
+        name: newRole.name.trim(),
+        name_en: newRole.name_en.trim() || undefined,
+        responsibilities: newRole.responsibilities.trim() || undefined,
+      });
+      setNewRole({ name: '', name_en: '', responsibilities: '' });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.departments.saveFailed);
     } finally {
@@ -399,23 +456,32 @@ function ManageRolesModal({
           <span />
         </div>
         {department.roles.map((r) => (
-          <div className="role-row" key={r.id}>
-            <input
-              value={draftFor(r.id).name}
-              onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name: e.target.value } }))}
-            />
-            <input
-              value={draftFor(r.id).name_en}
-              onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name_en: e.target.value } }))}
-            />
-            <div className="role-row-actions">
-              <button className="btn btn-primary btn-sm" type="button" onClick={() => handleSave(r.id)} disabled={savingId === r.id}>
-                {savingId === r.id ? t.common.loading : t.common.save}
-              </button>
-              <button className="icon-btn" onClick={() => setConfirmDeleteRoleId(r.id)}>
-                <IconTrash />
-              </button>
+          <div key={r.id} style={{ marginBottom: 10 }}>
+            <div className="role-row">
+              <input
+                value={draftFor(r.id).name}
+                onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name: e.target.value } }))}
+              />
+              <input
+                value={draftFor(r.id).name_en}
+                onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), name_en: e.target.value } }))}
+              />
+              <div className="role-row-actions">
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => handleSave(r.id)} disabled={savingId === r.id}>
+                  {savingId === r.id ? t.common.loading : t.common.save}
+                </button>
+                <button className="icon-btn" onClick={() => setConfirmDeleteRoleId(r.id)}>
+                  <IconTrash />
+                </button>
+              </div>
             </div>
+            <textarea
+              value={draftFor(r.id).responsibilities}
+              onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), responsibilities: e.target.value } }))}
+              placeholder={t.departments.responsibilitiesLabel}
+              rows={2}
+              style={{ width: '100%', marginTop: 4, fontSize: 12, resize: 'vertical' }}
+            />
           </div>
         ))}
         {department.roles.length === 0 && <div className="empty-state">{t.departments.rolesEmpty}</div>}
@@ -423,7 +489,7 @@ function ManageRolesModal({
 
       <div className="hr" style={{ margin: '14px 0' }} />
 
-      <form onSubmit={handleAdd} className="form-row">
+      <form onSubmit={handleAdd} className="form-row" style={{ flexWrap: 'wrap' }}>
         <div className="field" style={{ flex: 1 }}>
           <label>{t.departments.roleNameLabel}</label>
           <input value={newRole.name} onChange={(e) => setNewRole((r) => ({ ...r, name: e.target.value }))} />
@@ -436,6 +502,15 @@ function ManageRolesModal({
           <button className="btn btn-primary" type="submit" disabled={savingId === 'new'}>
             {savingId === 'new' ? t.common.loading : t.departments.addRole}
           </button>
+        </div>
+        <div className="field" style={{ flexBasis: '100%' }}>
+          <label>{t.departments.responsibilitiesLabel}</label>
+          <textarea
+            value={newRole.responsibilities}
+            onChange={(e) => setNewRole((r) => ({ ...r, responsibilities: e.target.value }))}
+            rows={2}
+            style={{ width: '100%', fontSize: 12, resize: 'vertical' }}
+          />
         </div>
       </form>
     </Modal>

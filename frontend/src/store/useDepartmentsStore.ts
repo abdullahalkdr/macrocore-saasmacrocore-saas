@@ -6,6 +6,7 @@ export interface JobRole {
   department_id: string;
   name: string;
   name_en: string | null;
+  responsibilities: string | null;
 }
 
 export interface Department {
@@ -58,9 +59,20 @@ interface DepartmentsState {
   // re-fetches the whole tree (fetchAll) rather than hand-patching nested
   // state, same convention usePerformanceStore's create/update/remove
   // actions use for okr_key_results/appraisal_form_questions.
-  createRole: (departmentId: string, data: { name: string; name_en?: string }) => Promise<void>;
-  updateRole: (id: string, data: { name?: string; name_en?: string }) => Promise<void>;
+  createRole: (departmentId: string, data: { name: string; name_en?: string; responsibilities?: string }) => Promise<void>;
+  updateRole: (id: string, data: { name?: string; name_en?: string; responsibilities?: string }) => Promise<void>;
   removeRole: (id: string) => Promise<void>;
+
+  // MIGRATION_069 — admin-only, replaces this company's IT-named department
+  // tree with the full researched IT Department Template. Re-fetches the
+  // tree on success, same convention every other mutation here uses.
+  applyItTemplate: () => Promise<{
+    divisionsCreated: number;
+    sectionsCreated: number;
+    rolesCreated: number;
+    permissionsGranted: number;
+    employeesAffected: number;
+  }>;
 }
 
 function errMsg(err: unknown, fallback: string): string {
@@ -119,5 +131,18 @@ export const useDepartmentsStore = create<DepartmentsState>()((set, getStore) =>
   removeRole: async (id) => {
     await del(`/departments/roles/${id}`);
     await getStore().fetchAll();
+  },
+
+  applyItTemplate: async () => {
+    const r = await post<{
+      success: boolean;
+      divisionsCreated: number;
+      sectionsCreated: number;
+      rolesCreated: number;
+      permissionsGranted: number;
+      employeesAffected: number;
+    }>('/departments/it-template/apply');
+    await getStore().fetchAll();
+    return r;
   },
 }));

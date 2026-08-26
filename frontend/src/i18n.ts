@@ -1213,6 +1213,13 @@ const en = {
     rolesEmpty: 'No job roles yet for this department — add one below.',
     roleNameRequired: 'Role name (Arabic) is required',
     deleteRoleConfirm: 'Delete this job role? Employees already assigned to it keep it as free text.',
+    responsibilitiesLabel: 'Responsibilities (reference text, not enforced)',
+    itTemplateButton: 'Load IT Department Template',
+    itTemplateConfirmMessage:
+      "This replaces your company's current IT department and job roles with the full IT Department Template (8 divisions, their internal sections, and job titles researched for a large modern IT org). Employees currently assigned to the old IT department or its job roles keep their employee record but lose that assignment — you'll need to reassign them afterward. This cannot be undone. Continue?",
+    itTemplateFailed: 'Failed to apply the IT department template',
+    itTemplateApplied: (r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
+      `IT department template applied: ${r.divisionsCreated} divisions, ${r.sectionsCreated} sections, ${r.rolesCreated} job roles created. ${r.employeesAffected} employee(s) previously under the old IT department lost that assignment and need reassigning.`,
   },
   settings: {
     title: 'Settings',
@@ -3430,6 +3437,13 @@ const ar: typeof en = {
     rolesEmpty: 'ما فيه مسميات وظيفية بعد لهذا القسم — أضف وحد بالأسفل.',
     roleNameRequired: 'المسمى الوظيفي (عربي) مطلوب',
     deleteRoleConfirm: 'تحذف هذا المسمى الوظيفي الموظفين المعينين عليه-يحتفظون فيه كنص حر.',
+    responsibilitiesLabel: 'الصلاحيات / المسؤوليات (نص مرجعي، غير مفعّل بالنظام)',
+    itTemplateButton: 'تحميل قالب إدارة تقنية المعلومات',
+    itTemplateConfirmMessage:
+      'بذا تستبدل قسم تقنية المعلومات الحالي بشركتك والمسميات الوظيفية اللي فيه بالقالب التنظيمي الكامل (8 إدارات بأقسامها الداخلية ومسمياتها الوظيفية، مبني على بحث لهيكلة شركات الـ IT الكبيرة). الموظفين المعينين حالياً على قسم IT القديم أو مسمياته يحتفظون بسجلهم بس يفقدون هذا الربط — لازم تعيد ربطهم بعدين يدوياً. هذا الإجراء ما يترجع. تكمل؟',
+    itTemplateFailed: 'فشل تحميل قالب تقنية المعلومات',
+    itTemplateApplied: (r: { divisionsCreated: number; sectionsCreated: number; rolesCreated: number; employeesAffected: number }) =>
+      `تم تحميل قالب إدارة تقنية المعلومات: ${r.divisionsCreated} إدارات، ${r.sectionsCreated} أقسام فرعية، ${r.rolesCreated} مسمى وظيفي. ${r.employeesAffected} موظف كانوا تحت قسم IT القديم فقدوا الربط ولازم تعيد تعيينهم.`,
   },
   settings: {
     title: 'الإعدادات',

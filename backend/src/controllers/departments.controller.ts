@@ -3,6 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
+import { applyItDepartmentTemplate } from '../utils/itDepartmentTemplate';
 
 // Dynamic, per-company corporate departments (MIGRATION_048), upgraded to an
 // Enterprise "Corporate Departments" model by MIGRATION_049: a simple
@@ -227,6 +228,45 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   await logAudit({ companyId, userId: req.auth!.userId, action: 'department_deleted', entityType: 'departments', entityId: id as string, req });
 
   res.status(200).json({ success: true });
+});
+
+// ========================================================================
+// IT Department Template (MIGRATION_069) — admin-triggered, replaces any
+// existing "IT"-named department tree for this company with the full 8-
+// division / section / job-title structure researched in
+// claude/it-department-structure-context-handoff.md. New companies get this
+// automatically at signup (auth.controller.ts); existing companies opt in
+// here. Runs in its own transaction (not nested in the outer request's pool)
+// since this is the only write in the request.
+// ========================================================================
+
+export const applyItTemplate = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+
+  const client = await pool.connect();
+  let result;
+  try {
+    await client.query('BEGIN');
+    result = await applyItDepartmentTemplate(client, companyId);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: 'it_department_template_applied',
+    entityType: 'departments',
+    entityId: companyId,
+    req,
+    newValues: { ...result } as Record<string, unknown>,
+  });
+
+  res.status(200).json({ success: true, ...result });
 });
 
 // ========================================================================
