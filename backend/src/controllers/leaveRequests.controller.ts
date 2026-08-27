@@ -6,7 +6,7 @@ import { isForeignKeyViolation } from '../utils/dbErrors';
 import { logAudit } from '../utils/audit';
 import { notifyRoles } from '../utils/notifications';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
-import { getHrScope } from '../utils/hrScope';
+import { getHrScope, isEmployeeInHrScope } from '../utils/hrScope';
 
 // "Absences" — two sub-sections. category='leave' uses LEAVE_TYPES for `type`.
 // category='absence_permission' pins `type` to the fixed 'permission' value and
@@ -224,6 +224,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     manager_note,
   } = req.body ?? {};
 
+  {
+    const existing = await pool.query('SELECT employee_id FROM leave_requests WHERE id = $1 AND company_id = $2', [id, companyId]);
+    if (!existing.rows[0]) throw new AppError(404, 'Leave request not found');
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    if (!(await isEmployeeInHrScope(companyId, scope, existing.rows[0].employee_id))) {
+      throw new AppError(404, 'Leave request not found');
+    }
+  }
+
   const sets: string[] = [];
   const values: unknown[] = [];
   let i = 1;
@@ -318,6 +327,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
+
+  {
+    const existing = await pool.query('SELECT employee_id FROM leave_requests WHERE id = $1 AND company_id = $2', [id, companyId]);
+    if (!existing.rows[0]) throw new AppError(404, 'Leave request not found');
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    if (!(await isEmployeeInHrScope(companyId, scope, existing.rows[0].employee_id))) {
+      throw new AppError(404, 'Leave request not found');
+    }
+  }
 
   const result = await pool.query('DELETE FROM leave_requests WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);
   if (result.rows.length === 0) throw new AppError(404, 'Leave request not found');

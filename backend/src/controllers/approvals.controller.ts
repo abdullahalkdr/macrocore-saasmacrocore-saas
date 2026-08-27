@@ -4,8 +4,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
+import { getHrScope } from '../utils/hrScope';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending, getTicketRequestTypeId } from '../utils/itsmApprovals';
-import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
+import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, getLatestApproval, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
 import { notifyUsers } from '../utils/notifications';
 import { validateAttachments } from '../utils/attachments';
 
@@ -93,6 +94,67 @@ async function notifyMakerReturned(
   }
 }
 
+// Security fix, added 2026-08-27: createRequest() used to accept ANY module_type +
+// reference_id from ANY authenticated employee-linked user, with zero check that (a)
+// the record even exists in this company, (b) the caller has any real authority over
+// it, or (c) a request isn't already pending. That let any plain employee file a
+// bogus approval request against a record they've never touched (e.g. an already-
+// resolved EXPENSE belonging to a coworker) — which then let an admin's later
+// approve/reject action on it silently flip that unrelated record's real status, and
+// let the same employee re-file at will to perpetually block legitimate Payroll/
+// Expense/Purchase-Order operations (getLatestApproval always reads the MOST RECENT
+// row). Fixed by requiring the record to exist in this company, requiring the caller
+// to be either its real owner (created_by, for EXPENSE/PURCHASE_ORDER — the only two
+// module_types a plain employee can legitimately create in the first place) or hold
+// the module's own approver/write authority, and refusing a new filing while one is
+// already pending.
+async function assertCanFileApprovalRequest(
+  companyId: string,
+  req: Request,
+  moduleType: string,
+  referenceId: string
+): Promise<void> {
+  const userId = req.auth!.userId;
+  const role = req.auth!.role;
+
+  let ownerId: string | null = null;
+  if (moduleType === 'EXPENSE') {
+    const r = await pool.query('SELECT created_by FROM expenses WHERE id = $1 AND company_id = $2', [referenceId, companyId]);
+    if (!r.rows[0]) throw new AppError(404, 'Expense not found');
+    ownerId = r.rows[0].created_by;
+  } else if (moduleType === 'PURCHASE_ORDER') {
+    const r = await pool.query('SELECT created_by FROM purchase_orders WHERE id = $1 AND company_id = $2', [referenceId, companyId]);
+    if (!r.rows[0]) throw new AppError(404, 'Purchase order not found');
+    ownerId = r.rows[0].created_by;
+  } else if (moduleType === 'PAYROLL') {
+    const r = await pool.query('SELECT id FROM payroll WHERE id = $1 AND company_id = $2', [referenceId, companyId]);
+    if (!r.rows[0]) throw new AppError(404, 'Payroll record not found');
+    // No "owner" concept for payroll (an employee never files their own) — privilege
+    // alone decides, and it must match the same bar payroll.controller.ts's own write
+    // endpoints now enforce (not just role='manager', which used to let any manager
+    // in regardless of manage_payroll — see payroll.controller.ts's 2026-08-27 fix).
+    const scope = await getHrScope(companyId, userId, role);
+    const privileged = role === 'admin' || scope.level === 'full' || (await hasPermission(userId, 'manage_payroll'));
+    if (!privileged) throw new AppError(403, 'You do not have permission to file an approval request for this record.');
+  }
+
+  if (moduleType !== 'PAYROLL') {
+    const isOwner = ownerId !== null && ownerId === userId;
+    const privileged =
+      role === 'admin' ||
+      role === 'manager' ||
+      (await hasPermission(userId, MODULE_APPROVER_PERMISSION[moduleType]));
+    if (!isOwner && !privileged) {
+      throw new AppError(403, 'You do not have permission to file an approval request for this record.');
+    }
+  }
+
+  const latest = await getLatestApproval(companyId, moduleType, referenceId);
+  if (latest?.status === 'pending') {
+    throw new AppError(409, 'An approval request for this record is already pending.');
+  }
+}
+
 // POST /api/approvals/request — any authenticated employee-linked user can file one
 // manually. MIGRATION_058's own module controllers call fileApprovalRequest()
 // directly instead of hitting this route internally, but this route stays exactly
@@ -105,6 +167,8 @@ export const createRequest = asyncHandler(async (req: Request, res: Response) =>
     throw new AppError(400, `Unknown or unsupported module_type. Supported: ${VALID_MODULES.join(', ')}`);
   }
   if (!reference_id) throw new AppError(400, 'reference_id is required');
+
+  await assertCanFileApprovalRequest(companyId, req, module_type, reference_id);
 
   const request = await fileApprovalRequest(companyId, module_type, reference_id, req.auth!.userId);
 

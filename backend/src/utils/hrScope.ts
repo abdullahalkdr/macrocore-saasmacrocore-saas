@@ -124,3 +124,20 @@ export async function canAccessUsersList(companyId: string, userId: string, role
   const departmentId = await resolveOwnDepartmentId(companyId, userId);
   return isWithinDepartmentCategory(companyId, departmentId, 'IT', 'IT');
 }
+
+// Returns true if `employeeId` (an employee row belonging to this company) falls
+// within the given HrScope: any employee under 'full', only the caller's own
+// department subtree under 'department', or only the caller's own record under
+// 'self'. Looks up the employee's department_id fresh on every call (never trust
+// a cached/client-supplied value). Used by every controller that gates a WRITE
+// to one specific employee's row (leaveRequests, attendance, performanceScores)
+// the same way list()/getOne() already gate reads — added 2026-08-27 after an
+// audit found those write paths had no scope check at all, only requireRole.
+export async function isEmployeeInHrScope(companyId: string, scope: HrScope, employeeId: string | null): Promise<boolean> {
+  if (scope.level === 'full') return true;
+  if (!employeeId) return false;
+  if (scope.level === 'self') return scope.employeeId === employeeId;
+  const result = await pool.query('SELECT department_id FROM employees WHERE id = $1 AND company_id = $2', [employeeId, companyId]);
+  const departmentId: string | null = result.rows[0]?.department_id ?? null;
+  return !!departmentId && scope.departmentIds.includes(departmentId);
+}

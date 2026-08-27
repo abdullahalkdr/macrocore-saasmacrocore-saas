@@ -93,6 +93,27 @@ function withExpiries<T extends { civil_id_expiry: string | null; residency_expi
 // non-HR manager only sees their own department (+ descendants), a plain
 // employee only sees themself. admin and HR-department members are
 // unrestricted, same as this endpoint's original company-wide behavior.
+// Write-side guard (create/update/remove) — mirrors the department-scope check
+// list()/getOne() already apply on reads. Added 2026-08-27: update()/remove() had
+// NO scope check at all (only requireRole('admin','manager') at the route), so any
+// manager — including one scoped to a single department on every read endpoint —
+// could edit or delete an employee in ANY other department (salary, bank IBAN,
+// civil ID included). 'full' scope (admin/HR) can touch any department, including
+// null. 'department' scope may only touch a department in their own subtree, and
+// department_id must be explicitly provided (a department-scoped manager cannot
+// create/move an employee into "no department", which would otherwise put that
+// employee out of everyone's reach but an admin's). 'self' scope (a manager with
+// no department assigned at all) gets no employee-management access whatsoever —
+// same as it already gets no read visibility past their own record.
+async function assertDepartmentInScope(
+  scope: Awaited<ReturnType<typeof getHrScope>>,
+  departmentId: string | null | undefined
+): Promise<void> {
+  if (scope.level === 'full') return;
+  if (scope.level === 'department' && departmentId && scope.departmentIds.includes(departmentId)) return;
+  throw new AppError(403, 'You do not have permission to manage employees in this department.');
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
@@ -198,6 +219,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     const dept = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
     if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
   }
+  {
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    await assertDepartmentInScope(scope, department_id ?? null);
+  }
   // MIGRATION_054 — job_role_id is the FK link EmployeesPage.tsx's dropdown resolves to
   // (its "Other" free-text fallback simply omits this and only sends job_role text).
   // Drives job-role-level permission grants (job_role_permissions), so it's validated
@@ -295,6 +320,14 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     shift_start_time,
     late_grace_minutes,
   } = req.body ?? {};
+
+  {
+    const existingDept = await pool.query('SELECT department_id FROM employees WHERE id = $1 AND company_id = $2', [id, companyId]);
+    if (!existingDept.rows[0]) throw new AppError(404, 'Employee not found');
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    await assertDepartmentInScope(scope, existingDept.rows[0].department_id);
+    if (department_id !== undefined) await assertDepartmentInScope(scope, department_id);
+  }
 
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -408,6 +441,11 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 
   const before = await pool.query(`SELECT ${SELECT_COLUMNS} FROM employees WHERE id = $1 AND company_id = $2`, [id, companyId]);
   const oldEmployee = before.rows[0] ?? null;
+
+  if (oldEmployee) {
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    await assertDepartmentInScope(scope, oldEmployee.department_id);
+  }
 
   try {
     const result = await pool.query('DELETE FROM employees WHERE id = $1 AND company_id = $2 RETURNING id', [id, companyId]);

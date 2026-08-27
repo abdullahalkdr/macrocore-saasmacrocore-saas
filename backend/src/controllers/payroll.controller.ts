@@ -27,6 +27,22 @@ async function resolvePayrollFilter(req: Request): Promise<PayrollFilter> {
   return { type: 'own', employeeId: scope.level === 'self' ? scope.employeeId : null };
 }
 
+// Write access (create/update/remove/pay) requires the SAME bar as full read
+// visibility (resolvePayrollFilter's 'all' branch) — manage_payroll permission,
+// or hrScope 'full' (admin / HR department). A non-HR manager gets NO payroll
+// write access at all, matching that they get no read visibility past their own
+// record either. Added 2026-08-27: the route middleware (requireRoleOrPermission)
+// only checked role IN (admin, manager) OR the permission — since role check
+// short-circuits, ANY manager company-wide passed regardless of manage_payroll,
+// letting a manager with zero payroll visibility create/edit/delete/pay out any
+// employee's payroll. This closes that gap at the controller level.
+async function assertPayrollWriteAccess(req: Request): Promise<void> {
+  const filter = await resolvePayrollFilter(req);
+  if (filter.type !== 'all') {
+    throw new AppError(403, 'You do not have permission to modify payroll records.');
+  }
+}
+
 interface AdjustmentInput {
   type: 'bonus' | 'deduction';
   label: string;
@@ -146,6 +162,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 // backward compatibility with any existing integration using them).
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
+  await assertPayrollWriteAccess(req);
   const { employee_id, month_year, attendance_bonus, other_deductions, adjustments, paid_date, total_paid_override } = req.body ?? {};
 
   if (typeof employee_id !== 'string') throw new AppError(400, 'employee_id is required');
@@ -291,6 +308,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
+  await assertPayrollWriteAccess(req);
   const {
     base_salary,
     attendance_bonus,
@@ -422,6 +440,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
+  await assertPayrollWriteAccess(req);
 
   const existing = await pool.query(
     `SELECT employee_id, month_year, base_salary, attendance_bonus, other_deductions, wage_type,
@@ -456,6 +475,7 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 export const pay = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { id } = req.params;
+  await assertPayrollWriteAccess(req);
 
   const existing = await pool.query(
     'SELECT id, status, paid_date, month_year FROM payroll WHERE id = $1 AND company_id = $2',

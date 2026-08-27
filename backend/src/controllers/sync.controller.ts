@@ -52,7 +52,7 @@ export const push = asyncHandler(async (req: Request, res: Response) => {
       if (typeof change.id !== 'string') throw new AppError(400, 'each change needs a client-generated id');
       const data = change.data ?? {};
 
-      const existing = await client.query('SELECT id, qty, total_price FROM sales WHERE id = $1', [change.id]);
+      const existing = await client.query('SELECT id, qty, total_price FROM sales WHERE id = $1 AND company_id = $2', [change.id, companyId]);
       if (existing.rows[0]) {
         // Already synced — most likely a retried push after a dropped connection. Idempotent no-op,
         // unless the incoming payload actually disagrees with what's stored, in which case the

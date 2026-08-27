@@ -3,7 +3,7 @@ import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
-import { getHrScope } from '../utils/hrScope';
+import { getHrScope, isEmployeeInHrScope } from '../utils/hrScope';
 import { logAudit } from '../utils/audit';
 
 const SCORE_FIELDS = `id, employee_id, cycle_id, okr_score, feedback_score, final_score, bonus_amount, payroll_adjustment_id, status, created_by, created_at, updated_at`;
@@ -61,6 +61,16 @@ export const upsertScore = asyncHandler(async (req: Request, res: Response) => {
   const cycle = await pool.query('SELECT id FROM feedback_cycles WHERE id = $1 AND company_id = $2', [cycle_id, companyId]);
   if (!cycle.rows[0]) throw new AppError(404, 'Cycle not found');
 
+  // Added 2026-08-27: route was admin/manager-only with no per-employee scope check —
+  // a department-scoped manager could set/finalize a bonus payout (-> payroll) for
+  // any employee company-wide, not just their own team.
+  {
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    if (!(await isEmployeeInHrScope(companyId, scope, employee_id))) {
+      throw new AppError(403, 'You do not have permission to score this employee.');
+    }
+  }
+
   const result = await pool.query(
     `INSERT INTO performance_scores (company_id, employee_id, cycle_id, okr_score, feedback_score, final_score, bonus_amount, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -102,6 +112,12 @@ export const finalizeScore = asyncHandler(async (req: Request, res: Response) =>
 
   const score = await pool.query('SELECT * FROM performance_scores WHERE id = $1 AND company_id = $2', [id, companyId]);
   if (!score.rows[0]) throw new AppError(404, 'Performance score not found');
+  {
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    if (!(await isEmployeeInHrScope(companyId, scope, score.rows[0].employee_id))) {
+      throw new AppError(403, 'You do not have permission to finalize this employee\'s score.');
+    }
+  }
   if (score.rows[0].payroll_adjustment_id) throw new AppError(400, 'This score has already been finalized to payroll');
   if (!score.rows[0].bonus_amount || Number(score.rows[0].bonus_amount) <= 0) {
     throw new AppError(400, 'bonus_amount must be greater than 0 to finalize');

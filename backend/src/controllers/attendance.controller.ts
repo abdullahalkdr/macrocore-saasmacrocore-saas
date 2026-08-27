@@ -6,7 +6,7 @@ import { isUniqueViolation, isForeignKeyViolation } from '../utils/dbErrors';
 import { computeLateMinutes, computeDeduction } from '../utils/attendance';
 import { logAudit } from '../utils/audit';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
-import { getHrScope } from '../utils/hrScope';
+import { getHrScope, isEmployeeInHrScope } from '../utils/hrScope';
 
 export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -147,6 +147,17 @@ export const upsertManual = asyncHandler(async (req: Request, res: Response) => 
 
   const employee = await pool.query(`SELECT salary_monthly, wage_type FROM employees WHERE id = $1 AND company_id = $2`, [employee_id, companyId]);
   if (!employee.rows[0]) throw new AppError(404, 'Employee not found');
+
+  // Added 2026-08-27: this route was gated to admin/manager only, with no per-employee
+  // scope check — a department-scoped manager (who sees only their own team on list())
+  // could fabricate/overwrite attendance, late-minutes, and deduction records for ANY
+  // employee company-wide, which feeds straight into payroll's attendance_deduction.
+  {
+    const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
+    if (!(await isEmployeeInHrScope(companyId, scope, employee_id))) {
+      throw new AppError(403, 'You do not have permission to record attendance for this employee.');
+    }
+  }
 
   const company = await pool.query(
     `SELECT official_shift_start_time, grace_period_minutes, working_days_per_month, standard_shift_minutes, timezone FROM companies WHERE id = $1`,
