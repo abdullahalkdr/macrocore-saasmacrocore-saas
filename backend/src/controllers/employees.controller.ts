@@ -93,25 +93,31 @@ function withExpiries<T extends { civil_id_expiry: string | null; residency_expi
 // non-HR manager only sees their own department (+ descendants), a plain
 // employee only sees themself. admin and HR-department members are
 // unrestricted, same as this endpoint's original company-wide behavior.
-// Write-side guard (create/update/remove) — mirrors the department-scope check
-// list()/getOne() already apply on reads. Added 2026-08-27: update()/remove() had
-// NO scope check at all (only requireRole('admin','manager') at the route), so any
-// manager — including one scoped to a single department on every read endpoint —
-// could edit or delete an employee in ANY other department (salary, bank IBAN,
-// civil ID included). 'full' scope (admin/HR) can touch any department, including
-// null. 'department' scope may only touch a department in their own subtree, and
-// department_id must be explicitly provided (a department-scoped manager cannot
-// create/move an employee into "no department", which would otherwise put that
-// employee out of everyone's reach but an admin's). 'self' scope (a manager with
-// no department assigned at all) gets no employee-management access whatsoever —
-// same as it already gets no read visibility past their own record.
-async function assertDepartmentInScope(
-  scope: Awaited<ReturnType<typeof getHrScope>>,
-  departmentId: string | null | undefined
-): Promise<void> {
+//
+// Write-side guard (create/update/remove) — TIGHTENED 2026-08-29 to require
+// FULL scope only (admin, or a genuine HR-department member), never
+// 'department' scope. Originally (2026-08-27 fix) 'department' scope was
+// allowed to write within its own subtree, mirroring the read-side check —
+// but the same day the manager_id-based department-scope path was added
+// (see hrScope.ts / claude/manager-scope-department-based-decision.md),
+// live testing surfaced the real-world gap: a department's formal Manager
+// (via departments.manager_id, independent of their own department/role)
+// could add/edit/delete employee master records — salary, bank IBAN, civil
+// ID, hire/fire — in departments they merely head for org-chart/approval
+// purposes, with no actual HR function. Standard HRIS practice (Workday,
+// SuccessFactors, BambooHR, etc.) keeps this split: a line/department
+// manager views their team and handles day-to-day operational actions
+// (attendance, leave approval, performance reviews — see
+// attendance.controller.ts / leaveRequests.controller.ts /
+// performanceScores.controller.ts, all still 'department'-scope on write),
+// but the employee master record itself — the thing this controller
+// owns — is HR/admin administrative territory. So: 'full' scope can create/
+// update/remove any employee, including department_id = null. Anyone else
+// ('department' or 'self' scope) gets zero write access here, regardless of
+// which department is involved — read-only via list()/getOne(), unchanged.
+async function assertFullHrScope(scope: Awaited<ReturnType<typeof getHrScope>>): Promise<void> {
   if (scope.level === 'full') return;
-  if (scope.level === 'department' && departmentId && scope.departmentIds.includes(departmentId)) return;
-  throw new AppError(403, 'You do not have permission to manage employees in this department.');
+  throw new AppError(403, 'Only HR or an administrator can add, edit, or remove employee records.');
 }
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
@@ -221,7 +227,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   }
   {
     const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
-    await assertDepartmentInScope(scope, department_id ?? null);
+    await assertFullHrScope(scope);
   }
   // MIGRATION_054 — job_role_id is the FK link EmployeesPage.tsx's dropdown resolves to
   // (its "Other" free-text fallback simply omits this and only sends job_role text).
@@ -325,8 +331,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     const existingDept = await pool.query('SELECT department_id FROM employees WHERE id = $1 AND company_id = $2', [id, companyId]);
     if (!existingDept.rows[0]) throw new AppError(404, 'Employee not found');
     const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
-    await assertDepartmentInScope(scope, existingDept.rows[0].department_id);
-    if (department_id !== undefined) await assertDepartmentInScope(scope, department_id);
+    await assertFullHrScope(scope);
   }
 
   const sets: string[] = [];
@@ -444,7 +449,7 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
 
   if (oldEmployee) {
     const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
-    await assertDepartmentInScope(scope, oldEmployee.department_id);
+    await assertFullHrScope(scope);
   }
 
   try {
