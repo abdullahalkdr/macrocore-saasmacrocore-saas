@@ -95,6 +95,25 @@ async function departmentAndDescendantIds(companyId: string, rootDepartmentId: s
   return result.rows.map((r) => r.id as string);
 }
 
+// Returns the ids of every department (in this company) whose manager_id
+// points at this employee — the new (2026-08-29) department-scope path.
+// Additive to the legacy role==='manager' path in getHrScope: being named a
+// department's formal Manager (via the Departments page) now grants scope
+// over that department regardless of the user's own `role` field, so
+// role=employee accounts can be real department managers without the blunt
+// system-wide 'manager' role. See
+// claude/manager-scope-department-based-decision.md. No fallback: a
+// department with no manager_id set contributes nothing here — nobody gets
+// scope over it through this path.
+async function departmentsManagedByEmployee(companyId: string, employeeId: string | null): Promise<string[]> {
+  if (!employeeId) return [];
+  const result = await pool.query(
+    `SELECT id FROM departments WHERE company_id = $1 AND manager_id = $2`,
+    [companyId, employeeId]
+  );
+  return result.rows.map((r) => r.id as string);
+}
+
 export async function getHrScope(companyId: string, userId: string, role: string): Promise<HrScope> {
   if (role === 'admin') return { level: 'full' };
 
@@ -103,12 +122,31 @@ export async function getHrScope(companyId: string, userId: string, role: string
     return { level: 'full' };
   }
 
+  const employeeId = await resolveOwnEmployeeId(companyId, userId);
+  const scopedDepartmentIds = new Set<string>();
+
+  // Legacy path: system-wide role='manager' with a department on their own
+  // employee record — unchanged behavior, kept exactly as before.
   if (role === 'manager' && departmentId) {
-    const departmentIds = await departmentAndDescendantIds(companyId, departmentId);
-    return { level: 'department', departmentIds };
+    for (const id of await departmentAndDescendantIds(companyId, departmentId)) {
+      scopedDepartmentIds.add(id);
+    }
   }
 
-  const employeeId = await resolveOwnEmployeeId(companyId, userId);
+  // New path: formally named Manager of one or more departments
+  // (departments.manager_id), independent of role. Additive — union with
+  // the legacy path above, never replaces it.
+  const managedDepartmentIds = await departmentsManagedByEmployee(companyId, employeeId);
+  for (const managedId of managedDepartmentIds) {
+    for (const id of await departmentAndDescendantIds(companyId, managedId)) {
+      scopedDepartmentIds.add(id);
+    }
+  }
+
+  if (scopedDepartmentIds.size > 0) {
+    return { level: 'department', departmentIds: Array.from(scopedDepartmentIds) };
+  }
+
   return { level: 'self', employeeId };
 }
 
