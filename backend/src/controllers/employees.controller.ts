@@ -23,7 +23,7 @@ const SELECT_COLUMNS = `id, name, email, phone, job_role, job_role_id, salary_mo
   photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
   nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
   bank_iban, emergency_contact_name, emergency_contact_phone, location_id, allowances, shift_start_time,
-  late_grace_minutes, department_id, created_at`;
+  late_grace_minutes, department_id, manager_id, created_at`;
 
 // Same columns, prefixed with e. — used by list()/getOne() which LEFT JOIN locations
 // (unprefixed column names would be ambiguous once joined, since locations also has id/name).
@@ -132,6 +132,9 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   } else if (scope.level === 'department') {
     params.push(scope.departmentIds);
     where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+  } else if (scope.level === 'direct_reports') {
+    params.push(scope.employeeIds);
+    where += ` AND e.id = ANY($${params.length}::uuid[])`;
   }
 
   const result = await pool.query(
@@ -168,6 +171,7 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
   const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
   if (scope.level === 'self' && employee.id !== scope.employeeId) throw new AppError(404, 'Employee not found');
   if (scope.level === 'department' && !scope.departmentIds.includes(employee.department_id)) throw new AppError(404, 'Employee not found');
+  if (scope.level === 'direct_reports' && !scope.employeeIds.includes(employee.id)) throw new AppError(404, 'Employee not found');
 
   res.status(200).json({ success: true, employee: withExpiries(withAge(employee)) });
 });
@@ -201,6 +205,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     emergency_contact_phone,
     location_id,
     department_id,
+    manager_id,
     allowances,
     shift_start_time,
     late_grace_minutes,
@@ -225,6 +230,14 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     const dept = await pool.query('SELECT id FROM departments WHERE id = $1 AND company_id = $2', [department_id, companyId]);
     if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
   }
+  // MIGRATION_073 — "Direct Manager" (see hrScope.ts / manager-scope-based-
+  // decision.md). Same cross-tenant-validation shape as department_id/
+  // location_id above; the self-reference case can't occur on create()
+  // since the new employee's id doesn't exist yet.
+  if (manager_id) {
+    const mgr = await pool.query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [manager_id, companyId]);
+    if (mgr.rows.length === 0) throw new AppError(400, 'manager_id not found');
+  }
   {
     const scope = await getHrScope(companyId, req.auth!.userId, req.auth!.role);
     await assertFullHrScope(scope);
@@ -244,10 +257,10 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     `INSERT INTO employees (company_id, name, email, phone, job_role, job_role_id, salary_monthly, start_date,
        photo_base64, civil_id, birth_date, weight_kg, prior_experience, certificates, wage_type, hourly_rate,
        nationality, civil_id_expiry, residency_number, residency_expiry, passport_number, passport_expiry,
-       bank_iban, emergency_contact_name, emergency_contact_phone, location_id, department_id, allowances,
-       shift_start_time, late_grace_minutes)
+       bank_iban, emergency_contact_name, emergency_contact_phone, location_id, department_id, manager_id,
+       allowances, shift_start_time, late_grace_minutes)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $18, $19, $20, $21, $22,
-       $23, $24, $25, $26, $27, $28::jsonb, $29, $30)
+       $23, $24, $25, $26, $27, $28, $29::jsonb, $30, $31)
      RETURNING ${SELECT_COLUMNS}`,
     [
       companyId,
@@ -277,6 +290,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
       emergency_contact_phone ?? null,
       location_id ?? null,
       department_id ?? null,
+      manager_id ?? null,
       JSON.stringify(allowanceList),
       shift_start_time ?? null,
       late_grace_minutes ?? null,
@@ -322,6 +336,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     emergency_contact_phone,
     location_id,
     department_id,
+    manager_id,
     allowances,
     shift_start_time,
     late_grace_minutes,
@@ -405,6 +420,18 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       if (dept.rows.length === 0) throw new AppError(400, 'department_id not found');
     }
     setField('department_id', department_id || null);
+  }
+  // MIGRATION_073 — "Direct Manager". Same cross-tenant shape as department_id
+  // above, plus a self-reference guard (the DB CHECK constraint would also
+  // catch this, but failing here gives a clean 400 instead of a raw
+  // constraint-violation error).
+  if (manager_id !== undefined) {
+    if (manager_id) {
+      if (manager_id === id) throw new AppError(400, 'An employee cannot be their own direct manager');
+      const mgr = await pool.query('SELECT id FROM employees WHERE id = $1 AND company_id = $2', [manager_id, companyId]);
+      if (mgr.rows.length === 0) throw new AppError(400, 'manager_id not found');
+    }
+    setField('manager_id', manager_id || null);
   }
   if (allowances !== undefined) setField('allowances', JSON.stringify(validateAllowances(allowances)), 'jsonb');
   if (shift_start_time !== undefined) {

@@ -170,6 +170,9 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     if (scope.level === 'department') {
       params.push(scope.departmentIds);
       where += ` AND e.department_id = ANY($${params.length}::uuid[])`;
+    } else if (scope.level === 'direct_reports') {
+      params.push(scope.employeeIds);
+      where += ` AND lr.employee_id = ANY($${params.length}::uuid[])`;
     }
     if (typeof employee_id === 'string') {
       params.push(employee_id);

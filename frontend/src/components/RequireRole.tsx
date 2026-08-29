@@ -41,7 +41,7 @@ export default function RequireRole({
 }: {
   roles?: string[];
   permission?: string;
-  minHrAccess?: 'department' | 'full';
+  minHrAccess?: 'direct_reports' | 'department' | 'full';
   requiresUsersAccess?: boolean;
   requiresInventory?: boolean;
   children: ReactNode;
@@ -52,7 +52,7 @@ export default function RequireRole({
   const hasPermission = useHasPermission(permission ?? '__none__');
 
   const isAdmin = user?.role === 'admin';
-  const hrAccessRank: Record<'self' | 'department' | 'full', number> = { self: 0, department: 1, full: 2 };
+  const hrAccessRank: Record<'self' | 'direct_reports' | 'department' | 'full', number> = { self: 0, direct_reports: 1, department: 2, full: 3 };
   const hrAccessLevel = user?.hr_access_level ?? 'self';
   const hrAccessOk = !minHrAccess || isAdmin || hrAccessRank[hrAccessLevel] >= hrAccessRank[minHrAccess];
   const usersAccessOk = !requiresUsersAccess || isAdmin || !!user?.can_access_users;

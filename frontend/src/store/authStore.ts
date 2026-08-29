@@ -12,7 +12,7 @@ export interface AuthUser {
   // (backend/src/utils/hrScope.ts). UI hint only for Layout.tsx's sidebar
   // filtering; every real HR/Users endpoint re-checks independently on the
   // server regardless of what this says.
-  hr_access_level?: 'full' | 'department' | 'self';
+  hr_access_level?: 'full' | 'department' | 'direct_reports' | 'self';
   can_access_users?: boolean;
 }
 

@@ -368,7 +368,7 @@ export default function Layout() {
   // field existed) is treated as the most restrictive level, never the most
   // permissive, so a stale/incomplete snapshot can only under-show a menu
   // item, never over-show one.
-  const hrAccessRank: Record<'self' | 'department' | 'full', number> = { self: 0, department: 1, full: 2 };
+  const hrAccessRank: Record<'self' | 'direct_reports' | 'department' | 'full', number> = { self: 0, direct_reports: 1, department: 2, full: 3 };
   const hrAccessLevel = user?.hr_access_level ?? 'self';
   const canAccessUsers = isAdmin || !!user?.can_access_users;
   // !== false (not just truthy) so it defaults to visible before the /company/me fetch

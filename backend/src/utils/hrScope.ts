@@ -33,6 +33,7 @@ import { pool } from '../db/pool';
 export type HrScope =
   | { level: 'full' }
   | { level: 'department'; departmentIds: string[] }
+  | { level: 'direct_reports'; employeeIds: string[] }
   | { level: 'self'; employeeId: string | null };
 
 async function resolveOwnDepartmentId(companyId: string, userId: string): Promise<string | null> {
@@ -114,6 +115,25 @@ async function departmentsManagedByEmployee(companyId: string, employeeId: strin
   return result.rows.map((r) => r.id as string);
 }
 
+// Returns the ids of every employee (in this company) whose employees.manager_id
+// points at this employee — "Direct Manager" scope, added 2026-08-29 alongside
+// MIGRATION_073_employee_direct_manager.sql. Unlike department scope, this is
+// a FLAT set of direct reports only, not recursive (a direct report's own
+// reports are not included) — see the migration file and
+// claude/manager-scope-department-based-decision.md for why this was kept
+// simple for v1. Lets a specific person be named someone's manager
+// independent of any department structure (e.g. a Safety & Security manager
+// who should see only his own team, with no department-wide or company-wide
+// visibility at all).
+async function directReportEmployeeIds(companyId: string, employeeId: string | null): Promise<string[]> {
+  if (!employeeId) return [];
+  const result = await pool.query(
+    `SELECT id FROM employees WHERE company_id = $1 AND manager_id = $2`,
+    [companyId, employeeId]
+  );
+  return result.rows.map((r) => r.id as string);
+}
+
 export async function getHrScope(companyId: string, userId: string, role: string): Promise<HrScope> {
   if (role === 'admin') return { level: 'full' };
 
@@ -147,6 +167,21 @@ export async function getHrScope(companyId: string, userId: string, role: string
     return { level: 'department', departmentIds: Array.from(scopedDepartmentIds) };
   }
 
+  // Direct Manager path (2026-08-29): only reached when the caller has NO
+  // department scope at all (via either path above). Department scope
+  // outranks direct-reports scope rather than being unioned with it — a
+  // simplifying choice for v1 (see MIGRATION_073's comments): the one edge
+  // case this doesn't cover is someone who is BOTH a department head of one
+  // department AND a named direct manager for a specific person in a
+  // DIFFERENT, unrelated department — that second relationship would be
+  // shadowed. Not expected to come up given how this is being rolled out
+  // (Department Head and Direct Manager are being used as alternatives, not
+  // combined, per the user's own examples) — revisit if it does.
+  const directReportIds = await directReportEmployeeIds(companyId, employeeId);
+  if (directReportIds.length > 0) {
+    return { level: 'direct_reports', employeeIds: directReportIds };
+  }
+
   return { level: 'self', employeeId };
 }
 
@@ -175,6 +210,7 @@ export async function isEmployeeInHrScope(companyId: string, scope: HrScope, emp
   if (scope.level === 'full') return true;
   if (!employeeId) return false;
   if (scope.level === 'self') return scope.employeeId === employeeId;
+  if (scope.level === 'direct_reports') return scope.employeeIds.includes(employeeId);
   const result = await pool.query('SELECT department_id FROM employees WHERE id = $1 AND company_id = $2', [employeeId, companyId]);
   const departmentId: string | null = result.rows[0]?.department_id ?? null;
   return !!departmentId && scope.departmentIds.includes(departmentId);
