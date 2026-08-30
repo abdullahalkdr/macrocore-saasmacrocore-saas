@@ -1,15 +1,15 @@
 import { Router } from 'express';
 import { list, getOne, create, update, remove } from '../controllers/costCenters.controller';
 import { requireAuth } from '../middleware/auth';
-import { requireRole } from '../middleware/requireRole';
+import { requireRoleOrPermission } from '../middleware/requirePermission';
 
 const router = Router();
 
 router.use(requireAuth);
 router.get('/', list);
 router.get('/:id', getOne);
-router.post('/', requireRole('admin', 'manager'), create);
-router.patch('/:id', requireRole('admin', 'manager'), update);
-router.delete('/:id', requireRole('admin', 'manager'), remove);
+router.post('/', requireRoleOrPermission(['admin', 'manager'], 'manage_cost_centers'), create);
+router.patch('/:id', requireRoleOrPermission(['admin', 'manager'], 'manage_cost_centers'), update);
+router.delete('/:id', requireRoleOrPermission(['admin', 'manager'], 'manage_cost_centers'), remove);
 
 export default router;
