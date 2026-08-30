@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
+import { useHasPermission } from '../store/usePermissionsStore';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
@@ -30,6 +31,7 @@ export default function WasteRecordsPage() {
   const lang = useLangStore((s) => s.lang);
   const user = useAuthStore((s) => s.user);
   const isManager = user?.role === 'admin' || user?.role === 'manager';
+  const canManageWaste = isManager || useHasPermission('edit_waste');
   const [items, setItems] = useState<WasteRecord[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -127,7 +129,7 @@ export default function WasteRecordsPage() {
                 <th>{t.reports.date}</th>
                 <th>{t.waste.product}</th>
                 <th className="num">{t.waste.qty}</th>
-                {isManager && <th></th>}
+                {canManageWaste && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -136,7 +138,7 @@ export default function WasteRecordsPage() {
                   <td>{new Date(w.created_at).toLocaleString()}</td>
                   <td style={{ fontWeight: 700 }}>{productName(w.product_id)}</td>
                   <td className="num">{w.qty}</td>
-                  {isManager && (
+                  {canManageWaste && (
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="icon-btn" title={t.waste.editItem} onClick={() => openEdit(w)}>
                         <IconEdit />
@@ -150,7 +152,7 @@ export default function WasteRecordsPage() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={isManager ? 4 : 3}>
+                  <td colSpan={canManageWaste ? 4 : 3}>
                     <div className="empty-state">{t.waste.empty}</div>
                   </td>
                 </tr>

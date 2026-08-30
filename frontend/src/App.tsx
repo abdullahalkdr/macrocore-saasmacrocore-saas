@@ -176,7 +176,7 @@ export default function App() {
             <Route
               path="/cost-centers"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} permission="manage_cost_centers">
                   <CostCentersPage />
                 </RequireRole>
               }
@@ -370,7 +370,7 @@ export default function App() {
             <Route
               path="/company-files"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole roles={MANAGER_ROLES} permission="manage_system_settings">
                   <CompanyFilesPage />
                 </RequireRole>
               }
