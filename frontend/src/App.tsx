@@ -119,7 +119,7 @@ export default function App() {
             <Route
               path="/employees"
               element={
-                <RequireRole roles={MANAGER_ROLES}>
+                <RequireRole minHrAccess="direct_reports">
                   <EmployeesPage />
                 </RequireRole>
               }
@@ -314,7 +314,7 @@ export default function App() {
             <Route
               path="/performance"
               element={
-                <RequireRole roles={MANAGER_ROLES} minHrAccess="department">
+                <RequireRole minHrAccess="direct_reports">
                   <PerformancePage />
                 </RequireRole>
               }

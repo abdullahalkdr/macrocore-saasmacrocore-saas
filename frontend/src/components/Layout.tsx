@@ -53,7 +53,7 @@ interface NavItem {
   // deliberately do NOT set this — the backend already row-scopes those to
   // 'self' for a plain employee, and the page itself is still the right one
   // for them to view their own record on.
-  minHrAccess?: 'department' | 'full';
+  minHrAccess?: 'direct_reports' | 'department' | 'full';
   // Same idea, for the Users/accounts-administration item specifically —
   // backed by user.can_access_users (admin, or an IT-department member).
   requiresUsersAccess?: boolean;
@@ -289,7 +289,7 @@ export default function Layout() {
         // only. shift-schedule/attendance/leave-requests/policies are
         // deliberately untouched — every employee needs those for their own
         // record, and the backend already row-scopes them to 'self'.
-        { to: '/employees', label: t.nav.employees, icon: IconEmployee, minHrAccess: 'department', minPlan: 2 },
+        { to: '/employees', label: t.nav.employees, icon: IconEmployee, minHrAccess: 'direct_reports', minPlan: 2 },
         { to: '/departments', label: t.nav.departments, icon: IconEmployee, minHrAccess: 'full' },
         { to: '/payroll', label: t.nav.payroll, icon: IconPayroll, minHrAccess: 'full', minPlan: 3, permission: 'manage_payroll' },
         { to: '/shift-schedule', label: t.nav.shiftSchedule, icon: IconAttendance, minPlan: 2 },
@@ -297,7 +297,7 @@ export default function Layout() {
         { to: '/leave-requests', label: t.nav.leaveRequests, icon: IconAttendance, minPlan: 2 },
         { to: '/policies', label: t.nav.policies, icon: IconReports, minPlan: 2 },
         { to: '/hr-dashboard', label: t.nav.hrDashboard, icon: IconReports, minHrAccess: 'full', minPlan: 3 },
-        { to: '/performance', label: t.nav.performance, icon: IconEmployee, minHrAccess: 'department', minPlan: 3 },
+        { to: '/performance', label: t.nav.performance, icon: IconEmployee, minHrAccess: 'direct_reports', minPlan: 3 },
       ],
     },
     {
