@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuthStore } from '../../store/authStore';
+import { useHasPermission } from '../../store/usePermissionsStore';
 import { useT } from '../../i18n';
 import PageHeader from '../../components/PageHeader';
 import ProfileSection from './ProfileSection';
@@ -23,6 +24,7 @@ export default function AccountSettingsPage() {
   const t = useT();
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
+  const canManageSystemSettings = isAdmin || useHasPermission('manage_system_settings');
   const [active, setActive] = useState<SectionId>('index');
 
   const profileGroup: SectionLink[] = [
@@ -39,7 +41,7 @@ export default function AccountSettingsPage() {
 
   const setupGroup: SectionLink[] = isAdmin ? [{ id: 'setup', title: t.account.sections.branchesTitle, desc: t.account.sections.branchesDesc, icon: '🏬' }] : [];
 
-  const customizationsGroup: SectionLink[] = isAdmin
+  const customizationsGroup: SectionLink[] = canManageSystemSettings
     ? [{ id: 'customizations', title: t.account.sections.templatesTitle, desc: t.account.sections.templatesDesc, icon: '📄' }]
     : [];
 
