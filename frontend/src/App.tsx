@@ -208,7 +208,7 @@ export default function App() {
             <Route
               path="/purchase-orders"
               element={
-                <RequireRole roles={MANAGER_ROLES} requiresInventory>
+                <RequireRole requiresInventory>
                   <PurchaseOrdersPage />
                 </RequireRole>
               }

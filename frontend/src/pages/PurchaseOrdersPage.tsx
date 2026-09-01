@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useT } from '../i18n';
+import { useAuthStore } from '../store/authStore';
+import { useHasPermission } from '../store/usePermissionsStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
@@ -59,6 +61,9 @@ function emptyRow(): ItemRow {
 
 export default function PurchaseOrdersPage() {
   const t = useT();
+  const user = useAuthStore((s) => s.user);
+  const isManager = user?.role === 'admin' || user?.role === 'manager';
+  const canApprovePO = isManager || useHasPermission('approve_purchase_orders');
   const [items, setItems] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -325,7 +330,7 @@ export default function PurchaseOrdersPage() {
                     {po.status === 'draft' && po.approval_status === 'pending' && (
                       <span className="muted" style={{ fontSize: 12 }}>{t.purchaseOrders.submittedForApproval}</span>
                     )}
-                    {po.status === 'draft' && po.approval_status !== 'pending' && (
+                    {po.status === 'draft' && po.approval_status !== 'pending' && canApprovePO && (
                       <>
                         <button className="icon-btn" title={t.purchaseOrders.editItem} onClick={() => openEdit(po)}>
                           <IconEdit />
@@ -338,7 +343,7 @@ export default function PurchaseOrdersPage() {
                         </button>
                       </>
                     )}
-                    {po.status === 'ordered' && (
+                    {po.status === 'ordered' && canApprovePO && (
                       <>
                         <button className="btn btn-primary btn-sm" onClick={() => openReceive(po)}>
                           {t.purchaseOrders.receive}

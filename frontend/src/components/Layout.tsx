@@ -273,7 +273,7 @@ export default function Layout() {
         { to: '/stock-transfers', label: t.nav.stockTransfers, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
         { to: '/locations', label: t.nav.locations, icon: IconBuilding, managerOnly: true },
         { to: '/suppliers', label: t.nav.suppliers, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
-        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, managerOnly: true, minPlan: 2, requiresInventory: true },
+        { to: '/purchase-orders', label: t.nav.purchaseOrders, icon: IconBuilding, minPlan: 2, requiresInventory: true },
       ],
     },
     {
