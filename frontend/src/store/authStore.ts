@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { usePolicyStore } from './usePolicyStore';
 
 export interface AuthUser {
   id: string;
@@ -52,14 +53,30 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       user: null,
       company: null,
-      setAuth: (token, user, company) => set({ token, user, company: company ?? null }),
+      // Cross-user isolation (2026-09) — setAuth is the moment a NEW identity takes
+      // over this tab (fresh login or registration; the only two call sites, per
+      // LoginPage.tsx/RegisterPage.tsx). Any other store's per-user cache (today, just
+      // usePolicyStore's pending-grant state — see its own comment for the full race
+      // this closes) must be wiped synchronously here, before this set() even commits,
+      // so the very first render under the new identity can never read a previous
+      // user's data and no response from a request that started under the old identity
+      // can land afterwards.
+      setAuth: (token, user, company) => {
+        usePolicyStore.getState().resetPendingGrants();
+        set({ token, user, company: company ?? null });
+      },
       // Local-only patch (e.g. flipping email_verified to true right after the user
       // completes verification) — doesn't touch the server, just keeps the cached user
       // object in sync so the UI doesn't need a re-login to reflect it.
       updateUser: (patch) => set((s) => (s.user ? { user: { ...s.user, ...patch } } : {})),
       // Same idea for company — see AuthCompany.plan_gating_bypassed above.
       updateCompany: (patch) => set((s) => (s.company ? { company: { ...s.company, ...patch } } : {})),
-      logout: () => set({ token: null, user: null, company: null }),
+      // Cross-user isolation (2026-09) — same reasoning as setAuth above, for the other
+      // half of the boundary: the moment THIS identity's session ends.
+      logout: () => {
+        usePolicyStore.getState().resetPendingGrants();
+        set({ token: null, user: null, company: null });
+      },
     }),
     { name: 'macrocore-auth' }
   )

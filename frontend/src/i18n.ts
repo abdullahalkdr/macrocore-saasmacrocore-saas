@@ -1598,6 +1598,17 @@ const en = {
     inheritedHint: 'Highlighted permissions are already granted through this employee’s job role — checking a box below adds an individual exception on top, it never removes a job-role grant.',
     inheritedBadge: 'From job role',
     unassignedDepartment: 'Unassigned',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    pendingBadge: 'Pending acknowledgment',
+    pendingCancelHint: 'This permission is checked but not yet active — the employee still has to acknowledge the linked policy. Uncheck to cancel the request.',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3. Save-result feedback — see
+    // buildSaveUserNotice() in PermissionsPage.tsx. Each takes an already-joined,
+    // localized list of permission labels (with the linked policy name for
+    // pendingNotice) rather than a raw key, so the sentence always reads naturally
+    // whether it names one permission or several.
+    pendingNotice: (list: string) => `Saved. Waiting on employee acknowledgment: ${list}.`,
+    cancelledNotice: (list: string) => `Saved. Cancelled the pending request for: ${list}.`,
+    blockedNotLinkedNotice: (list: string) => `Not saved for: ${list} — this account isn't linked to an employee record, so a policy-gated permission can't be requested for it.`,
   },
   customers: {
     title: 'Customers',
@@ -2005,6 +2016,20 @@ const en = {
       fullAccess: 'Full access',
       limitedAccess: 'Limited access',
     },
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3. Permanent "Policies &
+    // Acknowledgments" section on the employee's own profile — see ProfileSection.tsx.
+    // Deliberately separate from the general P&P mandatory-acknowledgment strings above
+    // (policies.acknowledge*) — that queue blocks at login; this one never blocks.
+    policyGrants: {
+      title: 'Policies & Acknowledgments',
+      subtitle: 'Permissions granted to you that require reading and acknowledging a policy before they activate.',
+      empty: 'No permissions waiting on your acknowledgment right now.',
+      viewButton: 'View & Acknowledge',
+      activates: (permissionLabel: string) => `Activates: ${permissionLabel}`,
+      modalIntro: 'Please read this policy in full before acknowledging.',
+      confirmButton: 'تأكيد الإقرار بالاطلاع',
+      acknowledgeFailed: 'Failed to submit acknowledgment — please try again.',
+    },
     setup: {
       manageBranches: 'Manage branches',
       manageCostCenters: 'Manage cost centers',
@@ -2264,6 +2289,13 @@ const en = {
     scrollToContinue: 'Scroll to the end of the text to enable "I Agree".',
     iAgree: 'I Agree',
     acknowledgeFailed: 'Failed to submit acknowledgment — please try again.',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    permissionGateTitle: 'Permission Gate',
+    permissionGateHint: 'Link this policy to a sensitive permission — an employee newly granted that permission must acknowledge this exact policy before it activates.',
+    permissionGateSaveFailed: 'Failed to update the permission gate — please try again.',
+    permissionGateRequiresApproved: 'Only an approved policy can be enabled as a permission gate.',
+    permissionGateEnableConfirmTitle: 'Enable this permission gate?',
+    permissionGateEnableConfirmMessage: 'If another policy currently gates this permission, it will be replaced by this one, and any employees still waiting to acknowledge the previous policy for it will have that request cancelled.',
   },
   sla: {
     title: 'SLA Management',
@@ -3849,6 +3881,13 @@ const ar: typeof en = {
     inheritedHint: 'الصلاحيات المميّزة ممنوحة أصلاً من خلال المسمى الوظيفي لهذا الموظف — تفعيل أي صلاحية تحت يضيف استثناء فردي فوقها، وما يلغي صلاحية المسمى الوظيفي.',
     inheritedBadge: 'من المسمى الوظيفي',
     unassignedDepartment: 'غير محدد',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    pendingBadge: 'بانتظار الإقرار',
+    pendingCancelHint: 'هذي الصلاحية محددة بس ما فعّلت بعد — لازم الموظف يقر بالسياسة المرتبطة فيها أول. الغِ التحديد عشان تلغي الطلب.',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    pendingNotice: (list: string) => `تم الحفظ. بانتظار إقرار الموظف: ${list}.`,
+    cancelledNotice: (list: string) => `تم الحفظ. الغي الطلب المعلّق لـ: ${list}.`,
+    blockedNotLinkedNotice: (list: string) => `ما انحفظ لـ: ${list} — هذا الحساب مو مربوط بسجل موظف، فما تقدر تطلب له صلاحية مربوطة بسياسة.`,
   },
   customers: {
     title: 'العملاء',
@@ -4255,6 +4294,17 @@ const ar: typeof en = {
       fullAccess: 'صلاحيات كاملة',
       limitedAccess: 'صلاحيات محدودة',
     },
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    policyGrants: {
+      title: 'السياسات والإقرارات',
+      subtitle: 'صلاحيات مُنحت لك بس تحتاج تقرأ وتقر بسياسة قبل ما تفعّل.',
+      empty: 'ما فيه صلاحيات بانتظار إقرارك حالياً.',
+      viewButton: 'عرض وإقرار',
+      activates: (permissionLabel: string) => `تُفعّل: ${permissionLabel}`,
+      modalIntro: 'الرجاء قراءة السياسة كاملة قبل الإقرار.',
+      confirmButton: 'تأكيد الإقرار بالاطلاع',
+      acknowledgeFailed: 'فشل تسجيل الإقرار — حاول مرة أخرى.',
+    },
     setup: {
       manageBranches: 'إدارة الفروع',
       manageCostCenters: 'إدارة مراكز التكلفة',
@@ -4514,6 +4564,13 @@ const ar: typeof en = {
     scrollToContinue: 'مرر للنهاية لتفعيل زر "أوافق".',
     iAgree: 'أوافق',
     acknowledgeFailed: 'فشل تسجيل الإقرار — حاول مرة أخرى.',
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+    permissionGateTitle: 'بوابة الصلاحية',
+    permissionGateHint: 'اربط هذي السياسة بصلاحية حساسة — أي موظف يُمنح هالصلاحية جديد لازم يقر بهذي السياسة بالضبط قبل ما تفعّل له.',
+    permissionGateSaveFailed: 'فشل تحديث بوابة الصلاحية — حاول مرة أخرى.',
+    permissionGateRequiresApproved: 'بس السياسة المعتمدة تقدر تنفعّل كبوابة صلاحية.',
+    permissionGateEnableConfirmTitle: 'تفعيل بوابة الصلاحية هذي؟',
+    permissionGateEnableConfirmMessage: 'إذا فيه سياسة ثانية حالياً تبوّب هالصلاحية، بتنستبدل بهذي، وأي موظف لسا ينتظر يقر بالسياسة القديمة عشانها بينلغى طلبه.',
   },
   sla: {
     title: 'إدارة اتفاقيات مستوى الخدمة',

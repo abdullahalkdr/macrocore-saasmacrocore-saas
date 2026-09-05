@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { list, setForUser, myPermissions, listJobRoles, setForJobRole } from '../controllers/permissions.controller';
+import { list, setForUser, myPermissions, listJobRoles, setForJobRole, myPendingGrants, acknowledgePendingGrant } from '../controllers/permissions.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/requireRole';
 
@@ -16,6 +16,12 @@ import { requireRole } from '../middleware/requireRole';
 // Open to any authenticated user on any plan.
 export const myPermissionsRouter = Router();
 myPermissionsRouter.get('/my-permissions', requireAuth, myPermissions);
+// Policy Gate pilot (MIGRATION_074/075) — the caller's own pending grants and the
+// endpoint that resolves one. Open the same way as my-permissions: read-only status
+// about the caller's own account, and the one write here only ever acts on the
+// caller's own row (never a client-supplied user id).
+myPermissionsRouter.get('/my-pending-grants', requireAuth, myPendingGrants);
+myPermissionsRouter.post('/my-pending-grants/:id/acknowledge', requireAuth, acknowledgePendingGrant);
 
 // Admin-only, gold-tier only (gate applied in app.ts): granting extra access is itself a
 // privileged action, kept out of reach of managers to avoid a manager delegating

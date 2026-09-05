@@ -15,6 +15,11 @@ interface EmployeeRow {
   // employees.job_role_id). Read-only here: individual grants below can only ADD on
   // top of this, never remove it — same rule the backend enforces.
   inherited_keys: string[];
+  // Policy Gate pilot (MIGRATION_074/075) — Step 3. Keys checked for this user that are
+  // still waiting on the employee's own acknowledgment (see PermissionGrantAcknowledgeModal)
+  // before they activate. Disjoint from permission_keys — a key is never in both arrays
+  // at once.
+  pending_keys: string[];
   // For the grouped employee picker — null for users with no linked employee record
   // or no job role assigned yet (grouped under "Unassigned" in the dropdown).
   department_id: string | null;
@@ -61,6 +66,18 @@ const PERMISSION_KEYS = [
   'view_audit_log',
 ] as const;
 type PermissionKey = (typeof PERMISSION_KEYS)[number];
+
+// Policy Gate pilot (MIGRATION_074/075) — Step 3. Shape of PUT /permissions/:userId's
+// response (permissions.controller.ts's setForUser) — pending/cancelled_pending/blocked
+// only ever carry pilot-gated keys today (see PILOT_GATED_PERMISSION_KEYS on the
+// backend), but this reads generically in case that list widens later.
+interface SetForUserResponse {
+  success: boolean;
+  permission_keys: string[];
+  pending: { permission_key: string; policy_id: string; policy_name: string; policy_name_en: string | null }[];
+  cancelled_pending: string[];
+  blocked: { key: string; reason: string }[];
+}
 
 export default function PermissionsPage() {
   const t = useT();
@@ -175,20 +192,59 @@ export default function PermissionsPage() {
   }, []);
 
   function currentUserKeys(emp: EmployeeRow): string[] {
-    return dirtyUsers[emp.id] ?? emp.permission_keys;
+    if (emp.id in dirtyUsers) return dirtyUsers[emp.id];
+    // Policy Gate pilot (MIGRATION_074/075) — Step 3. Merge pending_keys into the
+    // untouched baseline so a pending key shows checked without the admin having to
+    // click anything first — unchecking it here (before any other edit) is a real
+    // "cancel this pending request", handled server-side by setForUser's
+    // toCancelPending diff exactly like unchecking an active key removes it.
+    return [...new Set([...emp.permission_keys, ...emp.pending_keys])];
   }
   function toggleUser(emp: EmployeeRow, key: PermissionKey) {
     const keys = currentUserKeys(emp);
     const next = keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key];
     setDirtyUsers((d) => ({ ...d, [emp.id]: next }));
   }
+  // Policy Gate pilot (MIGRATION_074/075) — Step 3.
+  //
+  // BUGFIX (2026-09) — saveUser used to always show the generic t.permissions.saved
+  // message, even though setForUser's response already says exactly what happened:
+  // some of the checked keys may have gone to "pending" (waiting on the employee's own
+  // acknowledgment) instead of activating immediately, a previously-pending key may
+  // have been cancelled (unchecked before the employee acknowledged it), or a key may
+  // have been blocked entirely because this account has no linked employee record and
+  // so can never receive a policy-gated permission. Silently saying "Saved" in any of
+  // those cases hid the real outcome from the admin. Builds one combined, localized
+  // notice from whichever of the three actually happened; falls back to the plain
+  // "Saved" message when none did (today's ungated behavior, unchanged).
+  function permissionLabel(key: string): string {
+    return (t.permissions.keys as Record<string, string>)[key] ?? key;
+  }
+  function buildSaveUserNotice(r: SetForUserResponse): string {
+    const listSep = lang === 'ar' ? '، ' : ', ';
+    const parts: string[] = [];
+    if (r.pending.length > 0) {
+      const list = r.pending
+        .map((p) => `${permissionLabel(p.permission_key)} (${(lang === 'en' && p.policy_name_en) || p.policy_name})`)
+        .join(listSep);
+      parts.push(t.permissions.pendingNotice(list));
+    }
+    if (r.cancelled_pending.length > 0) {
+      parts.push(t.permissions.cancelledNotice(r.cancelled_pending.map(permissionLabel).join(listSep)));
+    }
+    if (r.blocked.length > 0) {
+      parts.push(t.permissions.blockedNotLinkedNotice(r.blocked.map((b) => permissionLabel(b.key)).join(listSep)));
+    }
+    return parts.length > 0 ? parts.join(' ') : t.permissions.saved;
+  }
+
   async function saveUser(emp: EmployeeRow) {
     setError(null);
     setNotice(null);
     setSavingUserId(emp.id);
     try {
-      await put(`/permissions/${emp.id}`, { permission_keys: currentUserKeys(emp) });
-      setNotice(t.permissions.saved);
+      const r = await put<SetForUserResponse>(`/permissions/${emp.id}`, { permission_keys: currentUserKeys(emp) });
+      setNotice(buildSaveUserNotice(r));
       loadUsers();
       setDirtyUsers((d) => {
         const next = { ...d };
@@ -331,6 +387,11 @@ export default function PermissionsPage() {
                     {PERMISSION_KEYS.map((key) => {
                       const keys = currentUserKeys(selectedEmployee);
                       const isInherited = selectedEmployee.inherited_keys.includes(key);
+                      // Policy Gate pilot (MIGRATION_074/075) — Step 3. Disjoint from
+                      // isInherited/permission_keys by construction (see EmployeeRow's
+                      // pending_keys comment) — a key is either active, pending, or
+                      // neither, never active-and-pending at once.
+                      const isPending = selectedEmployee.pending_keys.includes(key);
                       const isChecked = isInherited || keys.includes(key);
                       return (
                         <label
@@ -345,6 +406,15 @@ export default function PermissionsPage() {
                           />
                           <span>{t.permissions.keys[key]}</span>
                           {isInherited && <span className="tag amber" style={{ marginInlineStart: 'auto' }}>{t.permissions.inheritedBadge}</span>}
+                          {!isInherited && isPending && (
+                            <span
+                              className="tag amber"
+                              style={{ marginInlineStart: 'auto' }}
+                              title={t.permissions.pendingCancelHint}
+                            >
+                              {t.permissions.pendingBadge}
+                            </span>
+                          )}
                         </label>
                       );
                     })}

@@ -2,6 +2,10 @@ import { FormEvent, useEffect, useState } from 'react';
 import { get, patch, post, ApiError } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import { useT } from '../../i18n';
+import { useLangStore } from '../../store/langStore';
+import { usePolicyStore, PendingPermissionGrant } from '../../store/usePolicyStore';
+import { usePermissionsStore } from '../../store/usePermissionsStore';
+import PermissionGrantAcknowledgeModal from '../../components/PermissionGrantAcknowledgeModal';
 
 interface MeResponse {
   user: {
@@ -17,7 +21,13 @@ interface MeResponse {
 
 export default function ProfileSection() {
   const t = useT();
+  const lang = useLangStore((s) => s.lang);
   const authUser = useAuthStore((s) => s.user);
+  const pendingGrants = usePolicyStore((s) => s.pendingGrants);
+  const pendingGrantsLoading = usePolicyStore((s) => s.pendingGrantsLoading);
+  const fetchPendingGrants = usePolicyStore((s) => s.fetchPendingGrants);
+  const fetchMyPermissions = usePermissionsStore((s) => s.fetchMyPermissions);
+  const [openGrant, setOpenGrant] = useState<PendingPermissionGrant | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [firstName, setFirstName] = useState('');
@@ -50,6 +60,25 @@ export default function ProfileSection() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Policy Gate pilot (MIGRATION_074/075) — Step 3. Fetch this employee's own pending
+  // grants once on mount; the notification bell deep-links here (?section=profile)
+  // instead of trying to open a specific grant directly, so this is the only place
+  // that ever loads them.
+  useEffect(() => {
+    fetchPendingGrants();
+  }, [fetchPendingGrants]);
+
+  // Closing the modal — whether by acknowledging or by dismissing without acknowledging
+  // — always refetches: acknowledging removes this grant from the pending list and
+  // activates the permission (fetchMyPermissions refreshes Layout's own copy so the
+  // sidebar reflects it immediately); dismissing leaves the grant exactly as it was, so
+  // the refetch is a no-op there, but it's cheap and keeps this one code path for both.
+  function closeGrantModal() {
+    setOpenGrant(null);
+    fetchPendingGrants();
+    fetchMyPermissions();
+  }
 
   async function handleSave(e: FormEvent) {
     e.preventDefault();
@@ -218,6 +247,59 @@ export default function ProfileSection() {
           </div>
         </div>
       </div>
+
+      {/* Policy Gate pilot (MIGRATION_074/075) — Step 3. Permanent section, not just a
+          one-time notification target: an employee may dismiss the notification and/or
+          close the acknowledgment modal without acknowledging, then come back later —
+          this card is where they come back to. Deliberately separate from the general
+          P&P mandatory-acknowledgment queue (AcknowledgmentModal/usePolicyStore.pending)
+          — that one still blocks at login as before; this pilot never blocks anything,
+          it only gates one already-enforced permission per grant. */}
+      <div className="card">
+        <div className="card-head">
+          <h2>{t.account.policyGrants.title}</h2>
+        </div>
+        <div className="card-body">
+          <div className="muted" style={{ marginBottom: 12 }}>{t.account.policyGrants.subtitle}</div>
+          {/* BUGFIX (2026-09) — render off pendingGrantsLoading, not just
+              pendingGrants.length: fetchPendingGrants now clears pendingGrants to []
+              the instant it starts (see usePolicyStore.ts), specifically so a
+              previous user's policy content can never linger on screen across a
+              logout/login in the same tab. Without this loading check, that
+              synchronous [] would flash the empty-state message every time this
+              section mounts, even when the real fetch is about to come back
+              non-empty. */}
+          {pendingGrantsLoading ? (
+            <div className="muted">{t.common.loading}</div>
+          ) : pendingGrants.length === 0 ? (
+            <div className="empty-state">{t.account.policyGrants.empty}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {pendingGrants.map((g) => {
+                const displayName = (lang === 'en' && g.name_en) || g.name;
+                const permLabel = (t.permissions.keys as Record<string, string>)[g.permission_key] ?? g.permission_key;
+                return (
+                  <div
+                    key={g.id}
+                    className="invite-row"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700 }}>{displayName}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{t.account.policyGrants.activates(permLabel)}</div>
+                    </div>
+                    <button className="btn btn-primary btn-sm" type="button" onClick={() => setOpenGrant(g)}>
+                      {t.account.policyGrants.viewButton}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {openGrant && <PermissionGrantAcknowledgeModal grant={openGrant} onClose={closeGrantModal} />}
     </div>
   );
 }

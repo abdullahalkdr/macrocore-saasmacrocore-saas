@@ -4,6 +4,8 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { getOwnEmployeeId } from '../utils/ownEmployee';
+import { lockPolicyGateSlot } from '../utils/policyGateLock';
+import { PILOT_GATED_PERMISSION_KEYS } from './permissions.controller';
 
 const STATUSES = ['draft', 'in_review', 'approved', 'archived'];
 // Kept in sync with the CHECK constraint on policies.module_linked — MIGRATION_044
@@ -146,10 +148,22 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
     ? Math.round((acknowledged_required_count / required_count) * 1000) / 10
     : null;
 
+  // Policy Gate pilot (MIGRATION_074/075) — which permission_key(s), if any, this
+  // policy currently gates. At most one row is expected in practice today (the pilot
+  // only ever links one policy to one key, enforced by MIGRATION_075's unique
+  // constraint from the OTHER side — a permission_key maps to at most one policy, not
+  // the reverse), but this reads generically in case a future request links one
+  // policy to more than one key.
+  const gatesResult = await pool.query(
+    `SELECT permission_key FROM policy_permission_gates WHERE company_id = $1 AND policy_id = $2`,
+    [companyId, id]
+  );
+
   res.status(200).json({
     success: true,
     policy,
     linked_roles: rolesResult.rows.map((r) => r.role),
+    permission_gates: gatesResult.rows.map((r) => r.permission_key),
     acknowledgment_summary: {
       ...ackSummary.rows[0],
       required_count,
@@ -185,11 +199,39 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     setClauses.push(`approved_by = $${values.length}`);
   }
 
-  const result = await pool.query(
-    `UPDATE policies SET ${setClauses.join(', ')} WHERE id = $2 AND company_id = $3 RETURNING ${POLICY_FIELDS}`,
-    values
-  );
-  const policy = result.rows[0];
+  // Transaction added for the Policy Gate pilot (MIGRATION_074/075): leaving
+  // 'approved' must atomically cancel any pending_permission_grants riding on this
+  // policy — a request an employee hasn't acted on yet must never later activate a
+  // permission against a policy that's no longer approved (see the agreed plan's
+  // "cancel/archive while a request is pending" case). Every other transition
+  // (draft <-> in_review, or re-approving) simply has nothing to cancel.
+  const client = await pool.connect();
+  let policy;
+  let cancelledPending: { user_id: string; permission_key: string }[] = [];
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `UPDATE policies SET ${setClauses.join(', ')} WHERE id = $2 AND company_id = $3 RETURNING ${POLICY_FIELDS}`,
+      values
+    );
+    policy = result.rows[0];
+
+    if (currentStatus === 'approved' && nextStatus !== 'approved') {
+      const cancelled = await client.query(
+        `DELETE FROM pending_permission_grants WHERE company_id = $1 AND policy_id = $2 RETURNING user_id, permission_key`,
+        [companyId, id]
+      );
+      cancelledPending = cancelled.rows;
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   await logAudit({
     companyId,
@@ -200,7 +242,20 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     req,
   });
 
-  res.status(200).json({ success: true, policy });
+  if (cancelledPending.length > 0) {
+    await logAudit({
+      companyId,
+      userId: req.auth!.userId,
+      action: 'pending_permission_grants_auto_cancelled',
+      entityType: 'pending_permission_grants',
+      entityId: id as string,
+      req,
+      oldValues: { cancelled: cancelledPending, reason: 'POLICY_LEFT_APPROVED' },
+      newValues: null,
+    });
+  }
+
+  res.status(200).json({ success: true, policy, cancelled_pending_grants: cancelledPending });
 });
 
 // Replaces the full required-role set for a policy in one call (same pattern as
@@ -309,4 +364,187 @@ export const acknowledge = asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.status(201).json({ success: true, already_acknowledged: false, acknowledgment: result.rows[0] });
+});
+
+// POST /policies/:id/permission-gate — Policy Gate pilot (MIGRATION_074/075). Links
+// (or unlinks) this policy as the one required acknowledgment for a specific
+// PERMISSION_KEYS entry. A single { enabled } toggle, not a general policies x
+// permissions matrix — scope is deliberately narrowed to PILOT_GATED_PERMISSION_KEYS
+// (just 'view_audit_log' today) until a live test is confirmed.
+//
+// "One policy per permission_key" (MIGRATION_075's unique constraint) means enabling
+// this on a NEW policy silently replaces whatever policy currently gates the same
+// key — same "replace, don't diff" instinct as setRoles() above, not an error case.
+//
+// Correctness fix (2026-09-05): restructured into 4 explicit cases instead of the
+// previous `previousPolicyId !== policyId` condition, which incorrectly cancelled the
+// CURRENTLY ACTIVE policy's pending requests even when `enabled: false` was called
+// on some OTHER, already-inactive policy (previousPolicyId !== policyId is also true
+// in that case). Disabling a policy that isn't the active gate must be a true no-op.
+//
+// Also now requires the policy to be 'approved' before it can be enabled as a gate
+// (disabling stays allowed regardless of status) — enabling a gate is a promise that
+// acknowledging this policy is enough to unlock the permission, which only makes
+// sense once the policy has actually cleared review.
+//
+// Concurrency fix #2 (2026-09-05, second pass) — two more races closed:
+//
+//   (a) The approved-status check used to run via a plain pool.query() BEFORE the
+//   transaction even opened, then the transaction just went ahead and wrote — the
+//   policy could leave 'approved' (updateStatus()) in the gap between the check and
+//   the write, making the validation stale. Fixed by moving it to a `SELECT ... FOR
+//   UPDATE` on the policy row, taken as the FIRST thing inside the SAME transaction
+//   that (conditionally) writes the gate — the check and the write are now
+//   atomically consistent, and the lock also blocks a concurrent updateStatus() call
+//   on this exact policy until this transaction resolves.
+//
+//   (b) The existingGate lookup used to be a plain, unlocked read, and this whole
+//   function used to lock pending_permission_grants BEFORE policy_permission_gates.
+//   setForUser() has to lock the gate row before it can safely decide whether a key
+//   is gated (see its own comment) — with the old ordering here, setForUser() could
+//   still read gate -> policy P, and this function could replace/disable P for the
+//   same key, in between setForUser()'s read and its own pending-row insert; this
+//   function's cascade-cancel would run against whatever pending rows existed AT
+//   THAT MOMENT and simply never see the row setForUser() goes on to create a moment
+//   later — a gate change that misses a pending request built from an
+//   already-stale snapshot. Fixed by locking the gate slot BEFORE the pending-table
+//   cascade-cancel.
+//
+//   Concurrency fix #3 (2026-09-05, third pass): fix #2(b)'s lock was `SELECT ...
+//   FOR UPDATE` on policy_permission_gates — a ROW lock, which only works when a
+//   gate row already exists. The very first time a key goes from "no gate" to
+//   "gated", this function and setForUser() can both see zero rows to lock and both
+//   proceed as if the other hadn't happened — the exact bug this pilot exists to
+//   prevent, just at the "enable" moment instead of the "grant" moment. Fixed by
+//   replacing the row lock with utils/policyGateLock.ts's lockPolicyGateSlot() — a
+//   Postgres advisory lock keyed on (company_id, permission_key) that locks the
+//   logical slot whether or not a row exists yet (see setForUser()'s fix #3 comment
+//   for the full reasoning).
+//
+//   Lock order is now policies (only when enabling) -> (company, permission_key)
+//   advisory slot -> pending_permission_grants, matching
+//   setForUser()/acknowledgePendingGrant() (see their own comments), so none of the
+//   three can ever deadlock against each other: whichever of this function and
+//   setForUser() reaches the shared slot lock first now fully serializes the other
+//   out, so a pending request is never created against — nor silently outlives — a
+//   gate value a concurrent change already moved past, and a first-time enable can
+//   never race a first-time grant into both proceeding as if neither happened.
+export const setPermissionGate = asyncHandler(async (req: Request, res: Response) => {
+  const companyId = req.auth!.companyId;
+  const { id: policyId } = req.params;
+  const { permission_key, enabled } = req.body ?? {};
+
+  if (!PILOT_GATED_PERMISSION_KEYS.includes(permission_key)) {
+    throw new AppError(400, `Only ${PILOT_GATED_PERMISSION_KEYS.join(', ')} can be linked to a policy during this pilot`);
+  }
+  if (typeof enabled !== 'boolean') throw new AppError(400, 'enabled must be a boolean');
+
+  const client = await pool.connect();
+  let cancelledPending: { user_id: string; permission_key: string }[] = [];
+  let cancelReason: 'GATE_REPLACED' | 'GATE_DISABLED' | null = null;
+  try {
+    await client.query('BEGIN');
+
+    // Policy existence (always) + approved-status (only when enabling) — locked only
+    // in the enabling case, since that's the only case whose validation depends on a
+    // status that could otherwise go stale before the write below. Disabling was
+    // never gated by policy status, so a plain existence check is enough there and
+    // doesn't need to contend for a lock on a row nothing else needs to serialize
+    // against for this call.
+    let policyExists: boolean;
+    if (enabled) {
+      const policyLock = await client.query(`SELECT id, status FROM policies WHERE id = $1 AND company_id = $2 FOR UPDATE`, [policyId, companyId]);
+      policyExists = !!policyLock.rows[0];
+      if (policyExists && policyLock.rows[0].status !== 'approved') {
+        throw new AppError(409, 'Only an approved policy can be enabled as a permission gate', 'POLICY_NOT_APPROVED');
+      }
+    } else {
+      const policyCheck = await client.query(`SELECT id FROM policies WHERE id = $1 AND company_id = $2`, [policyId, companyId]);
+      policyExists = !!policyCheck.rows[0];
+    }
+    if (!policyExists) throw new AppError(404, 'Policy not found');
+
+    // Advisory-lock the (company, permission_key) slot NEXT, after the policy check
+    // above and BEFORE the pending-table cascade-cancel below — see the fix #2(b)/#3
+    // comments above for why this has to be a slot lock, not a row lock.
+    await lockPolicyGateSlot(client, companyId, permission_key);
+
+    // Plain read now — the advisory lock above already covers both the "row exists"
+    // and "no row yet" cases. Whatever currently gates this key (this same policy, a
+    // different one, or nothing) — needed to know whether a PREVIOUS policy's
+    // pending requests must be cancelled below.
+    const existingGate = await client.query(
+      `SELECT policy_id FROM policy_permission_gates WHERE company_id = $1 AND permission_key = $2`,
+      [companyId, permission_key]
+    );
+    const previousPolicyId: string | null = existingGate.rows[0]?.policy_id ?? null;
+
+    // Four explicit cases:
+    //   enabled=true,  previousPolicyId === policyId -> already the active gate, true no-op.
+    //   enabled=true,  previousPolicyId !== policyId -> replace; cancel the PREVIOUS policy's pending.
+    //   enabled=false, previousPolicyId === policyId -> real disable; cancel THIS policy's pending.
+    //   enabled=false, previousPolicyId !== policyId (incl. null) -> disabling something that was
+    //                                                                  never the active gate; true no-op.
+    const isReplace = enabled && previousPolicyId !== policyId;
+    const isDisableActive = !enabled && previousPolicyId === policyId;
+
+    if (isReplace || isDisableActive) {
+      const targetPolicyId = isReplace ? previousPolicyId : policyId;
+      const cancelled = await client.query(
+        `DELETE FROM pending_permission_grants WHERE company_id = $1 AND policy_id = $2 AND permission_key = $3
+         RETURNING user_id, permission_key`,
+        [companyId, targetPolicyId, permission_key]
+      );
+      cancelledPending = cancelled.rows;
+      cancelReason = isReplace ? 'GATE_REPLACED' : 'GATE_DISABLED';
+    }
+
+    if (isReplace) {
+      // Replace, don't layer — MIGRATION_075 only allows one policy per key anyway.
+      await client.query(`DELETE FROM policy_permission_gates WHERE company_id = $1 AND permission_key = $2`, [companyId, permission_key]);
+      await client.query(
+        `INSERT INTO policy_permission_gates (company_id, policy_id, permission_key, created_by) VALUES ($1, $2, $3, $4)`,
+        [companyId, policyId, permission_key, req.auth!.userId]
+      );
+    } else if (isDisableActive) {
+      await client.query(
+        `DELETE FROM policy_permission_gates WHERE company_id = $1 AND permission_key = $2 AND policy_id = $3`,
+        [companyId, permission_key, policyId]
+      );
+    }
+    // else: true no-op (already the active gate, or disabling a policy that never was
+    // one) — nothing written to policy_permission_gates, nothing cancelled above.
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({
+    companyId,
+    userId: req.auth!.userId,
+    action: enabled ? 'policy_permission_gate_enabled' : 'policy_permission_gate_disabled',
+    entityType: 'policies',
+    entityId: policyId as string,
+    req,
+    newValues: { permission_key, enabled },
+  });
+
+  if (cancelledPending.length > 0) {
+    await logAudit({
+      companyId,
+      userId: req.auth!.userId,
+      action: 'pending_permission_grants_auto_cancelled',
+      entityType: 'pending_permission_grants',
+      entityId: policyId as string,
+      req,
+      oldValues: { cancelled: cancelledPending, reason: cancelReason },
+      newValues: null,
+    });
+  }
+
+  res.status(200).json({ success: true, permission_key, enabled });
 });

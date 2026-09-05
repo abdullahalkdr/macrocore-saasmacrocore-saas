@@ -5,7 +5,7 @@ import { useLangStore } from '../store/langStore';
 import { useNavigate } from 'react-router-dom';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
-import { IconBell, IconApproval, IconTrash } from './Icon';
+import { IconBell, IconApproval, IconTrash, IconUnlock } from './Icon';
 
 interface NotificationItem {
   id: string;
@@ -33,6 +33,12 @@ interface NotificationItem {
 //      unread state (tinted row + a small leading dot) instead of a flat list.
 const TYPE_STYLE: Record<string, { icon: JSX.Element; color: string }> = {
   approval_pending: { icon: <IconApproval size={17} />, color: 'var(--amber-500)' },
+  // Policy Gate pilot (MIGRATION_074/075) — fired by setForUser() the moment an admin
+  // grants a gated permission that needs this employee's own acknowledgment first (see
+  // permissions.controller.ts). Links to the permanent "Policies & Acknowledgments"
+  // section on the profile page, not a one-shot deep link into a specific modal —
+  // Abdullah's explicit requirement that the bell is never the only way back in.
+  permission_gate_pending: { icon: <IconUnlock size={17} />, color: 'var(--blue-700)' },
 };
 const DEFAULT_TYPE_STYLE = { icon: <IconBell size={16} />, color: 'var(--stone-400)' };
 
