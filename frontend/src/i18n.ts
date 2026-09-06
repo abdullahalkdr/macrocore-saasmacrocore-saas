@@ -1477,6 +1477,11 @@ const en = {
     submittedForApproval: 'Submitted for approval — waiting on a second sign-off.',
     rejectedStatus: 'Rejected',
     approvedStatus: 'Approved',
+    // 2026-09-06 fix — shown to a non-owner approver (holds approve_purchase_orders
+    // but didn't create this PO) once it's approved: explains why "Mark as ordered"
+    // isn't offered to them here (only the requester or an admin/manager can confirm
+    // the order was actually placed with the supplier).
+    awaitingMakerConfirmation: "Approved — waiting on the requester to confirm the order was placed.",
     status: {
       label: 'Status',
       draft: 'Draft',
@@ -3769,6 +3774,7 @@ const ar: typeof en = {
     submittedForApproval: 'اترسل للاعتماد — بانتظار توقيع ثاني.',
     rejectedStatus: 'مرفوض',
     approvedStatus: 'معتمد',
+    awaitingMakerConfirmation: 'معتمد — بانتظار صاحب الطلب يأكد إنه أرسل الطلب فعليًا للمورد.',
     status: {
       label: 'الحالة',
       draft: 'مسودة',

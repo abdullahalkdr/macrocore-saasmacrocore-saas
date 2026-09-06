@@ -94,6 +94,62 @@ async function notifyMakerReturned(
   }
 }
 
+// 2026-09-06 fix -- before this, the ONLY outcome a maker was ever notified about was
+// "returned" (notifyMakerReturned above). A final approve/reject left them with no
+// signal at all -- they had to keep checking their own page. Mirrors that function's
+// shape. PURCHASE_ORDER/PAYROLL still require the maker to take a real follow-up
+// action after approval (see purchaseOrders.controller.ts's/payroll.controller.ts's
+// own "approval = permission, not execution" comments) -- their body says so
+// explicitly; EXPENSE and ITSM_TICKET already fully resolve on approval, so theirs is
+// purely informational.
+const NEEDS_FOLLOWUP_AFTER_APPROVAL: Record<string, { ar: string; en: string }> = {
+  PURCHASE_ORDER: {
+    ar: "اضغط 'تحويل لأمر شراء' لتأكيد إنك أرسلت الطلب فعليًا للمورد",
+    en: 'click "Mark as ordered" to confirm you actually placed the order with the supplier',
+  },
+  PAYROLL: { ar: "اضغط 'دفع' لإتمام صرف الراتب", en: 'click "Pay" to complete the payment' },
+};
+
+async function notifyMakerResolved(
+  companyId: string,
+  request: { id: string; module_type: string; reference_id: string; requester_id: string; request_number?: string | null },
+  action: 'approved' | 'rejected'
+): Promise<void> {
+  try {
+    const usersRes = await pool.query('SELECT id FROM users WHERE company_id = $1 AND employee_id = $2', [companyId, request.requester_id]);
+    const userIds = usersRes.rows.map((r) => r.id);
+    if (userIds.length === 0) return;
+
+    const label = request.module_type === 'ITSM_TICKET'
+      ? { ar: 'تذكرة الدعم الفني', en: 'the support ticket' }
+      : MODULE_LABEL[request.module_type];
+    const numberSuffix = request.request_number ? ` #${request.request_number}` : '';
+    const link = resolveMakerUrl(request.module_type);
+
+    let title: string;
+    let body: string;
+    if (action === 'approved') {
+      title = `تمت الموافقة على طلبك${numberSuffix} / Your request was approved${numberSuffix}`;
+      const followUp = NEEDS_FOLLOWUP_AFTER_APPROVAL[request.module_type];
+      if (label && followUp) {
+        body = `تمت الموافقة على ${label.ar} — ${followUp.ar} / Your ${label.en} was approved — ${followUp.en}`;
+      } else if (label) {
+        body = `تمت الموافقة على ${label.ar} / Your ${label.en} was approved`;
+      } else {
+        body = 'تمت الموافقة على طلبك / Your request was approved';
+      }
+    } else {
+      title = `تم رفض طلبك${numberSuffix} / Your request was rejected${numberSuffix}`;
+      body = label ? `تم رفض ${label.ar} / Your ${label.en} was rejected` : 'تم رفض طلبك / Your request was rejected';
+    }
+
+    await notifyUsers({ companyId, userIds, type: `approval_${action}`, title, body, link, approvalRequestId: request.id });
+  } catch {
+    // Best-effort — never let a notification failure mask the approve/reject decision
+    // that already committed above.
+  }
+}
+
 // Security fix, added 2026-08-27: createRequest() used to accept ANY module_type +
 // reference_id from ANY authenticated employee-linked user, with zero check that (a)
 // the record even exists in this company, (b) the caller has any real authority over
@@ -410,6 +466,11 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       if (prevStep) {
         notifyItsmStepPending(companyId, request.reference_id, request.requester_id, prevStep, request.id, request.request_number ?? null).catch(() => {});
       }
+    } else if (action === 'approved' || action === 'rejected') {
+      // 2026-09-06 fix — the chain's final decision (last step just approved, or a
+      // rejection at any step, which always ends it immediately per MIGRATION_056
+      // decision #3): tell the requester the outcome. See notifyMakerResolved's header.
+      notifyMakerResolved(companyId, request, action).catch(() => {});
     }
   } else {
     // Single-step modules — approve/reject resolve the request immediately,
@@ -456,6 +517,12 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       throw err;
     } finally {
       client.release();
+    }
+
+    // 2026-09-06 fix — single-step modules always resolve immediately (no further
+    // steps), so approve/reject here is always final. See notifyMakerResolved's header.
+    if (action === 'approved' || action === 'rejected') {
+      notifyMakerResolved(companyId, request, action).catch(() => {});
     }
   }
 

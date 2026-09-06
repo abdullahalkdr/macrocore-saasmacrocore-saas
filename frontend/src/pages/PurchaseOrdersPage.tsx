@@ -48,6 +48,13 @@ interface PurchaseOrder {
   // module_type, or null if never submitted (below-Gold company, or a draft that
   // hasn't hit "Send to Supplier" yet).
   approval_status?: 'pending' | 'approved' | 'rejected' | 'returned' | null;
+  // 2026-09-06 fix — same request_number the Approvals inbox already showed
+  // (APR-####-####); the maker had no way to see it here before.
+  approval_request_number?: string | null;
+  // 2026-09-06 fix — needed to tell the PO's own creator apart from any other
+  // approve_purchase_orders holder, so "Mark as ordered" after approval is offered
+  // only to whoever can actually confirm the order was placed with the supplier.
+  created_by?: string;
 }
 interface ItemRow {
   rawMaterialId: string;
@@ -192,13 +199,22 @@ export default function PurchaseOrdersPage() {
     }
   }
 
+  // 2026-09-06 fix — per-row id (not a single boolean) so clicking one row's button
+  // doesn't visually freeze every other row too; used to disable the button and show
+  // a loading state while the PATCH is in flight (previously gave zero feedback,
+  // which read as the system being stuck).
+  const [markingOrderedId, setMarkingOrderedId] = useState<string | null>(null);
+
   async function markOrdered(po: PurchaseOrder) {
     setError(null);
+    setMarkingOrderedId(po.id);
     try {
       await patch(`/purchase-orders/${po.id}`, { status: 'ordered' });
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.purchaseOrders.updateFailed);
+    } finally {
+      setMarkingOrderedId(null);
     }
   }
 
@@ -300,7 +316,7 @@ export default function PurchaseOrdersPage() {
                   <td style={{ fontWeight: 700 }}>{po.supplier_name || '—'}</td>
                   <td>
                     <span className={`badge ${po.status}`}>{statusLabel(po.status)}</span>
-                    {(po.approval_status === 'pending' || po.approval_status === 'rejected' || po.approval_status === 'returned') && (
+                    {po.approval_status && (
                       <div style={{ marginTop: 4 }}>
                         <button
                           type="button"
@@ -313,10 +329,20 @@ export default function PurchaseOrdersPage() {
                             <Tag color="amber">{t.purchaseOrders.pendingApproval}</Tag>
                           ) : po.approval_status === 'returned' ? (
                             <Tag color="amber">{t.approvals.statusReturned}</Tag>
+                          ) : po.approval_status === 'approved' ? (
+                            <Tag color="green">{t.purchaseOrders.approvedStatus}</Tag>
                           ) : (
                             <Tag color="red">{t.purchaseOrders.rejectedStatus}</Tag>
                           )}
                         </button>
+                        {/* 2026-09-06 fix — the maker previously had no way to see this
+                            request's own number at all; the Approvals inbox already
+                            showed it to the approver. */}
+                        {po.approval_request_number && (
+                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                            #{po.approval_request_number}
+                          </div>
+                        )}
                       </div>
                     )}
                   </td>
@@ -335,9 +361,27 @@ export default function PurchaseOrdersPage() {
                         <button className="icon-btn" title={t.purchaseOrders.editItem} onClick={() => openEdit(po)}>
                           <IconEdit />
                         </button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => markOrdered(po)}>
-                          {t.purchaseOrders.markOrdered}
-                        </button>
+                        {/* 2026-09-06 fix — an already-approved draft's "Mark as ordered"
+                            confirms a real-world fact (the order was actually placed
+                            with the supplier) that only its own creator, or an
+                            admin/manager, can honestly attest to. Any other
+                            approve_purchase_orders holder used to be able to click this
+                            on a coworker's approved PO too — scoped narrowly to just
+                            this one transition, everything else the permission unlocks
+                            (edit/submit/delete a draft) is untouched. Backend enforces
+                            the same check independently (purchaseOrders.controller.ts's
+                            update()) — this is UX, not the real gate. */}
+                        {po.approval_status !== 'approved' || isManager || po.created_by === user?.id ? (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => markOrdered(po)}
+                            disabled={markingOrderedId === po.id}
+                          >
+                            {markingOrderedId === po.id ? t.common.loading : t.purchaseOrders.markOrdered}
+                          </button>
+                        ) : (
+                          <span className="muted" style={{ fontSize: 12 }}>{t.purchaseOrders.awaitingMakerConfirmation}</span>
+                        )}
                         <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(po.id)}>
                           <IconTrash />
                         </button>

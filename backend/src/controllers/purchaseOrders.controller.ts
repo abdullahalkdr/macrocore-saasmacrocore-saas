@@ -67,11 +67,18 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   // PurchaseOrdersPage.tsx's "Pending approval" badge and disables its actions.
   const result = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
-            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
+            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at, po.created_by,
             COALESCE(SUM(poi.qty * poi.unit_price), 0)::float AS total,
             (SELECT ar.status FROM approval_requests ar
              WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
-             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status,
+            -- 2026-09-06 fix: PurchaseOrdersPage.tsx couldn't show the request number
+            -- (APR-####-####) it was already showing on the Approvals inbox side for the
+            -- exact same approval_requests row -- same correlated subquery pattern as
+            -- approval_status just above, just a different column.
+            (SELECT ar.request_number FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_request_number
      FROM purchase_orders po
      LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
      LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
@@ -90,10 +97,13 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
-            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
+            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at, po.created_by,
             (SELECT ar.status FROM approval_requests ar
              WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
-             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status,
+            (SELECT ar.request_number FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_request_number
      FROM purchase_orders po
      LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id
      LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
@@ -155,7 +165,7 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { supplier_id, order_date, expected_date, notes, items, status } = req.body ?? {};
 
-  const existing = await pool.query('SELECT status FROM purchase_orders WHERE id = $1 AND company_id = $2', [id, companyId]);
+  const existing = await pool.query('SELECT status, created_by FROM purchase_orders WHERE id = $1 AND company_id = $2', [id, companyId]);
   if (!existing.rows[0]) throw new AppError(404, 'Purchase order not found');
   const currentStatus = existing.rows[0].status;
 
@@ -196,6 +206,18 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       });
       res.status(200).json({ success: true, submitted_for_approval: true });
       return;
+    }
+
+    // 2026-09-06 fix: latest.status === 'approved' here means we're about to fall
+    // through and actually flip purchase_orders.status to 'ordered' below -- the real
+    // "I placed this order with the supplier" confirmation. Found live: any employee
+    // holding approve_purchase_orders (not just the PO's own creator) could click
+    // "Mark as ordered" on a COWORKER's already-approved draft and finalize it for
+    // them, even though only that coworker actually knows whether the order was really
+    // placed. Scoped narrowly to this one transition -- editing/submitting/deleting a
+    // draft, and everything else approve_purchase_orders unlocks, is untouched.
+    if (req.auth!.role !== 'admin' && req.auth!.role !== 'manager' && existing.rows[0].created_by !== req.auth!.userId) {
+      throw new AppError(403, 'Only the person who created this purchase order can confirm it was placed with the supplier.');
     }
   }
 
@@ -250,10 +272,13 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 
   const full = await pool.query(
     `SELECT po.id, po.supplier_id, s.name AS supplier_name, po.status, po.order_date, po.expected_date,
-            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at,
+            po.received_date, po.location_id, l.name AS location_name, po.notes, po.created_at, po.created_by,
             (SELECT ar.status FROM approval_requests ar
              WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
-             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_status,
+            (SELECT ar.request_number FROM approval_requests ar
+             WHERE ar.company_id = po.company_id AND ar.module_type = 'PURCHASE_ORDER' AND ar.reference_id = po.id
+             ORDER BY ar.created_at DESC LIMIT 1) AS approval_request_number
      FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id AND s.company_id = po.company_id LEFT JOIN locations l ON l.id = po.location_id AND l.company_id = po.company_id
      WHERE po.id = $1`,
     [id]
