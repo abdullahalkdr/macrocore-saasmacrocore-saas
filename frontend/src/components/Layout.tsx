@@ -42,6 +42,17 @@ interface NavItem {
   // it. Only ever WIDENS visibility on top of the role check below, never narrows it —
   // an item with no `permission` set behaves exactly as before this existed.
   permission?: string;
+  // Approvals-inbox fix — sibling of `permission` above for the rare case where MORE
+  // THAN ONE permission key should each independently unlock the item ("holds any of
+  // these"), instead of one fixed key. /approvals is the first user: any of the three
+  // MODULE_APPROVER_PERMISSION keys (manage_payroll/approve_purchase_orders/
+  // edit_expenses — financialApprovals.ts) makes someone a real approver for that one
+  // module, so each should surface the nav entry on its own. Deliberately NOT used for
+  // ITSM_TICKET's department-manager/job-role approvers -- those are resolved live per
+  // ticket with no static permission key to check here at all (see App.tsx's /approvals
+  // route comment); they reach the page via their notification link, not this nav item.
+  // Same "only ever WIDENS, never narrows" contract as `permission`.
+  permissions?: string[];
   // 2026-08-26 HR-visibility fix — narrows an HR-sensitive item beyond
   // managerOnly: 'department' requires at least department-scoped HR access
   // (a non-HR manager sees their own team; admin/HR-department members
@@ -218,11 +229,15 @@ export default function Layout() {
         // MIGRATION_055 — kept flat (not folded into an accordion group) and right next
         // to Dashboard on purpose: this is a daily action item for whoever holds it, not
         // reference/config content — same prominence leave-requests already gets via
-        // its own badge. managerOnly for now; individual non-manager permission holders
-        // (MODULE_APPROVER_PERMISSION in approvals.controller.ts) can still act via the
-        // API/direct URL, they just don't get a sidebar entry yet — a real but small gap,
-        // flagged rather than silently left.
-        { to: '/approvals', label: t.nav.approvals, icon: IconApproval, managerOnly: true, minPlan: 3 },
+        // its own badge. managerOnly by default; individual non-manager holders of any
+        // MODULE_APPROVER_PERMISSION key (approvals.controller.ts) now also get the
+        // sidebar entry via `permissions` below -- see that field's own comment. ITSM's
+        // dynamically-resolved department-manager/job-role approvers still don't get a
+        // permanent entry here (no static permission key exists for that), but the route
+        // itself (App.tsx) is open to anyone, so their notification link works.
+        // 2026-09-06 fix: the 'a real but small gap' flagged above is closed via the
+        // `permissions` any-of override -- see NavItem.permissions' own comment.
+        { to: '/approvals', label: t.nav.approvals, icon: IconApproval, managerOnly: true, minPlan: 3, permissions: ['manage_payroll', 'approve_purchase_orders', 'edit_expenses'] },
       ],
     },
     {
@@ -400,7 +415,10 @@ export default function Layout() {
         if (roleOk) return true;
         // Permission override (MIGRATION_054): only fires when roleOk is false, so this
         // can never hide an item the role check already shows — see NavItem.permission.
-        return !!i.permission && permissionKeys.includes(i.permission);
+        if (i.permission && permissionKeys.includes(i.permission)) return true;
+        // Any-of override (see NavItem.permissions) — same "only widens" contract, for
+        // items where more than one permission key each independently qualify.
+        return !!i.permissions && i.permissions.some((p) => permissionKeys.includes(p));
       }),
     }))
     .filter((group) => group.items.length > 0);

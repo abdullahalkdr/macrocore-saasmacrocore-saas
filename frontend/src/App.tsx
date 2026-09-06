@@ -221,14 +221,21 @@ export default function App() {
                 </RequireRole>
               }
             />
-            <Route
-              path="/approvals"
-              element={
-                <RequireRole roles={MANAGER_ROLES}>
-                  <ApprovalsInboxPage />
-                </RequireRole>
-              }
-            />
+            {/* Deliberately open to any authenticated user (like /expenses below), not
+                RequireRole-gated: eligibility here isn't a single role or permission key --
+                it's per-row and resolved live by the backend (approvals.controller.ts's
+                listPending/actionRequest) -- admin/manager see everything, a financial-
+                permission holder (manage_payroll/approve_purchase_orders/edit_expenses)
+                sees only their module type, and an ITSM_TICKET step's department-manager
+                or job-role approver is resolved dynamically per ticket with no static
+                permission key at all. Gating this route by role/permission would have
+                re-implemented that resolution on the frontend and drifted from it --
+                exactly the gap this fixes: a "New Approval Required" notification
+                linking to a page the notified approver couldn't open. The page itself renders
+                whatever GET /approvals/pending returns, which is already correctly scoped
+                per viewer -- see Layout.tsx's nav item for the (separate, narrower)
+                sidebar-visibility decision. */}
+            <Route path="/approvals" element={<ApprovalsInboxPage />} />
             <Route path="/expenses" element={<ExpensesPage />} />
             <Route path="/customers" element={<CustomersPage />} />
             <Route
