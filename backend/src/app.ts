@@ -54,20 +54,42 @@ import costCentersRoutes from './routes/costCenters.routes';
 import projectsRoutes from './routes/projects.routes';
 import periodClosingRoutes from './routes/periodClosing.routes';
 import approvalsRoutes from './routes/approvals.routes';
+import emailWebhooksRoutes from './routes/emailWebhooks.routes';
+import emailAdminRoutes from './routes/emailAdmin.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
 import { requirePlanLevel } from './middleware/requirePlan';
 import { requireInventoryEnabled } from './middleware/requireInventoryEnabled';
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      // Exact bytes the client sent, captured by express.json()'s verify hook
+      // below — emailWebhooks.controller.ts's Svix/HMAC signature check needs
+      // the untouched original body, since re-serializing the parsed JSON
+      // (different key order/whitespace) would produce a different signature
+      // and always fail verification.
+      rawBody?: Buffer;
+    }
+  }
+}
+
 export const app = express();
 
 app.use(cors({ origin: env.CORS_ORIGIN }));
 // Raised from Express's 100kb default — employee photos/certificates and leave-request
 // attachments are stored as base64 JSON fields (no object storage wired up yet).
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { (req as express.Request).rawBody = Buffer.from(buf); } }));
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// Public, unauthenticated by JWT — Resend calls this server-to-server. Never
+// gated by requireAuth/guarded; authenticity is verified inside the controller
+// via the Svix HMAC signature instead (see utils/email.ts's
+// verifyResendWebhookSignature and emailWebhooks.controller.ts).
+app.use('/api/webhooks/resend', emailWebhooksRoutes);
 
 // requireAuth here is redundant with the `router.use(requireAuth)` each route file
 // already does internally — kept anyway so requireActiveSubscription always has
@@ -198,6 +220,11 @@ app.use('/api/projects', ...silver('Projects'), projectsRoutes);
 // edits against it. Same Silver-tier gate as Cost Centers/Projects -- back-office
 // setup, not a core POS necessity.
 app.use('/api/period-closing', ...silver('Period closing'), periodClosingRoutes);
+
+// Admin-only test-send + delivery log/retry (emailAdmin.routes.ts itself gates
+// requireRole('admin') on every route, same pattern as apiKeys.routes.ts) —
+// account-utility area, not tied to any plan tier.
+app.use('/api/email-admin', ...guarded, emailAdminRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

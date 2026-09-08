@@ -11,8 +11,9 @@ import UsersRolesSection from './UsersRolesSection';
 import SetupSection from './SetupSection';
 import CustomizationsSection from './CustomizationsSection';
 import DeveloperSection from './DeveloperSection';
+import EmailDeliverySection from './EmailDeliverySection';
 
-type SectionId = 'index' | 'profile' | 'company' | 'billing' | 'users' | 'setup' | 'customizations' | 'developer';
+type SectionId = 'index' | 'profile' | 'company' | 'billing' | 'users' | 'setup' | 'customizations' | 'developer' | 'emailDelivery';
 
 interface SectionLink {
   id: SectionId;
@@ -99,7 +100,10 @@ export default function AccountSettingsPage() {
     : [];
 
   const developerGroup: SectionLink[] = isAdmin
-    ? [{ id: 'developer', title: t.account.sections.apiKeysTitle, desc: t.account.sections.apiKeysDesc, icon: '🔑' }]
+    ? [
+        { id: 'developer', title: t.account.sections.apiKeysTitle, desc: t.account.sections.apiKeysDesc, icon: '🔑' },
+        { id: 'emailDelivery', title: t.account.sections.emailDeliveryTitle, desc: t.account.sections.emailDeliveryDesc, icon: '📧' },
+      ]
     : [];
 
   function renderGroup(label: string, links: SectionLink[]) {
@@ -145,6 +149,7 @@ export default function AccountSettingsPage() {
         {active === 'setup' && <SetupSection />}
         {active === 'customizations' && <CustomizationsSection />}
         {active === 'developer' && <DeveloperSection />}
+        {active === 'emailDelivery' && <EmailDeliverySection />}
       </div>
     );
   }

@@ -17,7 +17,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
-import { sendEmail, verificationEmailHtml, passwordResetEmailHtml, passwordChangedEmailHtml, EmailLang } from '../utils/email';
+import { enqueueEmail, verificationEmailHtml, passwordResetEmailHtml, passwordChangedEmailHtml, minuteBucket, EmailLang } from '../utils/email';
 import { getHrScope, canAccessUsersList } from '../utils/hrScope';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
@@ -257,11 +257,16 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   if (!googleSub) {
     const emailVerifyToken = signEmailVerificationToken(user.id);
     const verifySubject = resolvedPreferredLanguage === 'en' ? 'Verify your email — macrocore' : 'فعّل بريدك الإلكتروني — macrocore';
-    void sendEmail({
+    // Stable per user — email uniqueness already makes re-registering the same
+    // address impossible, so this key never legitimately collides, but it's
+    // correct/durable regardless of how register() ends up being retried.
+    void enqueueEmail({
       to: normalizedEmail,
       subject: verifySubject,
       html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`, resolvedPreferredLanguage),
       category: 'verification',
+      lang: resolvedPreferredLanguage,
+      dedupKey: `verification:register:user:${user.id}`,
       companyId: company.id,
       relatedEntityType: 'users',
       relatedEntityId: user.id,
@@ -483,11 +488,21 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
   // already says to contact support@macrocore.io directly if this wasn't the
   // account owner.
   const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
-  void sendEmail({
+  // The business action itself (the UPDATE above) is not repeatable with the
+  // same current_password once it has succeeded once — a genuine HTTP retry of
+  // this exact request would fail comparePassword() against the NEW hash and
+  // never reach this point a second time. A random suffix is still added
+  // rather than a bare per-user key, since unlike verification/reset this is a
+  // real repeatable user action (they can change their password again a
+  // second later) and must never be deduped against a previous, unrelated
+  // change.
+  void enqueueEmail({
     to: row.email,
     subject: lang === 'en' ? 'Your password was changed — macrocore' : 'تم تغيير كلمة مرور حسابك — macrocore',
     html: passwordChangedEmailHtml(lang),
     category: 'security',
+    lang,
+    dedupKey: `security:password_changed:user:${userId}:${crypto.randomBytes(4).toString('hex')}`,
     companyId: req.auth!.companyId,
     relatedEntityType: 'users',
     relatedEntityId: userId,
@@ -535,11 +550,16 @@ export const resendVerification = asyncHandler(async (req: Request, res: Respons
 
   const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
   const emailVerifyToken = signEmailVerificationToken(userId);
-  await sendEmail({
+  // 1-minute bucket — absorbs a rapid double-click or a retried HTTP request as
+  // one job, without blocking a genuine second "resend" click a few minutes
+  // later. See utils/email.ts's minuteBucket().
+  await enqueueEmail({
     to: row.email,
     subject: lang === 'en' ? 'Verify your email — macrocore' : 'فعّل بريدك الإلكتروني — macrocore',
     html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`, lang),
     category: 'verification',
+    lang,
+    dedupKey: `verification:resend:user:${userId}:${minuteBucket()}`,
     companyId: row.company_id,
     relatedEntityType: 'users',
     relatedEntityId: userId,
@@ -569,11 +589,13 @@ export const forgotPassword = asyncHandler(async (req: Request, res: Response) =
       [tokenHash, row.id]
     );
     const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
-    await sendEmail({
+    await enqueueEmail({
       to: email.toLowerCase(),
       subject: lang === 'en' ? 'Reset your password — macrocore' : 'إعادة تعيين كلمة المرور — macrocore',
       html: passwordResetEmailHtml(`${env.FRONTEND_URL}/reset-password?token=${rawToken}`, lang),
       category: 'password_reset',
+      lang,
+      dedupKey: `password_reset:user:${row.id}:${minuteBucket()}`,
       companyId: row.company_id,
       relatedEntityType: 'users',
       relatedEntityId: row.id,

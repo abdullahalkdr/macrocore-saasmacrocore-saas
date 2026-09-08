@@ -7,7 +7,8 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
-    "db:migrate": "node scripts/migrate.js"
+    "db:migrate": "node scripts/migrate.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -30,7 +31,8 @@
     "nodemon": "^3.0.2",
     "socks": "^2.8.9",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=20.0.0"
