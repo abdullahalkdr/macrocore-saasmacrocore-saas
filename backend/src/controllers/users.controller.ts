@@ -17,7 +17,7 @@ const STATUSES = ['active', 'suspended', 'inactive'];
 // (role/status), this one is self-service and can't touch role/status.
 export const getMe = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query(
-    `SELECT id, email, full_name, first_name, last_name, job_title, phone, role, company_id, created_at
+    `SELECT id, email, full_name, first_name, last_name, job_title, phone, role, company_id, created_at, preferred_language
      FROM users WHERE id = $1`,
     [req.auth!.userId]
   );
@@ -36,10 +36,22 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
 
 export const updateMe = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.auth!.userId;
-  const { first_name, last_name, job_title, phone } = req.body ?? {};
+  const { first_name, last_name, job_title, phone, preferred_language } = req.body ?? {};
 
   const sets: string[] = [];
   const params: unknown[] = [];
+
+  // Email-language preference (brief §2/§4 — "users can change their preferred
+  // language from their profile"), separate from the frontend's own UI-only
+  // language toggle (useLangStore/localStorage) — this one is server-known
+  // because emails are sent outside any browser session.
+  if (preferred_language !== undefined) {
+    if (preferred_language !== 'ar' && preferred_language !== 'en') {
+      throw new AppError(400, "preferred_language must be 'ar' or 'en'");
+    }
+    params.push(preferred_language);
+    sets.push(`preferred_language = $${params.length}`);
+  }
 
   if (first_name !== undefined) {
     if (typeof first_name !== 'string') throw new AppError(400, 'first_name must be a string');
@@ -80,7 +92,7 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
 
   const result = await pool.query(
     `UPDATE users SET ${sets.join(', ')} WHERE id = $${params.length}
-     RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id`,
+     RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id, preferred_language`,
     params
   );
   const user = result.rows[0];

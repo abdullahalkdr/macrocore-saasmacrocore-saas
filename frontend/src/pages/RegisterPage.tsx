@@ -197,6 +197,7 @@ export default function RegisterPage() {
         country,
         invite_emails: invites.length > 0 ? invites : undefined,
         inventory_enabled: inventoryEnabled,
+        preferred_language: lang,
       });
       setAuth(res.token, res.user, res.company);
       if (res.invited_users?.length > 0) {

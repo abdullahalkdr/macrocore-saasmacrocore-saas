@@ -16,6 +16,7 @@ interface MeResponse {
     job_title: string | null;
     phone: string | null;
     role: string;
+    preferred_language: 'ar' | 'en';
   };
 }
 
@@ -39,6 +40,9 @@ export default function ProfileSection() {
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [emailLanguage, setEmailLanguage] = useState<'ar' | 'en'>('ar');
+  const [emailLanguageSaving, setEmailLanguageSaving] = useState(false);
+
   const [editingPhone, setEditingPhone] = useState(false);
   const [phoneSaving, setPhoneSaving] = useState(false);
   const [changingPw, setChangingPw] = useState(false);
@@ -55,6 +59,7 @@ export default function ProfileSection() {
         setPhone(r.user.phone || '');
         setJobTitle(r.user.job_title || '');
         setEmail(r.user.email);
+        setEmailLanguage(r.user.preferred_language || 'ar');
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : t.account.loadFailed))
       .finally(() => setLoading(false));
@@ -93,6 +98,20 @@ export default function ProfileSection() {
       setError(err instanceof ApiError ? err.message : t.account.saveFailed);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleChangeEmailLanguage(next: 'ar' | 'en') {
+    if (next === emailLanguage) return;
+    setError(null);
+    setEmailLanguageSaving(true);
+    try {
+      await patch('/users/me', { preferred_language: next });
+      setEmailLanguage(next);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.account.saveFailed);
+    } finally {
+      setEmailLanguageSaving(false);
     }
   }
 
@@ -211,6 +230,18 @@ export default function ProfileSection() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.phoneHint}</div>
+            </div>
+            <div className="field">
+              <label>{t.account.profile.emailLanguage}</label>
+              <select
+                value={emailLanguage}
+                disabled={emailLanguageSaving}
+                onChange={(e) => handleChangeEmailLanguage(e.target.value as 'ar' | 'en')}
+              >
+                <option value="ar">{t.account.profile.emailLanguageArabic}</option>
+                <option value="en">{t.account.profile.emailLanguageEnglish}</option>
+              </select>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.emailLanguageHint}</div>
             </div>
           </div>
 

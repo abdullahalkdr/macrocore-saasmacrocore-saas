@@ -17,7 +17,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
-import { sendEmail, verificationEmailHtml, passwordResetEmailHtml } from '../utils/email';
+import { sendEmail, verificationEmailHtml, passwordResetEmailHtml, passwordChangedEmailHtml, EmailLang } from '../utils/email';
 import { getHrScope, canAccessUsersList } from '../utils/hrScope';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
@@ -43,7 +43,15 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     country,
     invite_emails,
     inventory_enabled,
+    preferred_language,
   } = req.body ?? {};
+
+  // Email-language preference captured at signup — RegisterPage.tsx sends the
+  // frontend's current UI language (useLangStore) here so the very first email
+  // (verification) already matches what the person was reading when they signed
+  // up, instead of defaulting them to Arabic and making them discover the
+  // mismatch. Any other/invalid value falls back to the column's own default.
+  const resolvedPreferredLanguage: EmailLang = preferred_language === 'en' ? 'en' : 'ar';
 
   // Two ways to reach here: normal email+password signup, or the tail end of the Google
   // flow (see googleStart below) — POST /auth/google already verified the Google account
@@ -163,8 +171,8 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     // check) — a Google signup is verified immediately. A password signup starts
     // unverified; the confirmation email goes out right after this transaction commits.
     const userResult = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role, google_id, auth_provider, email_verified_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin', $9, $10, $11)
+      `INSERT INTO users (company_id, email, password_hash, full_name, first_name, last_name, job_title, phone, role, google_id, auth_provider, email_verified_at, preferred_language)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'admin', $9, $10, $11, $12)
        RETURNING id, email, full_name, first_name, last_name, job_title, phone, role, company_id`,
       [
         company.id,
@@ -178,6 +186,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         googleSub,
         googleSub ? 'google' : 'password',
         googleSub ? new Date() : null,
+        resolvedPreferredLanguage,
       ]
     );
     user = userResult.rows[0];
@@ -247,10 +256,15 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   // hits "resend verification" from the banner once logged in.
   if (!googleSub) {
     const emailVerifyToken = signEmailVerificationToken(user.id);
+    const verifySubject = resolvedPreferredLanguage === 'en' ? 'Verify your email — macrocore' : 'فعّل بريدك الإلكتروني — macrocore';
     void sendEmail({
       to: normalizedEmail,
-      subject: 'فعّل بريدك الإلكتروني — macrocore',
-      html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`),
+      subject: verifySubject,
+      html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`, resolvedPreferredLanguage),
+      category: 'verification',
+      companyId: company.id,
+      relatedEntityType: 'users',
+      relatedEntityId: user.id,
     });
   }
 
@@ -451,7 +465,7 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
     throw new AppError(400, 'Password must be at least 8 characters and include a letter and a number');
   }
 
-  const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+  const result = await pool.query('SELECT email, password_hash, preferred_language FROM users WHERE id = $1', [userId]);
   const row = result.rows[0];
   if (!row) throw new AppError(404, 'User not found');
 
@@ -462,6 +476,22 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
   await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [newHash, userId]);
 
   await logAudit({ companyId: req.auth!.companyId, userId, action: 'password_changed', entityType: 'users', entityId: userId, req });
+
+  // Security notification (brief §2) — best-effort, non-blocking: the password
+  // change itself already committed above, a failed/slow email must never surface
+  // as if the change failed. No Reply-To on this category — the body itself
+  // already says to contact support@macrocore.io directly if this wasn't the
+  // account owner.
+  const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
+  void sendEmail({
+    to: row.email,
+    subject: lang === 'en' ? 'Your password was changed — macrocore' : 'تم تغيير كلمة مرور حسابك — macrocore',
+    html: passwordChangedEmailHtml(lang),
+    category: 'security',
+    companyId: req.auth!.companyId,
+    relatedEntityType: 'users',
+    relatedEntityId: userId,
+  });
 
   res.status(200).json({ success: true, message: 'Password updated' });
 });
@@ -495,7 +525,7 @@ export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
 // Rate-limited by the same authLimiter as every other /auth/* route.
 export const resendVerification = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.auth!.userId;
-  const result = await pool.query('SELECT email, email_verified_at FROM users WHERE id = $1', [userId]);
+  const result = await pool.query('SELECT email, email_verified_at, company_id, preferred_language FROM users WHERE id = $1', [userId]);
   const row = result.rows[0];
   if (!row) throw new AppError(404, 'User not found');
   if (row.email_verified_at) {
@@ -503,11 +533,16 @@ export const resendVerification = asyncHandler(async (req: Request, res: Respons
     return;
   }
 
+  const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
   const emailVerifyToken = signEmailVerificationToken(userId);
   await sendEmail({
     to: row.email,
-    subject: 'فعّل بريدك الإلكتروني — macrocore',
-    html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`),
+    subject: lang === 'en' ? 'Verify your email — macrocore' : 'فعّل بريدك الإلكتروني — macrocore',
+    html: verificationEmailHtml(`${env.FRONTEND_URL}/verify-email?token=${emailVerifyToken}`, lang),
+    category: 'verification',
+    companyId: row.company_id,
+    relatedEntityType: 'users',
+    relatedEntityId: userId,
   });
 
   res.status(200).json({ success: true, message: 'Verification email sent' });
@@ -520,7 +555,7 @@ export const forgotPassword = asyncHandler(async (req: Request, res: Response) =
   const { email } = req.body ?? {};
   if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
 
-  const result = await pool.query('SELECT id, auth_provider FROM users WHERE email = $1', [email.toLowerCase()]);
+  const result = await pool.query('SELECT id, company_id, auth_provider, preferred_language FROM users WHERE email = $1', [email.toLowerCase()]);
   const row = result.rows[0];
 
   // Google-only accounts have no password to reset — still respond generically (same
@@ -533,10 +568,15 @@ export const forgotPassword = asyncHandler(async (req: Request, res: Response) =
       `UPDATE users SET password_reset_token_hash = $1, password_reset_expires_at = NOW() + INTERVAL '30 minutes' WHERE id = $2`,
       [tokenHash, row.id]
     );
+    const lang: EmailLang = row.preferred_language === 'en' ? 'en' : 'ar';
     await sendEmail({
       to: email.toLowerCase(),
-      subject: 'إعادة تعيين كلمة المرور — macrocore',
-      html: passwordResetEmailHtml(`${env.FRONTEND_URL}/reset-password?token=${rawToken}`),
+      subject: lang === 'en' ? 'Reset your password — macrocore' : 'إعادة تعيين كلمة المرور — macrocore',
+      html: passwordResetEmailHtml(`${env.FRONTEND_URL}/reset-password?token=${rawToken}`, lang),
+      category: 'password_reset',
+      companyId: row.company_id,
+      relatedEntityType: 'users',
+      relatedEntityId: row.id,
     });
   }
 

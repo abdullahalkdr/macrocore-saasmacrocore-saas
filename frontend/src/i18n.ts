@@ -1941,6 +1941,10 @@ const en = {
       // uses the new `role` key right below.
       jobTitle: 'Job Title',
       role: 'Role',
+      emailLanguage: 'Email language',
+      emailLanguageHint: 'The language macrocore sends your account emails in (verification, password reset, security notices, approvals).',
+      emailLanguageArabic: 'Arabic',
+      emailLanguageEnglish: 'English',
     },
     company: {
       logo: 'Logo',
@@ -4220,6 +4224,10 @@ const ar: typeof en = {
       // المفتاح الجديد role تحت مباشرة.
       jobTitle: 'المسمى الوظيفي',
       role: 'الدور',
+      emailLanguage: 'لغة الإيميلات',
+      emailLanguageHint: 'اللغة اللي يرسل فيها macrocore إيميلات حسابك (تفعيل البريد، إعادة تعيين كلمة المرور، الإشعارات الأمنية، الموافقات).',
+      emailLanguageArabic: 'العربية',
+      emailLanguageEnglish: 'الإنجليزية',
     },
     company: {
       logo: 'الشعار',
