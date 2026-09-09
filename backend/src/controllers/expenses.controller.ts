@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { assertDateNotClosed } from '../utils/periodGuard';
 import { isCompanyGoldPlus, fileApprovalRequest, getLatestApproval } from '../utils/financialApprovals';
+import { hasPermission } from '../utils/permissions';
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -130,95 +131,172 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   res.status(201).json({ success: true, expense });
 });
 
-// Admin/manager only (see routes) — lets a manager fix a miskeyed amount/category/date
-// after the fact instead of deleting and re-entering.
+// Phase 4 follow-up — returned Expense requester edit -- who may PATCH an expense, and when:
+//
+//   1. admin/manager (or any employee individually granted 'edit_expenses' via the
+//      Permissions page -- see requireRoleOrPermission's own doc comment) can fix a
+//      miskeyed amount/category/date any time EXCEPT while a request is genuinely
+//      'pending' with an approver (same tampering guard as always -- the record an
+//      approver is about to sign off on must not change out from under them).
+//
+//   2. The ORIGINAL REQUESTER of their OWN expense may now also edit it, but ONLY
+//      while its latest approval_requests row is 'returned' -- i.e. only to make the
+//      exact fix an approver's "Return for Changes" asked for. This is deliberately
+//      narrow: it is NOT a general Expense-edit permission for employees (the
+//      'edit_expenses' permission key above is untouched and still means what it
+//      always meant) -- it's ownership + one specific approval state, and it's
+//      enforced HERE, server-side, under a row lock. ExpensesPage.tsx's Edit icon
+//      is updated to match (shown to the owner too, only while returned), but that
+//      is a UX mirror, never the real gate -- every write still lands here.
+//
+//      Reused as-is: closed-period checks, location_id validation, amount>0
+//      validation, the 'expenses' table's normal editable-field set. Never touches
+//      company_id or created_by (never part of the editable field set at all) and
+//      never touches approval_requests -- so saving a correction here can NEVER
+//      reset the SLA, fire an approver email, or auto-resubmit; resubmitting stays
+//      the maker's own separate, explicit action via POST /approvals/:id/action.
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
+  const userId = req.auth!.userId;
+  const role = req.auth!.role;
   const { id } = req.params;
   const { category, amount, description, receipt_image, location_id, expense_date } = req.body ?? {};
 
-  // ::text cast so this comes back as a plain 'YYYY-MM-DD' string -- see
-  // periodGuard.ts's note on why that's safer than a driver-parsed Date.
-  const currentRow = await pool.query(
-    `SELECT (COALESCE(expense_date, created_at::date))::text AS effective_date, status FROM expenses WHERE id = $1 AND company_id = $2`,
-    [id, companyId]
-  );
-  if (!currentRow.rows[0]) throw new AppError(404, 'Expense not found');
-  // MIGRATION_058 — an expense awaiting approval is locked against tampering: the
-  // amount/category/etc an approver is about to sign off on must not change out
-  // from under them mid-review. Unblocks once the approval resolves either way
-  // (approved stays editable same as always; rejected can still be corrected and
-  // is NOT auto-resubmitted here — the submitter re-creates it if needed).
-  //
-  // MIGRATION_061 — checks the LIVE approval_requests status, not the local
-  // expenses.status column: a 'returned' request deliberately leaves
-  // expenses.status at 'pending_approval' (see actionRequest()'s own comment), so
-  // gating on that column alone would keep locking the maker out of the very edit
-  // "Return for Changes" exists to let them make. Only a genuinely 'pending'
-  // request (still with the approver, no decision yet) blocks editing.
-  const latestApproval = await getLatestApproval(companyId, 'EXPENSE', id as string);
-  if (latestApproval?.status === 'pending') {
-    throw new AppError(400, 'This expense is awaiting approval and cannot be edited until a decision is made.');
-  }
-  // Block editing a record that currently sits in a closed period at all, not
-  // just landing a change inside one -- otherwise a closed August row could
-  // still be "fixed" (amount, category...) freely by anyone who leaves the
-  // date untouched.
-  await assertDateNotClosed(companyId, currentRow.rows[0].effective_date);
-  // And separately block moving an open-period expense INTO a closed one via
-  // a new expense_date.
-  if (expense_date !== undefined && expense_date) {
-    await assertDateNotClosed(companyId, expense_date);
-  }
+  const client = await pool.connect();
+  let expense;
+  let oldValues: Record<string, unknown> | null = null;
+  let newValues: Record<string, unknown> | null = null;
+  try {
+    await client.query('BEGIN');
 
-  const sets: string[] = [];
-  const values: unknown[] = [];
-  let i = 1;
+    // Lock the expense row itself (FOR UPDATE) -- concurrency guard: a second
+    // edit, a delete, or an approval decision landing on this same row mid-request
+    // now has to wait for this transaction to finish, not interleave with it.
+    //
+    // ::text cast so effective_date comes back as a plain 'YYYY-MM-DD' string --
+    // see periodGuard.ts's note on why that's safer than a driver-parsed Date.
+    const currentRow = await client.query(
+      `SELECT id, created_by, category, amount, description, location_id,
+              (COALESCE(expense_date, created_at::date))::text AS effective_date, status
+       FROM expenses WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [id, companyId]
+    );
+    if (!currentRow.rows[0]) throw new AppError(404, 'Expense not found');
+    const row = currentRow.rows[0];
 
-  if (category !== undefined) {
-    sets.push(`category = $${i++}`);
-    values.push(category);
-  }
-  if (amount !== undefined) {
-    if (typeof amount !== 'number' || amount <= 0) throw new AppError(400, 'amount must be a positive number');
-    sets.push(`amount = $${i++}`);
-    values.push(amount);
-  }
-  if (description !== undefined) {
-    sets.push(`description = $${i++}`);
-    values.push(description);
-  }
-  if (receipt_image !== undefined) {
-    sets.push(`receipt_image = $${i++}`);
-    values.push(receipt_image);
-  }
-  if (location_id !== undefined) {
-    if (location_id !== null) {
-      const loc = await pool.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
-      if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
+    // Lock the latest approval_requests row too, in the SAME transaction -- this is
+    // what makes "the request must still be returned" race-safe: a concurrent
+    // resubmit/approve/reject can't land between our read of its status and our
+    // write to the expense, because it's blocked on this lock until we commit (at
+    // which point our own re-check below would fail it correctly anyway).
+    const approvalRes = await client.query(
+      `SELECT id, status FROM approval_requests
+       WHERE company_id = $1 AND module_type = 'EXPENSE' AND reference_id = $2
+       ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [companyId, id]
+    );
+    const latestApproval = approvalRes.rows[0] as { id: string; status: string } | undefined;
+
+    const isPrivileged = ['admin', 'manager'].includes(role) || (await hasPermission(userId, 'edit_expenses'));
+    const isOwnerReturnedEdit = !isPrivileged && row.created_by === userId && latestApproval?.status === 'returned';
+
+    if (!isPrivileged && !isOwnerReturnedEdit) {
+      throw new AppError(403, 'Insufficient permissions');
     }
-    sets.push(`location_id = $${i++}`);
-    values.push(location_id);
+    if (isPrivileged && latestApproval?.status === 'pending') {
+      throw new AppError(400, 'This expense is awaiting approval and cannot be edited until a decision is made.');
+    }
+    // isOwnerReturnedEdit already requires latestApproval.status === 'returned'
+    // exactly (never 'pending'), so it needs no separate check here.
+
+    // Block editing a record that currently sits in a closed period at all, not
+    // just landing a change inside one -- otherwise a closed August row could
+    // still be "fixed" (amount, category...) freely by anyone who leaves the
+    // date untouched.
+    await assertDateNotClosed(companyId, row.effective_date);
+    // And separately block moving an open-period expense INTO a closed one via
+    // a new expense_date.
+    if (expense_date !== undefined && expense_date) {
+      await assertDateNotClosed(companyId, expense_date);
+    }
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    let i = 1;
+    // Safe (non-binary) fields only -- mirrors logAudit()'s own "callers are
+    // responsible for selecting only safe columns" contract. receipt_image is
+    // updated below same as always, just never diffed into the audit log.
+    const newSnapshot: Record<string, unknown> = {};
+
+    if (category !== undefined) {
+      sets.push(`category = $${i++}`);
+      values.push(category);
+      newSnapshot.category = category;
+    }
+    if (amount !== undefined) {
+      if (typeof amount !== 'number' || amount <= 0) throw new AppError(400, 'amount must be a positive number');
+      sets.push(`amount = $${i++}`);
+      values.push(amount);
+      newSnapshot.amount = amount;
+    }
+    if (description !== undefined) {
+      sets.push(`description = $${i++}`);
+      values.push(description);
+      newSnapshot.description = description;
+    }
+    if (receipt_image !== undefined) {
+      sets.push(`receipt_image = $${i++}`);
+      values.push(receipt_image);
+    }
+    if (location_id !== undefined) {
+      if (location_id !== null) {
+        const loc = await client.query('SELECT id FROM locations WHERE id = $1 AND company_id = $2', [location_id, companyId]);
+        if (loc.rows.length === 0) throw new AppError(400, 'location_id not found');
+      }
+      sets.push(`location_id = $${i++}`);
+      values.push(location_id);
+      newSnapshot.location_id = location_id;
+    }
+    if (expense_date !== undefined) {
+      sets.push(`expense_date = $${i++}`);
+      values.push(expense_date);
+      newSnapshot.expense_date = expense_date;
+    }
+
+    if (sets.length === 0) throw new AppError(400, 'No updatable fields provided');
+
+    values.push(id, companyId);
+
+    const result = await client.query(
+      `UPDATE expenses SET ${sets.join(', ')}
+       WHERE id = $${i++} AND company_id = $${i++}
+       RETURNING id, category, amount, description, location_id, expense_date, created_at, status`,
+      values
+    );
+    expense = result.rows[0];
+    if (!expense) throw new AppError(404, 'Expense not found');
+
+    oldValues = Object.fromEntries(Object.keys(newSnapshot).map((k) => [k, row[k]]));
+    newValues = newSnapshot;
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-  if (expense_date !== undefined) {
-    sets.push(`expense_date = $${i++}`);
-    values.push(expense_date);
-  }
 
-  if (sets.length === 0) throw new AppError(400, 'No updatable fields provided');
-
-  values.push(id, companyId);
-
-  const result = await pool.query(
-    `UPDATE expenses SET ${sets.join(', ')}
-     WHERE id = $${i++} AND company_id = $${i++}
-     RETURNING id, category, amount, description, location_id, expense_date, created_at, status`,
-    values
-  );
-  const expense = result.rows[0];
-  if (!expense) throw new AppError(404, 'Expense not found');
-
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'expense_updated', entityType: 'expenses', entityId: id as string, req });
+  await logAudit({
+    companyId,
+    userId,
+    action: 'expense_updated',
+    entityType: 'expenses',
+    entityId: id as string,
+    req,
+    oldValues,
+    newValues,
+  });
 
   res.status(200).json({ success: true, expense });
 });

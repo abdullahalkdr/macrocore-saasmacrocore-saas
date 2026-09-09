@@ -21,6 +21,7 @@ interface Expense {
   location_name: string | null;
   expense_date: string | null;
   created_at: string;
+  created_by: string;
   created_by_name: string | null;
   // MIGRATION_058 — 'approved' for everyone below Gold tier (grandfathered/instant,
   // see financialApprovals.ts) and for every pre-existing row. Only a Gold+ company's
@@ -302,7 +303,10 @@ export default function ExpensesPage() {
     else groups.push({ key, items: [x] });
   }
 
-  const colCount = isManager ? 7 : 6;
+  // Phase 4 follow-up — returned Expense requester edit — the actions column now exists for every viewer (a plain
+  // employee can get an Edit icon too, for their own 'returned' expense), so its
+  // count is no longer conditional on isManager.
+  const colCount = 7;
   // MIGRATION_061 — prefers the LIVE approval_status over the local status column:
   // a 'returned' expense keeps status === 'pending_approval' (see
   // expenses.controller.ts's comment on why) but must NOT stay locked — the whole
@@ -312,6 +316,16 @@ export default function ExpensesPage() {
   function isAwaitingDecision(x: Expense): boolean {
     if (x.approval_status) return x.approval_status === 'pending';
     return x.status === 'pending_approval';
+  }
+
+  // Phase 4 follow-up — returned Expense requester edit — mirrors expenses.controller.ts's update() authorization: the
+  // original requester may edit their OWN expense while it's sitting 'returned'
+  // (and only then). This is a UX convenience, not the real gate — the backend
+  // enforces the same ownership + status check independently under a row lock, so
+  // this being wrong in either direction (shown too early/late) never grants or
+  // blocks an edit by itself.
+  function canOwnerEditReturned(x: Expense): boolean {
+    return !isManager && x.approval_status === 'returned' && !!user && x.created_by === user.id;
   }
 
   // MIGRATION_058 — the expense currently open in the edit modal is locked (Save
@@ -370,7 +384,7 @@ export default function ExpensesPage() {
                 <th>{t.expenses.description}</th>
                 <th className="num">{t.expenses.amount}</th>
                 <th>{t.expenses.receiptImage}</th>
-                {isManager && <th></th>}
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -421,27 +435,36 @@ export default function ExpensesPage() {
                           '—'
                         )}
                       </td>
-                      {isManager && (
-                        <td>
-                          {/* MIGRATION_058 — locked out entirely while awaiting approval
-                              (prevent tampering with what an approver is about to
-                              review), not just visually disabled.
-                              MIGRATION_061 — unlocked again once 'returned': that's
-                              exactly when the maker needs Edit back. */}
-                          {isAwaitingDecision(x) ? (
-                            <span className="muted" style={{ fontSize: 12 }}>{t.expenses.pendingApprovalNote}</span>
-                          ) : (
-                            <div style={{ display: 'flex', gap: 4 }}>
-                              <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
-                                <IconEdit />
-                              </button>
-                              <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(x.id)}>
-                                <IconTrash />
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      )}
+                      <td>
+                        {/* MIGRATION_058 — locked out entirely while awaiting approval
+                            (prevent tampering with what an approver is about to
+                            review), not just visually disabled.
+                            MIGRATION_061 — unlocked again once 'returned': that's
+                            exactly when the maker needs Edit back.
+                            Phase 4 follow-up — returned Expense requester edit — a plain employee now gets an Edit-only
+                            icon for their OWN 'returned' expense (no delete — that
+                            stays admin/manager only, unchanged). The real gate is
+                            still the backend (expenses.controller.ts's update()) —
+                            this only decides what's shown. */}
+                        {isAwaitingDecision(x) ? (
+                          <span className="muted" style={{ fontSize: 12 }}>{t.expenses.pendingApprovalNote}</span>
+                        ) : isManager ? (
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
+                              <IconEdit />
+                            </button>
+                            <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(x.id)}>
+                              <IconTrash />
+                            </button>
+                          </div>
+                        ) : canOwnerEditReturned(x) ? (
+                          <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
+                            <IconEdit />
+                          </button>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </Fragment>
