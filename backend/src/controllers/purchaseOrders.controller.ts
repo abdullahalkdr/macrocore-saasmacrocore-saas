@@ -195,7 +195,12 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
       throw new AppError(400, 'This purchase order is already awaiting approval.');
     }
     if (latest?.status !== 'approved') {
-      await fileApprovalRequest(companyId, 'PURCHASE_ORDER', id as string, req.auth!.userId);
+      // MIGRATION_078 -- no surrounding transaction here (the INSERT inside
+      // fileApprovalRequest() already committed via the shared pool by the
+      // time it returns), so notifying immediately is safe -- nothing to
+      // roll back.
+      const filed = await fileApprovalRequest(companyId, 'PURCHASE_ORDER', id as string, req.auth!.userId);
+      filed.notify();
       await logAudit({
         companyId,
         userId: req.auth!.userId,

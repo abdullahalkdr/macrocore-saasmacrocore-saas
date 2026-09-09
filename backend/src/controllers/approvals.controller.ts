@@ -6,9 +6,20 @@ import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getHrScope } from '../utils/hrScope';
 import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending, getTicketRequestTypeId } from '../utils/itsmApprovals';
-import { MODULE_APPROVER_PERMISSION, MODULE_LABEL, fileApprovalRequest, getLatestApproval, hasOtherEligibleApprover, buildAmountSnippet, notifyEligibleApprovers } from '../utils/financialApprovals';
+import {
+  MODULE_APPROVER_PERMISSION,
+  MODULE_LABEL,
+  fileApprovalRequest,
+  getLatestApproval,
+  hasOtherEligibleApprover,
+  buildAmountSnippet,
+  notifyEligibleApprovers,
+  computeSlaDeadline,
+} from '../utils/financialApprovals';
 import { notifyUsers } from '../utils/notifications';
 import { validateAttachments } from '../utils/attachments';
+import { env } from '../config/env';
+import { enqueueEmail, approvalResolvedEmailHtml, approvalReturnedEmailHtml } from '../utils/email';
 
 // MIGRATION_055 (single-step engine) + MIGRATION_056 (multi-step upgrade) + MIGRATION_058
 // (financial modules wired in) — Core Enterprise Approval Workflow Engine (Maker-Checker).
@@ -69,13 +80,16 @@ function resolveMakerUrl(moduleType: string): string {
 // actionRequest() already committed the real state change before calling this.
 async function notifyMakerReturned(
   companyId: string,
-  request: { id: string; module_type: string; reference_id: string; requester_id: string; request_number?: string | null },
+  request: { id: string; module_type: string; reference_id: string; requester_id: string; request_number?: string | null; updated_at?: string },
   comments: string
 ): Promise<void> {
   try {
-    const usersRes = await pool.query('SELECT id FROM users WHERE company_id = $1 AND employee_id = $2', [companyId, request.requester_id]);
+    const usersRes = await pool.query(
+      `SELECT id, email, COALESCE(preferred_language, 'ar') AS preferred_language FROM users WHERE company_id = $1 AND employee_id = $2`,
+      [companyId, request.requester_id]
+    );
+    if (usersRes.rows.length === 0) return;
     const userIds = usersRes.rows.map((r) => r.id);
-    if (userIds.length === 0) return;
 
     const label = request.module_type === 'ITSM_TICKET'
       ? { ar: 'تذكرة الدعم الفني', en: 'the support ticket' }
@@ -88,9 +102,38 @@ async function notifyMakerReturned(
     const link = resolveMakerUrl(request.module_type);
 
     await notifyUsers({ companyId, userIds, type: 'approval_returned', title, body, link, approvalRequestId: request.id });
-  } catch {
+
+    // Email -- financial modules only, Phase 4 (Chat 2) scope.
+    const financialLabel = MODULE_LABEL[request.module_type];
+    if (!financialLabel) return;
+    const emailLink = `${env.FRONTEND_URL}${link}`;
+    for (const u of usersRes.rows) {
+      const html = approvalReturnedEmailHtml(u.preferred_language, financialLabel, request.request_number ?? null, comments, emailLink);
+      const subject =
+        u.preferred_language === 'en' ? `Changes requested — ${financialLabel.en}${numberSuffix}` : `مطلوب تعديل — ${financialLabel.ar}${numberSuffix}`;
+      await enqueueEmail({
+        to: u.email,
+        subject,
+        html,
+        category: 'approval',
+        lang: u.preferred_language,
+        // request.updated_at is the row's state BEFORE this action's own UPDATE
+        // (fetched at the top of actionRequest()) -- a request can be returned
+        // more than once across its lifecycle (return -> resubmit -> return
+        // again), so a bare request.id key would wrongly dedupe the second
+        // return away. Each return is preceded by a resubmit that bumps
+        // updated_at, so this distinguishes cycles the same way the
+        // action-required email's sla_deadline_at cycle marker does.
+        dedupKey: `approval_returned:${request.id}:${request.updated_at ?? 'v1'}`,
+        companyId,
+        relatedEntityType: 'approval_requests',
+        relatedEntityId: request.id,
+      });
+    }
+  } catch (err) {
     // Best-effort — never let a notification failure mask the "returned" decision
     // that already committed above.
+    console.error('[approvals] notifyMakerReturned failed', { requestId: request.id }, err);
   }
 }
 
@@ -113,12 +156,16 @@ const NEEDS_FOLLOWUP_AFTER_APPROVAL: Record<string, { ar: string; en: string }> 
 async function notifyMakerResolved(
   companyId: string,
   request: { id: string; module_type: string; reference_id: string; requester_id: string; request_number?: string | null },
-  action: 'approved' | 'rejected'
+  action: 'approved' | 'rejected',
+  safeReason?: string | null
 ): Promise<void> {
   try {
-    const usersRes = await pool.query('SELECT id FROM users WHERE company_id = $1 AND employee_id = $2', [companyId, request.requester_id]);
+    const usersRes = await pool.query(
+      `SELECT id, email, COALESCE(preferred_language, 'ar') AS preferred_language FROM users WHERE company_id = $1 AND employee_id = $2`,
+      [companyId, request.requester_id]
+    );
+    if (usersRes.rows.length === 0) return;
     const userIds = usersRes.rows.map((r) => r.id);
-    if (userIds.length === 0) return;
 
     const label = request.module_type === 'ITSM_TICKET'
       ? { ar: 'تذكرة الدعم الفني', en: 'the support ticket' }
@@ -144,9 +191,39 @@ async function notifyMakerResolved(
     }
 
     await notifyUsers({ companyId, userIds, type: `approval_${action}`, title, body, link, approvalRequestId: request.id });
-  } catch {
+
+    // Email -- financial modules only (label exists in MODULE_LABEL; the
+    // ITSM_TICKET fallback label above is truthy too, so gate explicitly).
+    // Phase 4 (Chat 2) scope: ITSM_TICKET emails are a later, separate chat.
+    const financialLabel = MODULE_LABEL[request.module_type];
+    if (!financialLabel) return;
+    const emailLink = `${env.FRONTEND_URL}${link}`;
+    for (const u of usersRes.rows) {
+      const html = approvalResolvedEmailHtml(u.preferred_language, action, financialLabel, request.request_number ?? null, emailLink, safeReason ?? null);
+      const subject =
+        u.preferred_language === 'en'
+          ? action === 'approved'
+            ? `Approved — ${financialLabel.en}${numberSuffix}`
+            : `Rejected — ${financialLabel.en}${numberSuffix}`
+          : action === 'approved'
+            ? `تمت الموافقة — ${financialLabel.ar}${numberSuffix}`
+            : `تم الرفض — ${financialLabel.ar}${numberSuffix}`;
+      await enqueueEmail({
+        to: u.email,
+        subject,
+        html,
+        category: 'approval',
+        lang: u.preferred_language,
+        dedupKey: `approval_${action}:${request.id}`,
+        companyId,
+        relatedEntityType: 'approval_requests',
+        relatedEntityId: request.id,
+      });
+    }
+  } catch (err) {
     // Best-effort — never let a notification failure mask the approve/reject decision
     // that already committed above.
+    console.error('[approvals] notifyMakerResolved failed', { requestId: request.id, action }, err);
   }
 }
 
@@ -339,36 +416,85 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   // its own early branch since almost nothing below (eligibility resolution,
   // ITSM-vs-single-step branching) applies to it.
   if (action === 'resubmitted') {
-    if (request.status !== 'returned') {
-      throw new AppError(400, `This request isn't waiting on you to resubmit it (status: ${request.status}).`);
-    }
-    if (myId !== request.requester_id) {
-      throw new AppError(403, 'Only the person who filed this request can resubmit it.');
+    // BUGFIX (round 2, point 3) -- resubmission is now a single atomic
+    // transaction: the row is locked (FOR UPDATE) and its status/requester are
+    // re-validated UNDER that lock, right before the log insert + status/step
+    // change + SLA reset all happen together. Before this fix, the status
+    // check above ran against an unlocked read, then three separate
+    // pool.query() calls followed with no isolation between them -- a
+    // concurrent action on the same row (another resubmit click, or an
+    // approver's decision landing between the check and the writes) could
+    // interleave with this one and leave the row's status/current_step/SLA
+    // fields disagreeing with each other, or fire two conflicting sets of
+    // notifications. Notifications now fire ONLY after COMMIT actually
+    // succeeds -- same post-commit-only rule as fileApprovalRequest()'s own
+    // notify() closure in financialApprovals.ts, for the same reason (a
+    // rollback must never leave an email/notification for a change that
+    // didn't happen).
+    const client = await pool.connect();
+    let lockedRequest: any;
+    let newSlaDeadlineAt: Date | null = null;
+    let requesterName = '';
+    try {
+      await client.query('BEGIN');
+      const lockedRes = await client.query(`SELECT * FROM approval_requests WHERE id = $1 AND company_id = $2 FOR UPDATE`, [id, companyId]);
+      lockedRequest = lockedRes.rows[0];
+      if (!lockedRequest) throw new AppError(404, 'Approval request not found');
+      if (lockedRequest.status !== 'returned') {
+        throw new AppError(400, `This request isn't waiting on you to resubmit it (status: ${lockedRequest.status}).`);
+      }
+      if (myId !== lockedRequest.requester_id) {
+        throw new AppError(403, 'Only the person who filed this request can resubmit it.');
+      }
+
+      await client.query(
+        `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
+         VALUES ($1, 1, $2, 'resubmitted', $3, $4::jsonb)`,
+        [id, myId, comments || null, attachmentsJson]
+      );
+      // Resumes at step 1 exactly -- MIGRATION_061 decision #3: never a full restart
+      // of an already-approved chain, always right back to the step that asked for
+      // changes (a "returned" request's current_step is always 0, meaning it was
+      // step 1 -- or the single-step modules' only step -- that returned it; see
+      // that migration's decision #2 for why current_step can't be anything else here).
+      await client.query(`UPDATE approval_requests SET current_step = 1, status = 'pending', updated_at = now() WHERE id = $1`, [id]);
+
+      if (lockedRequest.module_type !== 'ITSM_TICKET') {
+        // MIGRATION_078 -- resubmitting starts a completely fresh SLA cycle:
+        // new 24h deadline, and the previous cycle's reminder/breach markers
+        // cleared so the new cycle can send its own. financialApprovals.ts's
+        // MODULE_LABEL[lockedRequest.module_type] is truthy here (this branch
+        // is single-step financial modules only) so every request reaching
+        // this point always had a deadline stamped at creation. Bundled into
+        // the SAME transaction as the log insert + status/step change above --
+        // point 3's "SLA reset all together" requirement.
+        newSlaDeadlineAt = computeSlaDeadline();
+        await client.query(`UPDATE approval_requests SET sla_deadline_at = $1, sla_reminder_sent_at = NULL, sla_breached_at = NULL WHERE id = $2`, [
+          newSlaDeadlineAt,
+          id,
+        ]);
+        const requesterRes = await client.query('SELECT name FROM employees WHERE id = $1', [myId]);
+        requesterName = requesterRes.rows[0]?.name || '';
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
 
-    await pool.query(
-      `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
-       VALUES ($1, 1, $2, 'resubmitted', $3, $4::jsonb)`,
-      [id, myId, comments || null, attachmentsJson]
-    );
-    // Resumes at step 1 exactly -- MIGRATION_061 decision #3: never a full restart
-    // of an already-approved chain, always right back to the step that asked for
-    // changes (a "returned" request's current_step is always 0, meaning it was
-    // step 1 -- or the single-step modules' only step -- that returned it; see
-    // that migration's decision #2 for why current_step can't be anything else here).
-    await pool.query(`UPDATE approval_requests SET current_step = 1, status = 'pending', updated_at = now() WHERE id = $1`, [id]);
-
-    if (request.module_type === 'ITSM_TICKET') {
-      const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, request.reference_id));
+    // Post-commit only -- see the header comment above.
+    if (lockedRequest.module_type === 'ITSM_TICKET') {
+      const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, lockedRequest.reference_id));
       const step1 = steps.find((s) => s.step_number === 1);
       if (step1) {
-        notifyItsmStepPending(companyId, request.reference_id, request.requester_id, step1, request.id, request.request_number ?? null).catch(() => {});
+        notifyItsmStepPending(companyId, lockedRequest.reference_id, lockedRequest.requester_id, step1, lockedRequest.id, lockedRequest.request_number ?? null).catch(() => {});
       }
     } else {
-      const requesterRes = await pool.query('SELECT name FROM employees WHERE id = $1', [myId]);
-      const requesterName = requesterRes.rows[0]?.name || '';
-      const amountSnippet = await buildAmountSnippet(request.module_type, request.reference_id);
-      notifyEligibleApprovers(companyId, request.module_type, request.id, request.request_number ?? null, requesterName, amountSnippet, req.auth!.userId).catch(() => {});
+      const amountSnippet = await buildAmountSnippet(lockedRequest.module_type, lockedRequest.reference_id);
+      notifyEligibleApprovers(companyId, lockedRequest.module_type, lockedRequest.id, lockedRequest.request_number ?? null, requesterName, amountSnippet, req.auth!.userId, newSlaDeadlineAt, myId).catch(() => {});
     }
 
     await logAudit({
@@ -406,6 +532,14 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   }
 
   const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
+
+  // BUGFIX (round 2, point 3) -- the shared "returned" notification call below
+  // needs the row's state as of the actual (locked, revalidated) UPDATE, not
+  // the pre-lock snapshot read at the top of this handler -- see the financial
+  // branch below, which reassigns this to its own lockedRequest post-commit.
+  // The ITSM_TICKET branch is untouched (out of this pass's scope) and keeps
+  // using the original `request` throughout, so this stays unchanged for it.
+  let noteRequest: any = request;
 
   if (request.module_type === 'ITSM_TICKET') {
     const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, request.reference_id));
@@ -482,13 +616,33 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       if (!allowed) throw new AppError(403, 'You do not have permission to act on this approval request.');
     }
 
+    // BUGFIX (round 2, point 3) -- row lock (FOR UPDATE) + status revalidation
+    // UNDER that lock, same guarded-concurrency shape as the resubmit branch
+    // above. Without this, two reviewers acting on the same pending request at
+    // nearly the same instant could both pass the earlier
+    // `request.status !== 'pending'` check (both read the pre-lock snapshot at
+    // the top of this handler), both write a log row, and both fire
+    // notifyMakerResolved() -- the requester could receive BOTH an "approved"
+    // and a "rejected" email for what should have been one decision. Locking
+    // the row and re-checking status inside the transaction means the second
+    // reviewer's transaction blocks until the first commits, then sees the
+    // now-resolved status and fails cleanly (400) instead of silently racing
+    // to a second, contradictory outcome.
     const client = await pool.connect();
+    let lockedRequest: any;
     try {
       await client.query('BEGIN');
+      const lockedRes = await client.query(`SELECT * FROM approval_requests WHERE id = $1 AND company_id = $2 FOR UPDATE`, [id, companyId]);
+      lockedRequest = lockedRes.rows[0];
+      if (!lockedRequest) throw new AppError(404, 'Approval request not found');
+      if (lockedRequest.status !== 'pending') {
+        throw new AppError(400, `This request is already ${lockedRequest.status}`);
+      }
+
       await client.query(
         `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [id, request.current_step, myId, action, comments || null, attachmentsJson]
+        [id, lockedRequest.current_step, myId, action, comments || null, attachmentsJson]
       );
 
       if (action === 'returned') {
@@ -506,8 +660,8 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
         // themselves after seeing 'approved'. Only for the two FINAL actions —
         // 'returned' leaves expenses.status untouched (still 'pending_approval')
         // since the request isn't resolved, just bounced back for a fix.
-        if (request.module_type === 'EXPENSE') {
-          await client.query(`UPDATE expenses SET status = $1 WHERE id = $2 AND company_id = $3`, [action, request.reference_id, companyId]);
+        if (lockedRequest.module_type === 'EXPENSE') {
+          await client.query(`UPDATE expenses SET status = $1 WHERE id = $2 AND company_id = $3`, [action, lockedRequest.reference_id, companyId]);
         }
       }
 
@@ -519,15 +673,15 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       client.release();
     }
 
-    // 2026-09-06 fix — single-step modules always resolve immediately (no further
-    // steps), so approve/reject here is always final. See notifyMakerResolved's header.
+    // Post-commit only -- see the header comment above.
+    noteRequest = lockedRequest;
     if (action === 'approved' || action === 'rejected') {
-      notifyMakerResolved(companyId, request, action).catch(() => {});
+      notifyMakerResolved(companyId, lockedRequest, action, action === 'rejected' ? comments || null : null).catch(() => {});
     }
   }
 
   if (action === 'returned') {
-    notifyMakerReturned(companyId, request, String(comments)).catch(() => {});
+    notifyMakerReturned(companyId, noteRequest, String(comments)).catch(() => {});
   }
 
   // BUGFIX (stale "pending" notifications) -- MIGRATION_060. A pending-approval

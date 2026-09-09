@@ -82,6 +82,13 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   // gets the 400 and no row is created) instead of leaving corrupted data behind.
   const client = await pool.connect();
   let expense;
+  // MIGRATION_078 -- fileApprovalRequest() no longer fires its own
+  // notifications internally (see that function's own header) precisely
+  // because this call site can still ROLLBACK after it returns. Capture the
+  // returned notify() here and call it ONLY after COMMIT actually succeeds --
+  // a rollback must never leave an email_jobs row (or a delivered email) for
+  // an approval_requests row that no longer exists.
+  let filed: { notify: () => void } | undefined;
   try {
     await client.query('BEGIN');
 
@@ -104,7 +111,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     expense = result.rows[0];
 
     if (goldPlus) {
-      await fileApprovalRequest(companyId, 'EXPENSE', expense.id, req.auth!.userId, client);
+      filed = await fileApprovalRequest(companyId, 'EXPENSE', expense.id, req.auth!.userId, client);
     }
 
     await client.query('COMMIT');
@@ -114,6 +121,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   } finally {
     client.release();
   }
+
+  // Post-commit only -- see the comment above.
+  filed?.notify();
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'expense_created', entityType: 'expenses', entityId: expense.id, req });
 

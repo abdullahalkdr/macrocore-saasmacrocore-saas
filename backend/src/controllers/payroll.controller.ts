@@ -502,7 +502,11 @@ export const pay = asyncHandler(async (req: Request, res: Response) => {
     // No approval yet, or the previous one was rejected — file a fresh request and
     // stop here. The maker (whoever clicked Pay) cannot also be the one who
     // resolves it — enforced in approvals.controller.ts's actionRequest(), not here.
-    await fileApprovalRequest(companyId, 'PAYROLL', id as string, req.auth!.userId);
+    // MIGRATION_078 -- no surrounding transaction here (the INSERT inside
+    // fileApprovalRequest() already committed via the shared pool by the time
+    // it returns), so notifying immediately is safe -- nothing to roll back.
+    const filed = await fileApprovalRequest(companyId, 'PAYROLL', id as string, req.auth!.userId);
+    filed.notify();
     await logAudit({
       companyId,
       userId: req.auth!.userId,

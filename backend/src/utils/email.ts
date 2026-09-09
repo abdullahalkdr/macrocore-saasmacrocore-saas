@@ -1103,3 +1103,255 @@ export function testEmailHtml(lang: EmailLang): string {
     lang
   );
 }
+
+// ========================================================================
+// Phase 4 — Financial Approval workflow + SLA templates (Chat 2).
+// All under EmailCategory 'approval' (existing sender/Reply-To, no new
+// identity). `label` is the same { ar, en } shape financialApprovals.ts's
+// MODULE_LABEL already exports — passed in rather than imported, so this
+// file never depends on financialApprovals.ts (avoids a circular import).
+// ========================================================================
+
+type BilingualLabel = { ar: string; en: string };
+
+function numberSuffixOf(requestNumber: string | null): string {
+  return requestNumber ? ` #${requestNumber}` : '';
+}
+
+// Sent to every eligible approver the moment a request is filed (or
+// resubmitted after "Return for Changes") — the actual email Chat 1 left as
+// a designed-but-unsent identity (handoff §12).
+export function approvalActionRequiredEmailHtml(
+  lang: EmailLang,
+  label: BilingualLabel,
+  requesterName: string,
+  amountSnippet: string,
+  requestNumber: string | null,
+  link: string
+): string {
+  const suffix = numberSuffixOf(requestNumber);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Action required ✅</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">A new ${label.en.toLowerCase()} request${suffix} from <strong>${escapeHtml(requesterName)}</strong>${escapeHtml(amountSnippet)} is waiting on your approval.</p>
+        ${ctaButton(link, 'Review request', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">مطلوب اعتماد ✅</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">فيه طلب ${label.ar}${suffix} جديد من <strong>${escapeHtml(requesterName)}</strong>${escapeHtml(amountSnippet)} بانتظار اعتمادك.</p>
+      ${ctaButton(link, 'مراجعة الطلب', lang)}
+    `,
+    lang
+  );
+}
+
+// Sent once to the requester right after filing — confirms it was received
+// and is being routed, nothing more.
+export function approvalSubmittedEmailHtml(lang: EmailLang, label: BilingualLabel, requestNumber: string | null, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Request submitted 📨</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${label.en.toLowerCase()} request${suffix} was submitted and is now waiting for approval. You'll get an email as soon as there's a decision.</p>
+        ${ctaButton(link, 'Track request', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">تم إرسال الطلب 📨</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم إرسال طلب ${label.ar}${suffix} وهو الآن بانتظار الاعتماد. بنرسل لك إيميل فور صدور القرار.</p>
+      ${ctaButton(link, 'متابعة الطلب', lang)}
+    `,
+    lang
+  );
+}
+
+// Requester outcome email — approved or rejected. `safeReason` is an
+// approver-supplied comment (approval_steps_log.comments), already free text
+// the requester is entitled to see (it's about their own request); still
+// HTML-escaped like every other user-controlled string this file interpolates.
+export function approvalResolvedEmailHtml(
+  lang: EmailLang,
+  outcome: 'approved' | 'rejected',
+  label: BilingualLabel,
+  requestNumber: string | null,
+  link: string,
+  safeReason?: string | null
+): string {
+  const suffix = numberSuffixOf(requestNumber);
+  const reasonBlockEn = safeReason ? `<p style="font-size: 13px; line-height: 1.8; color: #57534e; background:#fafaf9; border-radius:8px; padding:12px 14px;">${escapeHtml(safeReason)}</p>` : '';
+  const reasonBlockAr = reasonBlockEn;
+  if (outcome === 'approved') {
+    return lang === 'en'
+      ? emailShell(
+          `
+            <p style="font-size: 15px; margin: 0 0 4px;">Request approved ✅</p>
+            <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${label.en.toLowerCase()} request${suffix} was approved.</p>
+            ${ctaButton(link, 'View request', lang)}
+          `,
+          lang
+        )
+      : emailShell(
+          `
+            <p style="font-size: 15px; margin: 0 0 4px;">تمت الموافقة ✅</p>
+            <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تمت الموافقة على طلب ${label.ar}${suffix}.</p>
+            ${ctaButton(link, 'عرض الطلب', lang)}
+          `,
+          lang
+        );
+  }
+  return lang === 'en'
+    ? emailShell(
+        `
+          <p style="font-size: 15px; margin: 0 0 4px;">Request rejected ❌</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${label.en.toLowerCase()} request${suffix} was rejected.</p>
+          ${reasonBlockEn}
+          ${ctaButton(link, 'View request', lang)}
+        `,
+        lang
+      )
+    : emailShell(
+        `
+          <p style="font-size: 15px; margin: 0 0 4px;">تم رفض الطلب ❌</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم رفض طلب ${label.ar}${suffix}.</p>
+          ${reasonBlockAr}
+          ${ctaButton(link, 'عرض الطلب', lang)}
+        `,
+        lang
+      );
+}
+
+// Requester "Return for Changes" email — the reviewer's own comment is the
+// whole point (MIGRATION_061), always shown; CTA points at the record so the
+// requester can fix and resubmit without hunting for it.
+export function approvalReturnedEmailHtml(lang: EmailLang, label: BilingualLabel, requestNumber: string | null, reason: string, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  const safeReason = escapeHtml(reason);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Changes requested ✏️</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${label.en.toLowerCase()} request${suffix} was sent back for changes:</p>
+        <p style="font-size: 13px; line-height: 1.8; color: #57534e; background:#fafaf9; border-radius:8px; padding:12px 14px;">${safeReason}</p>
+        ${ctaButton(link, 'Update and resubmit', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">مطلوب تعديل ✏️</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم إرجاع طلب ${label.ar}${suffix} للتعديل:</p>
+      <p style="font-size: 13px; line-height: 1.8; color: #57534e; background:#fafaf9; border-radius:8px; padding:12px 14px;">${safeReason}</p>
+      ${ctaButton(link, 'تعديل وإعادة الإرسال', lang)}
+    `,
+    lang
+  );
+}
+
+// SLA reminder — approver-facing, sent once at 75% of the 24h window.
+export function approvalSlaReminderEmailHtml(lang: EmailLang, label: BilingualLabel, requestNumber: string | null, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Approval reminder ⏰</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">A ${label.en.toLowerCase()} request${suffix} is still waiting on your approval and is approaching its 24-hour window.</p>
+        ${ctaButton(link, 'Review request', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">تذكير اعتماد ⏰</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">طلب ${label.ar}${suffix} لسه بانتظار اعتمادك، واقترب من نهاية مهلة الـ 24 ساعة.</p>
+      ${ctaButton(link, 'مراجعة الطلب', lang)}
+    `,
+    lang
+  );
+}
+
+// SLA breach — urgent, approver-facing. Sent once per approver, ever, per
+// SLA cycle (dedup_key covers this — see approvalSla.ts).
+export function approvalSlaBreachEmailHtml(lang: EmailLang, label: BilingualLabel, requestNumber: string | null, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">Overdue approval 🚨</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">A ${label.en.toLowerCase()} request${suffix} has passed its 24-hour approval window and needs action now.</p>
+        ${ctaButton(link, 'Review request now', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">طلب متأخر 🚨</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تجاوز طلب ${label.ar}${suffix} مهلة الاعتماد (24 ساعة) ويحتاج إجراء فوري.</p>
+      ${ctaButton(link, 'مراجعة الطلب الآن', lang)}
+    `,
+    lang
+  );
+}
+
+// Requester delay notice — sent once alongside the approver breach email.
+// Deliberately minimal per this phase's content-safety rule: reference
+// number, request type, status, and how long it's been waiting — no
+// approver name, no amount.
+export function approvalSlaDelayEmailHtml(lang: EmailLang, label: BilingualLabel, requestNumber: string | null, waitingSinceLabel: string, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Your request is taking longer than usual ⏳</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${label.en.toLowerCase()} request${suffix} is still pending — it's been waiting ${escapeHtml(waitingSinceLabel)}. We've notified the approver.</p>
+        ${ctaButton(link, 'Track request', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">طلبك تأخر عن المعتاد ⏳</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">طلب ${label.ar}${suffix} لسه معلّق — صار له ${escapeHtml(waitingSinceLabel)} بانتظار الاعتماد. تم إشعار المعتمد.</p>
+      ${ctaButton(link, 'متابعة الطلب', lang)}
+    `,
+    lang
+  );
+}
+
+// Requester routing-failure notice — the ONLY case where no approver email
+// was sent at all (nobody eligible could be resolved). Never names why
+// (no org-chart detail, no permission talk) — just that it needs an admin.
+export function approvalRoutingFailureEmailHtml(lang: EmailLang, label: BilingualLabel | null, requestNumber: string | null, link: string): string {
+  const suffix = numberSuffixOf(requestNumber);
+  const what = label ? (lang === 'en' ? label.en.toLowerCase() : label.ar) : (lang === 'en' ? 'request' : 'الطلب');
+  if (lang === 'en') {
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Your request needs admin attention ⚠️</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your ${what} request${suffix} couldn't be routed to an approver automatically. An administrator needs to review your company's approver setup.</p>
+        ${ctaButton(link, 'Track request', lang)}
+      `,
+      lang
+    );
+  }
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">طلبك بحاجة لمتابعة الإدارة ⚠️</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">ما قدرنا نوجّه طلب ${what}${suffix} تلقائيًا لمعتمد. لازم أحد المسؤولين يراجع إعدادات المعتمدين بالشركة.</p>
+      ${ctaButton(link, 'متابعة الطلب', lang)}
+    `,
+    lang
+  );
+}
