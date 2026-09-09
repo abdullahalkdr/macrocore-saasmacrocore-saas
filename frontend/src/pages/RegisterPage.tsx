@@ -7,12 +7,18 @@ import { useLangStore } from '../store/langStore';
 import { useT } from '../i18n';
 import { IconBuilding, IconTrash } from '../components/Icon';
 
+interface InvitationResult {
+  email: string;
+  status: 'sent' | 'sent_email_failed' | 'skipped';
+  reason?: string;
+}
+
 interface RegisterResponse {
   success: boolean;
   user: AuthUser;
   company: AuthCompany;
   token: string;
-  invited_users: { email: string; temp_password: string }[];
+  invitation_results: InvitationResult[];
   message: string;
 }
 
@@ -108,7 +114,7 @@ export default function RegisterPage() {
 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [invitedResults, setInvitedResults] = useState<{ email: string; temp_password: string }[] | null>(null);
+  const [invitedResults, setInvitedResults] = useState<InvitationResult[] | null>(null);
 
   const industries = lang === 'en' ? INDUSTRIES.map((i) => i.en) : INDUSTRIES.map((i) => i.ar);
 
@@ -200,8 +206,8 @@ export default function RegisterPage() {
         preferred_language: lang,
       });
       setAuth(res.token, res.user, res.company);
-      if (res.invited_users?.length > 0) {
-        setInvitedResults(res.invited_users);
+      if (res.invitation_results?.length > 0) {
+        setInvitedResults(res.invitation_results);
       } else {
         navigate('/dashboard');
       }
@@ -214,6 +220,14 @@ export default function RegisterPage() {
 
   const boxWide = step >= 2;
 
+  function invitationResultLabel(r: InvitationResult): string {
+    if (r.status === 'sent') return t.auth.inviteResultSent;
+    if (r.status === 'sent_email_failed') return t.auth.inviteResultSentEmailFailed;
+    if (r.reason === 'already_member') return t.auth.inviteResultSkippedAlreadyMember;
+    if (r.reason === 'conflict_elsewhere') return t.auth.inviteResultSkippedConflict;
+    return t.auth.inviteResultSkippedError;
+  }
+
   if (invitedResults) {
     return (
       <div className="auth-page">
@@ -223,8 +237,12 @@ export default function RegisterPage() {
           {invitedResults.map((r) => (
             <div className="temp-cred-row" key={r.email}>
               <span>{r.email}</span>
-              <span>
-                {t.auth.tempPasswordLabel}: <code>{r.temp_password}</code>
+              <span
+                style={{
+                  color: r.status === 'sent' ? 'var(--success)' : r.status === 'sent_email_failed' ? 'var(--amber-600)' : 'var(--danger)',
+                }}
+              >
+                {invitationResultLabel(r)}
               </span>
             </div>
           ))}

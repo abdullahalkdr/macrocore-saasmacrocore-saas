@@ -76,12 +76,28 @@ Body: `{ "name": "New Name" }`. Returns the updated company.
 ## GET /users
 Query: `?page=1&limit=20&role=employee`. Returns `{ users, total, page }`.
 
-## POST /users — admin/manager only
-Body: `{ "email": "...", "name": "...", "role": "employee" }`.
-No email service yet, so the response includes a `temp_password` — share it with the new user directly; they can log in and you can add a "change password" endpoint later.
+Adding a new teammate is no longer a direct create — see POST /invitations below (Phase 3, 2026-09-09). There is no more `POST /users`.
+
+## GET /invitations — admin/manager only
+Pending/expired/accepted/revoked invitations for the caller's company. Returns `{ invitations: [{ id, email, role, full_name, status, invited_by_name, created_at, updated_at }] }`. `status` is derived (`pending`/`expired`/`accepted`/`revoked`), never stored.
+
+## POST /invitations — admin/manager only
+Body: `{ "email": "...", "role": "employee", "full_name": "...", "preferred_language": "ar" }`. `full_name` and `preferred_language` are optional. Sends (or, if one already exists for this email in this company, refreshes and resends) an invitation email with a 7-day single-use link — never returns a password. Admins may invite any role; managers only `employee`/`viewer`. `409` if the email already has an account or a conflicting pending invitation elsewhere on the platform (generic message, never reveals which). The whole create-or-refresh-and-conflict-check sequence is transactional and serialized per email (Postgres advisory lock), so two concurrent invites for the same email can't both succeed. Response includes `email_queued: boolean` — the invitation row/link is always created on success, but the email itself may fail to queue; `email_queued: false` means it did (never reported as "Invitation sent" in that case — use Resend to retry).
+
+## POST /invitations/:id/resend — admin/manager only
+Regenerates the token/expiry on that invitation and re-sends the email — the previous link stops working immediately. Row-locked and guarded against a concurrent accept; refused (`409`) if some other company now holds a genuinely pending invitation for this email (reactivating this one would recreate the decision-11 conflict). Response includes `email_queued: boolean`, same meaning as `POST /invitations`.
+
+## POST /invitations/:id/revoke — admin/manager only
+Invalidates the invitation's link. Refused (`409`) if it was already accepted (including a concurrent accept that wins the race).
+
+## GET /auth/invitations/:token — public
+Looks up an invitation by its raw link token. Always `200`; `{ valid: false, reason: "invalid" | "expired" | "revoked" | "accepted" }` or `{ valid: true, email, full_name, role, company_name, preferred_language }`. `preferred_language` drives which language the accept-invitation page itself renders in, independent of the visitor's own site-wide language toggle.
+
+## POST /auth/accept-invitation — public
+Body: `{ "token": "...", "full_name": "...", "password": "..." }`. Creates the account (or links to a matching unlinked `employees` record in that company), marks the email verified, and logs the person straight in — response shape matches `POST /auth/login`. The invitation row is row-locked and its status re-checked inside the same transaction as the account creation, so a revoked, expired, accepted, or superseded token can never succeed — including under concurrent requests for the same token.
 
 ## PATCH /users/:id — admin/manager only
-Body: any of `{ "role": "...", "status": "...", "full_name": "..." }`.
+Body: any of `{ "role": "...", "status": "...", "full_name": "..." }`. A manager (never an admin) is refused (`403`) if the target account is currently `admin`/`manager`, or if `role` would assign `admin`/`manager` to anyone — managers may only manage `employee`/`viewer` accounts and can never escalate a role to `admin`/`manager`.
 
 ## DELETE /users/:id — admin only
 Blocks deleting yourself or the last active admin.

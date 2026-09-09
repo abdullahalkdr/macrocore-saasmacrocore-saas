@@ -54,8 +54,9 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       company: null,
       // Cross-user isolation (2026-09) — setAuth is the moment a NEW identity takes
-      // over this tab (fresh login or registration; the only two call sites, per
-      // LoginPage.tsx/RegisterPage.tsx). Any other store's per-user cache (today, just
+      // over this tab (fresh login, registration, or — since Phase 3, 2026-09-09 —
+      // accepting an employee invitation; see LoginPage.tsx/RegisterPage.tsx/
+      // AcceptInvitationPage.tsx). Any other store's per-user cache (today, just
       // usePolicyStore's pending-grant state — see its own comment for the full race
       // this closes) must be wiped synchronously here, before this set() even commits,
       // so the very first render under the new identity can never read a previous

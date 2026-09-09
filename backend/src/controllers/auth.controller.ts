@@ -19,6 +19,14 @@ import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
 import { enqueueEmail, verificationEmailHtml, passwordResetEmailHtml, passwordChangedEmailHtml, minuteBucket, EmailLang } from '../utils/email';
 import { getHrScope, canAccessUsersList } from '../utils/hrScope';
+import {
+  acquireEmailLock,
+  createOrRefreshInvitation,
+  deriveInvitationStatus,
+  findInvitationByRawToken,
+  findUnlinkedEmployeeByEmail,
+  lockInvitationByRawTokenForUpdate,
+} from '../utils/invitations';
 
 const EMPLOYEE_COUNT_RANGES = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+'];
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID || undefined);
@@ -105,14 +113,14 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const existing = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
   if (existing.rows.length > 0) throw new AppError(409, 'Email already registered');
 
-  if (inviteList.length > 0) {
-    const clash = await pool.query('SELECT email FROM users WHERE email = ANY($1)', [inviteList.map((e) => e.toLowerCase())]);
-    if (clash.rows.length > 0) throw new AppError(409, `Already registered: ${clash.rows.map((r) => r.email).join(', ')}`);
-  }
-
+  // Decision 2 (2026-09-09 Phase 3 decisions): colleague invites are optional
+  // and must never block or roll back company/owner creation. The old
+  // whole-registration-blocking pre-check (a clash on ANY invite email threw
+  // 409 for the entire signup) is gone — invites are now sent AFTER this
+  // transaction commits, per-invite, non-blocking (see below), through the
+  // same createOrRefreshInvitation() the Users page uses.
   const client = await pool.connect();
   let company, user;
-  const invitedUsers: { email: string; temp_password: string }[] = [];
   try {
     await client.query('BEGIN');
 
@@ -215,32 +223,6 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     );
     await client.query('UPDATE users SET employee_id = $1 WHERE id = $2', [employeeResult.rows[0].id, user.id]);
 
-    // Colleague invites — no email service wired up yet (see users.controller.ts),
-    // so we create the accounts immediately with a temp password and hand them
-    // back in the response for the admin to share directly.
-    for (const inviteEmail of inviteList) {
-      const tempPassword = crypto.randomBytes(6).toString('base64url');
-      const inviteHash = await hashPassword(tempPassword);
-
-      // BUGFIX (orphaned approval requests, part 3) — same root cause as the admin
-      // employees insert above and users.controller.ts's create(): an invited colleague
-      // never got a matching employees row, so users.employee_id stayed NULL forever,
-      // breaking fileApprovalRequest()/actionRequest() for them the same way it did for
-      // brand-new admins and teammates added via the Users page. Same fix here: create +
-      // link an employees row in this same transaction. No real name yet at invite time,
-      // so email is used as the placeholder name (same NOT-NULL fallback pattern as the
-      // admin insert above) — the invitee can fill in their real name later.
-      const inviteEmployeeResult = await client.query(
-        `INSERT INTO employees (company_id, name, email, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
-        [company.id, inviteEmail.toLowerCase(), inviteEmail.toLowerCase()]
-      );
-      await client.query(
-        `INSERT INTO users (company_id, email, password_hash, role, employee_id) VALUES ($1, $2, $3, 'employee', $4)`,
-        [company.id, inviteEmail.toLowerCase(), inviteHash, inviteEmployeeResult.rows[0].id]
-      );
-      invitedUsers.push({ email: inviteEmail.toLowerCase(), temp_password: tempPassword });
-    }
-
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -273,6 +255,44 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
+  // Colleague invites — Phase 3 (2026-09-09): both entry points (this one and
+  // the Users page) now go through the same shared invitation flow (decision
+  // 1). Deliberately outside the transaction above and best-effort per
+  // invite (decision 2) — a failed or skipped invite must never surface as a
+  // registration error; each one's outcome is reported back instead so the
+  // founder can retry a skipped one from the Users page. Always role
+  // 'employee' — this step never offered a role picker and still doesn't;
+  // the founder can promote someone after they accept.
+  const invitationResults: { email: string; status: 'sent' | 'sent_email_failed' | 'skipped'; reason?: string }[] = [];
+  for (const inviteEmail of inviteList) {
+    try {
+      const outcome = await createOrRefreshInvitation({
+        companyId: company.id,
+        companyName: company.name,
+        email: inviteEmail,
+        role: 'employee',
+        fullName: null,
+        invitedBy: user.id,
+        inviterName: resolvedFullName,
+        preferredLanguage: resolvedPreferredLanguage,
+      });
+      if (outcome.status === 'sent') {
+        invitationResults.push({ email: inviteEmail.toLowerCase(), status: 'sent' });
+      } else if (outcome.status === 'sent_email_failed') {
+        // Decision 2, still honored: the invitation row itself was created
+        // fine — only the email failed to queue. Company/owner creation
+        // already committed above and is unaffected either way; this just
+        // must never be reported as "sent" (review requirement).
+        invitationResults.push({ email: inviteEmail.toLowerCase(), status: 'sent_email_failed', reason: 'email_not_queued' });
+      } else {
+        invitationResults.push({ email: inviteEmail.toLowerCase(), status: 'skipped', reason: outcome.reason });
+      }
+    } catch (err) {
+      console.error('[register] colleague invite failed', inviteEmail, err);
+      invitationResults.push({ email: inviteEmail.toLowerCase(), status: 'skipped', reason: 'error' });
+    }
+  }
+
   const token = signToken({ userId: user.id, companyId: company.id, role: user.role });
 
   res.status(200).json({
@@ -280,7 +300,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     user: { ...user, email_verified: !!googleSub },
     company,
     token,
-    invited_users: invitedUsers,
+    invitation_results: invitationResults,
     message: 'Account created. Trial expires in 14 days.',
   });
 });
@@ -632,4 +652,182 @@ export const resetPassword = asyncHandler(async (req: Request, res: Response) =>
   await logAudit({ companyId: row.company_id, userId: row.id, action: 'password_reset', entityType: 'users', entityId: row.id, req });
 
   res.status(200).json({ success: true, message: 'Password updated — you can log in now' });
+});
+
+// Public. GET rather than POST — this only reads state to drive the accept-
+// invitation page (prefill the confirm/edit name field per decision 4, show
+// the company name, and render the right message for an expired/used/
+// revoked/unknown link per decision 8) and never returns an HTTP error for an
+// invalid token: always 200 with `valid`, so the frontend renders one of a
+// few known states instead of guessing from an error string.
+export const getInvitationInfo = asyncHandler(async (req: Request, res: Response) => {
+  const token = typeof req.params.token === 'string' ? req.params.token : '';
+  const invitation = token ? await findInvitationByRawToken(token) : null;
+  if (!invitation) {
+    res.status(200).json({ valid: false, reason: 'invalid' });
+    return;
+  }
+
+  const status = deriveInvitationStatus(invitation);
+  if (status !== 'pending') {
+    res.status(200).json({ valid: false, reason: status });
+    return;
+  }
+
+  const companyResult = await pool.query('SELECT name FROM companies WHERE id = $1', [invitation.company_id]);
+  res.status(200).json({
+    valid: true,
+    email: invitation.email,
+    full_name: invitation.full_name,
+    role: invitation.role,
+    company_name: companyResult.rows[0]?.name ?? null,
+    preferred_language: invitation.preferred_language,
+  });
+});
+
+// Public. Proves control of the mailbox (the invitee followed a link only
+// they received) — so per decision 9 the new account's email starts already
+// verified, same treatment a Google signup gets in register() above.
+export const acceptInvitation = asyncHandler(async (req: Request, res: Response) => {
+  const { token, full_name, password } = req.body ?? {};
+  if (typeof token !== 'string' || !token) throw new AppError(400, 'token is required');
+  if (!isValidPassword(password)) {
+    throw new AppError(400, 'Password must be at least 8 characters and include a letter and a number');
+  }
+
+  // Cheap, unlocked fast-path so a garbage/never-existed token gets an
+  // ordinary 400 without opening a transaction. This is a convenience only —
+  // every status decision that actually gates the mutation below is
+  // re-derived from the locked read taken inside the transaction, since this
+  // unlocked read can be stale by the time it matters (concurrency fix,
+  // 2026-09-09 review).
+  const precheck = await findInvitationByRawToken(token);
+  if (!precheck) throw new AppError(400, 'This invitation link is invalid');
+
+  const client = await pool.connect();
+  let newUser;
+  let invitationId: string;
+  try {
+    await client.query('BEGIN');
+
+    // Same per-email advisory lock, taken in the same position (always
+    // first, before any row-level lock) as createOrRefreshInvitation()/
+    // resendInvitationById() (production-review fix #2, 2026-09-09).
+    // Without this, a concurrent create/resend could read "no users row for
+    // this email yet" via its own unlocked check, then block on THIS row's
+    // FOR UPDATE lock below until this accept committed, then resume and
+    // write using that now-stale "no account yet" read — producing a fresh
+    // pending invitation for an email that this transaction just gave an
+    // account. precheck.email is safe to key the lock on even though it was
+    // read unlocked above: email is immutable on an invitation row, so a
+    // stale read of it is harmless (same reasoning resendInvitationById
+    // uses for its own unlocked email lookup).
+    await acquireEmailLock(client, precheck.email);
+
+    // The real guard: re-read AND row-lock the invitation inside this
+    // transaction. A second concurrent accept of the same token, a resend
+    // racing this accept, or a revoke racing this accept must all resolve to
+    // exactly one winner — this lock (shared with resendInvitationById/
+    // revokeInvitationById's own FOR UPDATE reads on the same row) is what
+    // makes that true.
+    const invitation = await lockInvitationByRawTokenForUpdate(client, token);
+    if (!invitation) throw new AppError(400, 'This invitation link is invalid');
+
+    const status = deriveInvitationStatus(invitation);
+    if (status === 'accepted') throw new AppError(409, 'This invitation has already been used');
+    if (status === 'revoked') throw new AppError(410, 'This invitation was revoked — ask an admin to send a new one');
+    if (status === 'expired') throw new AppError(410, 'This invitation has expired — ask an admin to resend it');
+
+    // Decision 4: hybrid name — whatever the invitee confirmed or edited on
+    // the accept page (prefilled from invitation.full_name when the inviter
+    // provided one). Required either way; the email address is never used
+    // as a fallback.
+    const finalName = typeof full_name === 'string' && full_name.trim() ? full_name.trim() : invitation.full_name;
+    if (!finalName) throw new AppError(400, 'full_name is required');
+
+    // Re-check under the transaction: users.email is globally unique, and
+    // it's possible (if narrow) for a conflicting account to have been
+    // created through some other path after this invitation was sent.
+    // Decision 12: existing accounts remain unaffected — refuse rather than
+    // silently doing anything to one.
+    const clash = await client.query('SELECT id FROM users WHERE email = $1', [invitation.email]);
+    if (clash.rows.length > 0) throw new AppError(409, 'An account already exists for this email');
+
+    const passwordHash = await hashPassword(password);
+
+    // Decision 10: link to a pre-existing, not-yet-linked employees record
+    // with the same email in this company instead of creating a duplicate.
+    const existingEmployee = await findUnlinkedEmployeeByEmail(client, invitation.company_id, invitation.email);
+    const employeeId = existingEmployee
+      ? existingEmployee.id
+      : (
+          await client.query<{ id: string }>(
+            `INSERT INTO employees (company_id, name, email, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+            [invitation.company_id, finalName, invitation.email]
+          )
+        ).rows[0].id;
+
+    const userResult = await client.query(
+      `INSERT INTO users (company_id, email, password_hash, full_name, role, auth_provider, email_verified_at, employee_id, preferred_language)
+       VALUES ($1, $2, $3, $4, $5, 'password', now(), $6, $7)
+       RETURNING id, email, full_name, role, company_id`,
+      [invitation.company_id, invitation.email, passwordHash, finalName, invitation.role, employeeId, invitation.preferred_language]
+    );
+    newUser = userResult.rows[0];
+
+    // Guarded, not unconditional — defense in depth on top of the row lock
+    // above: if rowCount is 0, something else already flipped this exact row
+    // (should be impossible given the lock, but every other lifecycle op in
+    // this file uses the same belt-and-suspenders guard). Fail loudly rather
+    // than silently leaving behind a user account tied to an invitation that
+    // was no longer actually available.
+    const acceptResult = await client.query(
+      `UPDATE employee_invitations
+       SET accepted_at = now(), accepted_user_id = $1, updated_at = now()
+       WHERE id = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+       RETURNING id`,
+      [newUser.id, invitation.id]
+    );
+    if (acceptResult.rowCount === 0) {
+      throw new AppError(409, 'This invitation is no longer available');
+    }
+    invitationId = invitation.id;
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({
+    companyId: newUser.company_id,
+    userId: newUser.id,
+    action: 'invitation_accepted',
+    entityType: 'employee_invitations',
+    entityId: invitationId,
+    req,
+  });
+
+  // Same shape as login()'s response — the frontend calls setAuth() with this
+  // and goes straight to the dashboard, no separate login step.
+  const hrScope = await getHrScope(newUser.company_id, newUser.id, newUser.role);
+  const canAccessUsers = await canAccessUsersList(newUser.company_id, newUser.id, newUser.role);
+  const authToken = signToken({ userId: newUser.id, companyId: newUser.company_id, role: newUser.role });
+
+  res.status(200).json({
+    success: true,
+    user: {
+      id: newUser.id,
+      email: newUser.email,
+      full_name: newUser.full_name,
+      role: newUser.role,
+      company_id: newUser.company_id,
+      email_verified: true,
+      hr_access_level: hrScope.level,
+      can_access_users: canAccessUsers,
+    },
+    token: authToken,
+  });
 });

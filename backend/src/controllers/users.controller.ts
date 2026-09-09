@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import crypto from 'crypto';
 import { pool } from '../db/pool';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
@@ -166,60 +165,12 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   res.status(200).json({ success: true, users, total: totalResult.rows[0].n, page });
 });
 
-// No email service yet (Phase 3) — returns a temp_password instead of "invitation sent".
-// Swap for a real invite flow (email + set-password link) once SendGrid is wired up.
-export const create = asyncHandler(async (req: Request, res: Response) => {
-  const companyId = req.auth!.companyId;
-  const { email, name, role } = req.body ?? {};
-
-  if (!isValidEmail(email)) throw new AppError(400, 'Invalid email format');
-  if (typeof name !== 'string' || name.trim().length < 2) throw new AppError(400, 'name is required');
-  const finalRole = typeof role === 'string' && ROLES.includes(role) ? role : 'employee';
-
-  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-  if (existing.rows.length > 0) throw new AppError(409, 'Email already registered');
-
-  const tempPassword = crypto.randomBytes(6).toString('base64url'); // e.g. "aZ3-kQ9x1F2z"
-  const passwordHash = await hashPassword(tempPassword);
-
-  // BUGFIX (orphaned approval requests, part 2) — same root cause as auth.controller.ts's
-  // register(): a user created here (an admin/manager adding a teammate's login) never
-  // got a matching employees row, so users.employee_id stayed NULL forever. That's exactly
-  // what makes fileApprovalRequest() throw ("not linked to an employee record") the first
-  // time this teammate's own action needs approval, and what makes actionRequest() refuse
-  // to let them approve/reject anything at all even when their role/permissions otherwise
-  // qualify them. Every new user now gets a minimal employees row created in the same
-  // transaction and linked immediately — same treatment register() got.
-  const client = await pool.connect();
-  let user;
-  try {
-    await client.query('BEGIN');
-
-    const employeeResult = await client.query(
-      `INSERT INTO employees (company_id, name, email, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
-      [companyId, name.trim(), email.toLowerCase()]
-    );
-
-    const result = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, full_name, role, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, email, full_name, role, status, created_at`,
-      [companyId, email.toLowerCase(), passwordHash, name.trim(), finalRole, employeeResult.rows[0].id]
-    );
-    user = result.rows[0];
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'user_created', entityType: 'users', entityId: user.id, req });
-
-  res.status(201).json({ success: true, user, temp_password: tempPassword, message: 'User created. Share the temp_password with them directly — no email service wired up yet.' });
-});
+// create() — the old "admin/manager types an email+name, we hand back a
+// temp_password" flow — is gone (Phase 3, 2026-09-09, decision 7: never
+// return/display/log/email a temp password again). Adding a teammate now
+// always goes through POST /api/invitations (see invitations.controller.ts)
+// at both entry points (decision 1) — grep confirmed this was the route's
+// only caller before removal, so nothing else depends on the old shape.
 
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
@@ -234,6 +185,22 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
     [id, companyId]
   );
   const oldUser = beforeResult.rows[0] ?? null;
+
+  // Manager privilege-escalation close (production review, 2026-09-09): a
+  // manager reaches this route (requireRole('admin','manager')), but must
+  // never be able to assign the admin/manager role to anyone, or modify ANY
+  // field on an existing admin/manager account — that would let a manager
+  // promote themselves/an ally, or edit/suspend/demote an admin. Checked
+  // before any other validation so it can't be bypassed by pairing it with
+  // an otherwise-valid field.
+  if (req.auth!.role === 'manager') {
+    if (oldUser && (oldUser.role === 'admin' || oldUser.role === 'manager')) {
+      throw new AppError(403, 'Managers cannot modify admin or manager accounts');
+    }
+    if (role !== undefined && (role === 'admin' || role === 'manager')) {
+      throw new AppError(403, 'Managers cannot assign the admin or manager role');
+    }
+  }
 
   const sets: string[] = [];
   const params: unknown[] = [];

@@ -1041,6 +1041,46 @@ export function passwordChangedEmailHtml(lang: EmailLang): string {
   );
 }
 
+// Employee invitations (Phase 3, 2026-09-09) — the first template to interpolate
+// free-text the recipient's own company controls (companyName, inviterName), so
+// unlike every other template above this one HTML-escapes its inputs before
+// interpolating them: a company/full name containing "<" or "&" must never be
+// able to break the layout or inject markup into an email macrocore sends.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export function invitationEmailHtml(link: string, lang: EmailLang, companyName: string, inviterName: string | null): string {
+  const safeCompany = escapeHtml(companyName);
+  if (lang === 'en') {
+    const inviterLine = inviterName ? `${escapeHtml(inviterName)} invited you` : 'You’ve been invited';
+    return emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">You're invited 👋</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">${inviterLine} to join <strong>${safeCompany}</strong>'s workspace on macrocore. Click the button below to set up your account and choose your own password:</p>
+        ${ctaButton(link, 'Accept invitation', lang)}
+        <p style="font-size: 12px; color: #a8a29e; border-top: 1px solid #f5f5f4; padding-top: 16px;">This link is valid for 7 days and can only be used once. If you weren't expecting this, you can safely ignore this email.</p>
+      `,
+      lang
+    );
+  }
+  const inviterLineAr = inviterName ? `دعاك ${escapeHtml(inviterName)}` : 'تمت دعوتك';
+  return emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">تمت دعوتك 👋</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">${inviterLineAr} للانضمام إلى مساحة عمل <strong>${safeCompany}</strong> في macrocore. اضغط الزر أدناه لإعداد حسابك واختيار كلمة مرورك الخاصة:</p>
+      ${ctaButton(link, 'قبول الدعوة', lang)}
+      <p style="font-size: 12px; color: #a8a29e; border-top: 1px solid #f5f5f4; padding-top: 16px;">هذا الرابط صالح لمدة 7 أيام ويُستخدم مرة واحدة فقط. إذا لم تكن تتوقع هذه الدعوة، بإمكانك تجاهل هذه الرسالة بأمان.</p>
+    `,
+    lang
+  );
+}
+
 // Admin-only "send test email" (emailAdmin.controller.ts) — deliberately looks
 // like a real transactional email (same shell/category='test' sender), never a
 // bare "hello world", so what's being verified is the actual thing customers

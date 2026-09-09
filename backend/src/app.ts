@@ -4,6 +4,7 @@ import { env } from './config/env';
 import authRoutes from './routes/auth.routes';
 import companyRoutes from './routes/company.routes';
 import usersRoutes from './routes/users.routes';
+import invitationsRoutes from './routes/invitations.routes';
 import productsRoutes from './routes/products.routes';
 import shiftsRoutes from './routes/shifts.routes';
 import salesRoutes from './routes/sales.routes';
@@ -125,6 +126,7 @@ const invSilver = (label: string) => [...guarded, requirePlanLevel(2, label), re
 app.use('/api/auth', authRoutes);
 app.use('/api/company', companyRoutes);
 app.use('/api/users', ...guarded, usersRoutes);
+app.use('/api/invitations', ...guarded, invitationsRoutes);
 app.use('/api/products', ...inv('Products'), productsRoutes);
 app.use('/api/shifts', ...inv('Point of sale / shifts'), shiftsRoutes);
 app.use('/api/sales', ...inv('Point of sale / shifts'), salesRoutes);

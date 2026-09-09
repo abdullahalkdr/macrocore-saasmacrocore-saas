@@ -1,11 +1,13 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { get, post, patch, del, ApiError } from '../api/client';
 import { useAuthStore } from '../store/authStore';
+import { useLangStore } from '../store/langStore';
 import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
 import { IconPlus, IconTrash } from '../components/Icon';
+import { canModifyUserRow, assignableRoleOptions, type UserRole } from '../utils/userRoleGuards';
 
 const PASSWORD_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 function randomPassword(): string {
@@ -29,17 +31,45 @@ interface EmployeeOption {
   name: string;
 }
 
+// Mirrors utils/invitations.ts's derived status (never stored — see that
+// file's comment) — Pending/Expired/Accepted/Revoked, decision 8.
+interface InvitationRow {
+  id: string;
+  email: string;
+  role: string;
+  full_name: string | null;
+  status: 'pending' | 'accepted' | 'revoked' | 'expired';
+  invited_by_name: string | null;
+  created_at: string;
+}
+
 const ROLES = ['admin', 'manager', 'employee', 'viewer'];
 const STATUSES = ['active', 'suspended', 'inactive'];
 
 export default function UsersPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === 'admin';
+  const lang = useLangStore((s) => s.lang);
   const t = useT();
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [invitations, setInvitations] = useState<InvitationRow[]>([]);
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  // Decision 5: managers may only invite into employee/viewer — the server
+  // is the real gate (assertInvitableRole in invitations.controller.ts), this
+  // just keeps a manager from picking a role they'd be refused anyway. Also
+  // reused below as the assignable-role list for EXISTING users, since the
+  // same admin/manager role boundary applies there too (users.controller.ts's
+  // update()).
+  const invitableRoles: UserRole[] = isAdmin ? (ROLES as UserRole[]) : ['employee', 'viewer'];
+  // Manager privilege-escalation close (production review, 2026-09-09):
+  // matches backend users.controller.ts's update() guard exactly — a manager
+  // (never an admin) can't touch any field on an existing admin/manager
+  // account. Admins are unrestricted here. Pulled out to utils/userRoleGuards
+  // so the exact boundary is unit-tested independent of this component.
+  const canModifyRow = (u: UserRow) => canModifyUserRow(currentUser?.role ?? '', u.role);
+  const roleOptionsFor = (u: UserRow) => assignableRoleOptions(currentUser?.role ?? '', u.role, ROLES as UserRole[], invitableRoles);
   const [role, setRole] = useState('employee');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -62,29 +92,69 @@ export default function UsersPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : t.users.loadFailed));
   }
 
+  function loadInvitations() {
+    get<{ invitations: InvitationRow[] }>('/invitations')
+      .then((r) => setInvitations(r.invitations))
+      .catch((err) => setError(err instanceof ApiError ? err.message : t.users.invitationsLoadFailed));
+  }
+
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(loadInvitations, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     get<{ employees: EmployeeOption[] }>('/employees').then((r) => setEmployeeOptions(r.employees)).catch(() => {});
   }, []);
 
+  // Decision 7: never create an account directly with a temp password here
+  // again — this now sends an invitation (POST /api/invitations), same flow
+  // and same email templates as the signup colleague-invite path (decision 1).
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
     setLoading(true);
     try {
-      const res = await post<{ user: UserRow; temp_password: string }>('/users', { email, name, role });
-      setNotice(t.users.createdNotice(res.user.email, res.temp_password));
+      const res = await post<{ success: boolean; email_queued: boolean }>('/invitations', {
+        email,
+        full_name: name || undefined,
+        role,
+        preferred_language: lang,
+      });
+      setNotice(res.email_queued ? t.users.inviteSentNotice(email) : t.users.inviteSentEmailFailedNotice(email));
       setEmail('');
       setName('');
       setRole('employee');
       setOpen(false);
-      load();
+      loadInvitations();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.users.saveFailed);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function resendInvitation(id: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await post<{ success: boolean; email_queued: boolean }>(`/invitations/${id}/resend`);
+      setNotice(res.email_queued ? t.users.resendSuccess : t.users.resendEmailFailedNotice);
+      loadInvitations();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.users.resendFailed);
+    }
+  }
+
+  async function revokeInvitation(id: string) {
+    if (!confirm(t.users.revokeConfirm)) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await post(`/invitations/${id}/revoke`);
+      setNotice(t.users.revokeSuccess);
+      loadInvitations();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.users.revokeFailed);
     }
   }
 
@@ -198,8 +268,13 @@ export default function UsersPage() {
                   <td>{u.email}</td>
                   <td className="muted">{u.department_name || t.users.noDepartment}</td>
                   <td>
-                    <select value={u.role} onChange={(e) => updateRole(u.id, e.target.value)} disabled={u.id === currentUser?.id}>
-                      {ROLES.map((r) => (
+                    <select
+                      value={u.role}
+                      onChange={(e) => updateRole(u.id, e.target.value)}
+                      disabled={u.id === currentUser?.id || !canModifyRow(u)}
+                      title={!canModifyRow(u) ? t.users.managerCannotModify : undefined}
+                    >
+                      {roleOptionsFor(u).map((r) => (
                         <option key={r} value={r}>
                           {r}
                         </option>
@@ -207,7 +282,12 @@ export default function UsersPage() {
                     </select>
                   </td>
                   <td>
-                    <select value={u.status} onChange={(e) => updateStatus(u.id, e.target.value)} disabled={u.id === currentUser?.id}>
+                    <select
+                      value={u.status}
+                      onChange={(e) => updateStatus(u.id, e.target.value)}
+                      disabled={u.id === currentUser?.id || !canModifyRow(u)}
+                      title={!canModifyRow(u) ? t.users.managerCannotModify : undefined}
+                    >
                       {STATUSES.map((s) => (
                         <option key={s} value={s}>
                           {s}
@@ -216,7 +296,14 @@ export default function UsersPage() {
                     </select>
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="icon-btn" onClick={() => openEdit(u)} title={t.users.editItem}>✎</button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => openEdit(u)}
+                      title={!canModifyRow(u) ? t.users.managerCannotModify : t.users.editItem}
+                      disabled={!canModifyRow(u)}
+                    >
+                      ✎
+                    </button>
                     {isAdmin && u.id !== currentUser?.id && (
                       <button className="icon-btn" onClick={() => openReset(u)} title={t.users.resetPassword}>🔑</button>
                     )}
@@ -232,6 +319,63 @@ export default function UsersPage() {
                 <tr>
                   <td colSpan={7}>
                     <div className="empty-state">{t.users.empty}</div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="section-title-row" style={{ marginTop: 24 }}>
+        <span className="muted">{t.users.pendingInvitationsTitle}</span>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>{t.users.email}</th>
+                <th>{t.users.name}</th>
+                <th>{t.users.role}</th>
+                <th>{t.users.status}</th>
+                <th></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {invitations.map((inv) => (
+                <tr key={inv.id}>
+                  <td>{inv.email}</td>
+                  <td>{inv.full_name || '—'}</td>
+                  <td>{inv.role}</td>
+                  <td>
+                    <span className={`badge ${inv.status}`}>
+                      {inv.status === 'pending' && t.users.statusPending}
+                      {inv.status === 'expired' && t.users.statusExpired}
+                      {inv.status === 'accepted' && t.users.statusAccepted}
+                      {inv.status === 'revoked' && t.users.statusRevoked}
+                    </span>
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>{inv.invited_by_name ? t.users.invitedBy(inv.invited_by_name) : ''}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {inv.status !== 'accepted' && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => resendInvitation(inv.id)}>
+                        {t.users.resendInvite}
+                      </button>
+                    )}
+                    {inv.status === 'pending' && (
+                      <button className="btn btn-secondary btn-sm" style={{ marginInlineStart: 6, color: 'var(--danger)' }} onClick={() => revokeInvitation(inv.id)}>
+                        {t.users.revokeInvite}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {invitations.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <div className="empty-state">{t.users.pendingInvitationsEmpty}</div>
                   </td>
                 </tr>
               )}
@@ -257,17 +401,17 @@ export default function UsersPage() {
         >
           <form id="user-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
-              <label>{t.users.name}</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+              <label>{t.users.email}</label>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
             </div>
             <div className="field">
-              <label>{t.users.email}</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <label>{t.users.inviteNameOptional}</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="field">
               <label>{t.users.role}</label>
               <select value={role} onChange={(e) => setRole(e.target.value)}>
-                {ROLES.map((r) => (
+                {invitableRoles.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>
@@ -276,7 +420,7 @@ export default function UsersPage() {
             </div>
           </form>
           <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-            {t.users.tempPasswordHint}
+            {t.users.inviteNameHint}
           </p>
         </Modal>
       )}

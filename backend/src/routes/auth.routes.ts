@@ -9,6 +9,8 @@ import {
   resendVerification,
   forgotPassword,
   resetPassword,
+  getInvitationInfo,
+  acceptInvitation,
 } from '../controllers/auth.controller';
 import { rateLimit } from '../middleware/rateLimit';
 import { requireAuth } from '../middleware/auth';
@@ -26,5 +28,7 @@ router.post('/verify-email', authLimiter, verifyEmail);
 router.post('/resend-verification', requireAuth, authLimiter, resendVerification);
 router.post('/forgot-password', authLimiter, forgotPassword);
 router.post('/reset-password', authLimiter, resetPassword);
+router.get('/invitations/:token', authLimiter, getInvitationInfo);
+router.post('/accept-invitation', authLimiter, acceptInvitation);
 
 export default router;
