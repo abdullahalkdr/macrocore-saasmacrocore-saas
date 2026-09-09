@@ -537,4 +537,20 @@ describe('concurrency-safety source regressions', () => {
     expect(setNullCount).toBe(3); // invited_by, accepted_user_id, revoked_by
     expect(migrationSource).not.toMatch(/invited_by\s+UUID NOT NULL/);
   });
+
+  it('getInvitationInfo returns preferred_language for every status, not only the valid:true (pending) branch (live-QA fix, 2026-09-09: a revoked English invitation rendered in Arabic because the non-pending branch never sent a language at all)', () => {
+    const fnStart = authControllerSource.indexOf('export const getInvitationInfo');
+    const fnEnd = authControllerSource.indexOf('\nexport const acceptInvitation', fnStart);
+    const fnBody = authControllerSource.slice(fnStart, fnEnd);
+    expect(fnStart).toBeGreaterThan(0);
+    expect(fnEnd).toBeGreaterThan(fnStart);
+    // Both the `status !== 'pending'` (accepted/revoked/expired) branch and
+    // the final valid:true branch must include preferred_language — two
+    // occurrences of the field being set from the invitation row.
+    const preferredLangCount = (fnBody.match(/preferred_language:\s*invitation\.preferred_language/g) || []).length;
+    expect(preferredLangCount).toBe(2);
+    // The only branch allowed to omit it is the "no invitation row at all"
+    // (reason: 'invalid') case — there is nothing to read a language from.
+    expect(fnBody).toMatch(/valid:\s*false,\s*reason:\s*'invalid'\s*\}\)/);
+  });
 });

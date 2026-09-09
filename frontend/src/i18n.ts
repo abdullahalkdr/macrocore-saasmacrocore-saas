@@ -1043,8 +1043,12 @@ const en = {
     inviteNameHint: 'The invitee confirms or enters their own name when they accept — this is just a head start.',
     inviteSentNotice: (email: string) => `Invitation sent to ${email}`,
     inviteSentEmailFailedNotice: (email: string) => `Invitation created for ${email}, but the email failed to send — use Resend to try again`,
-    pendingInvitationsTitle: 'Pending invitations',
-    pendingInvitationsEmpty: 'No pending invitations.',
+    // Renamed from "Pending invitations" (live-QA fix, 2026-09-09) — this
+    // table intentionally also lists Accepted/Revoked/Expired rows, not
+    // just Pending ones, so a "Pending" heading was actively misleading.
+    // Key name kept as-is to avoid an unrelated rename churn elsewhere.
+    pendingInvitationsTitle: 'Invitations',
+    pendingInvitationsEmpty: 'No invitations yet.',
     invitedBy: (name: string) => `Invited by ${name}`,
     statusPending: 'Pending',
     statusExpired: 'Expired',
@@ -3447,8 +3451,8 @@ const ar: typeof en = {
     inviteNameHint: 'المدعو يأكد أو يدخل اسمه بنفسه وقت قبول الدعوة — هذا بس بداية.',
     inviteSentNotice: (email: string) => `تم إرسال الدعوة إلى ${email}`,
     inviteSentEmailFailedNotice: (email: string) => `تم إنشاء الدعوة لـ ${email}، بس فشل إرسال الإيميل — استخدم "إعادة إرسال" للمحاولة مرة ثانية`,
-    pendingInvitationsTitle: 'الدعوات المعلّقة',
-    pendingInvitationsEmpty: 'ما فيه دعوات معلّقة.',
+    pendingInvitationsTitle: 'الدعوات',
+    pendingInvitationsEmpty: 'ما فيه دعوات.',
     invitedBy: (name: string) => `دعاه ${name}`,
     statusPending: 'معلّقة',
     statusExpired: 'منتهية',

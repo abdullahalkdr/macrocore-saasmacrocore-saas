@@ -5,20 +5,7 @@ import { useAuthStore, AuthUser } from '../store/authStore';
 import { getDictionary } from '../i18n';
 import { Lang, isRTL } from '../store/langStore';
 import { IconBuilding, IconEye } from '../components/Icon';
-
-interface InvitationInfoResponse {
-  valid: boolean;
-  reason?: 'invalid' | 'expired' | 'revoked' | 'accepted';
-  email?: string;
-  full_name?: string | null;
-  role?: string;
-  company_name?: string | null;
-  // The inviter's language at the moment they sent/resent this invitation
-  // (decision 3) — drives which language this page itself renders in,
-  // independent of the visitor's own site-wide language toggle (review
-  // requirement: the accept page must use the invitation's own language).
-  preferred_language?: Lang;
-}
+import { deriveAcceptInvitationViewState, InvitationInfoResponse } from '../utils/acceptInvitationViewState';
 
 interface AcceptInvitationResponse {
   success: boolean;
@@ -67,17 +54,17 @@ export default function AcceptInvitationPage() {
     }
     get<InvitationInfoResponse>(`/auth/invitations/${encodeURIComponent(token)}`)
       .then((res) => {
-        if (!res.valid) {
-          setState(res.reason ?? 'invalid');
-          return;
-        }
-        if (res.preferred_language === 'en' || res.preferred_language === 'ar') {
-          setPageLang(res.preferred_language);
-        }
-        setEmail(res.email ?? '');
-        setCompanyName(res.company_name ?? null);
-        setFullName(res.full_name ?? '');
-        setState('ready');
+        // deriveAcceptInvitationViewState() applies the invitation's language
+        // BEFORE branching on valid/status — see its own comment for why
+        // that ordering matters (live-QA fix, 2026-09-09: a revoked English
+        // invitation used to render in Arabic because the old inline code
+        // only read preferred_language inside the `valid: true` branch).
+        const view = deriveAcceptInvitationViewState(res, 'ar');
+        setPageLang(view.pageLang);
+        setEmail(view.email);
+        setCompanyName(view.companyName);
+        setFullName(view.fullName);
+        setState(view.state);
       })
       .catch(() => setState('invalid'));
   }, [token]);

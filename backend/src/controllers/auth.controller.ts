@@ -660,6 +660,13 @@ export const resetPassword = asyncHandler(async (req: Request, res: Response) =>
 // revoked/unknown link per decision 8) and never returns an HTTP error for an
 // invalid token: always 200 with `valid`, so the frontend renders one of a
 // few known states instead of guessing from an error string.
+//
+// preferred_language is included whenever an invitation ROW exists — pending,
+// accepted, revoked, or expired alike (live-QA fix, 2026-09-09) — not only in
+// the `valid: true` branch. The invitation's language belongs to the
+// invitation, not to its current status; only a genuinely unknown token (no
+// row at all, `reason: 'invalid'`) has no language to give, since there is
+// nothing to read it from.
 export const getInvitationInfo = asyncHandler(async (req: Request, res: Response) => {
   const token = typeof req.params.token === 'string' ? req.params.token : '';
   const invitation = token ? await findInvitationByRawToken(token) : null;
@@ -670,7 +677,7 @@ export const getInvitationInfo = asyncHandler(async (req: Request, res: Response
 
   const status = deriveInvitationStatus(invitation);
   if (status !== 'pending') {
-    res.status(200).json({ valid: false, reason: status });
+    res.status(200).json({ valid: false, reason: status, preferred_language: invitation.preferred_language });
     return;
   }
 
