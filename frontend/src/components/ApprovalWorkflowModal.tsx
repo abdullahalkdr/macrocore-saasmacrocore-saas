@@ -4,6 +4,7 @@ import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
+import RejectReasonModal, { isFinancialModuleType } from './RejectReasonModal';
 import Tag from './Tag';
 import { IconPaperclip, IconClose } from './Icon';
 import { Attachment, AttachmentGallery, readFileAsBase64, addStagedFiles } from './Attachments';
@@ -178,6 +179,20 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
   function confirmReject() {
     setConfirmingReject(false);
     submitAction('rejected');
+  }
+
+  // Phase 4 follow-up — financial-module reject path (EXPENSE/PAYROLL/PURCHASE_ORDER).
+  // A separate function from submitAction() on purpose: submitAction() swallows its
+  // own errors into actionError (a banner behind this dialog, invisible while it's
+  // open) and always resets every action's local state, none of which RejectReasonModal
+  // needs. This one lets the API error surface INSIDE the reason modal instead, and
+  // rethrows so RejectReasonModal's own submitting/double-submit guard stays accurate.
+  async function confirmRejectWithReason(reason: string) {
+    if (!summary) return;
+    await post(`/approvals/${summary.id}/action`, { action: 'rejected', comments: reason });
+    setConfirmingReject(false);
+    loadSummary();
+    onActioned?.();
   }
 
   function confirmModify() {
@@ -532,7 +547,10 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
         </>
       )}
     </Modal>
-    {confirmingReject && (
+    {confirmingReject && isFinancialModuleType(moduleType) && (
+      <RejectReasonModal onConfirm={confirmRejectWithReason} onCancel={() => setConfirmingReject(false)} />
+    )}
+    {confirmingReject && !isFinancialModuleType(moduleType) && (
       <ConfirmDialog
         title={t.approvals.reject}
         message={t.approvals.rejectConfirm}

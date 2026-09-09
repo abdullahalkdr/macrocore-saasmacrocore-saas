@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { resolveRejectReason, REJECT_REASON_MAX_LENGTH } from '../financialApprovals';
+import { AppError } from '../../middleware/errorHandler';
 
 // ---------------------------------------------------------------------------
 // Source-text regression tests for financialApprovals.ts — resolveApprovalAudience()'s
@@ -64,5 +66,73 @@ describe('financialApprovals.ts source regressions (round 2 review fixes)', () =
     const sigMatch = source.match(/export async function fileApprovalRequest\(([^)]*)\)\s*:/s);
     expect(sigMatch).not.toBeNull();
     expect(sigMatch![1]).toContain('client?: PoolClient');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4 follow-up — resolveRejectReason(). Unlike the rest of this file
+// (which needs a live company/users/approval_requests table set and so stays
+// as source-text regression checks above), this is a plain pure function with
+// no DB/request/response involved — extracted specifically so its actual
+// 400-vs-success behavior can be exercised for real, not just grepped for in
+// the shipped source. approvals.controller.ts's actionRequest() is the only
+// caller; these are the same four behaviors it depends on.
+// ---------------------------------------------------------------------------
+describe('resolveRejectReason() — mandatory rejection reason for financial modules', () => {
+  it('throws AppError(400) when EXPENSE/PAYROLL/PURCHASE_ORDER rejection has no reason at all', () => {
+    for (const moduleType of ['EXPENSE', 'PAYROLL', 'PURCHASE_ORDER']) {
+      let caught: unknown;
+      try {
+        resolveRejectReason(moduleType, undefined);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(AppError);
+      expect((caught as AppError).statusCode).toBe(400);
+    }
+  });
+
+  it('throws AppError(400) when the reason is whitespace-only', () => {
+    let caught: unknown;
+    try {
+      resolveRejectReason('EXPENSE', '    \n\t  ');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).statusCode).toBe(400);
+  });
+
+  it('throws AppError(400) when the reason exceeds REJECT_REASON_MAX_LENGTH', () => {
+    const tooLong = 'a'.repeat(REJECT_REASON_MAX_LENGTH + 1);
+    let caught: unknown;
+    try {
+      resolveRejectReason('PAYROLL', tooLong);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).statusCode).toBe(400);
+  });
+
+  it('succeeds and returns the TRIMMED reason for a valid financial rejection', () => {
+    expect(resolveRejectReason('EXPENSE', '  Missing receipt, please resubmit.  ')).toBe('Missing receipt, please resubmit.');
+    expect(resolveRejectReason('PAYROLL', 'Amount does not match contract')).toBe('Amount does not match contract');
+    expect(resolveRejectReason('PURCHASE_ORDER', 'Wrong supplier')).toBe('Wrong supplier');
+  });
+
+  it('accepts a reason exactly at REJECT_REASON_MAX_LENGTH (boundary, not off-by-one)', () => {
+    const exact = 'a'.repeat(REJECT_REASON_MAX_LENGTH);
+    expect(resolveRejectReason('EXPENSE', exact)).toBe(exact);
+  });
+
+  it('ITSM_TICKET rejection is completely unaffected — no reason required, none returned, never throws', () => {
+    expect(resolveRejectReason('ITSM_TICKET', undefined)).toBeNull();
+    expect(resolveRejectReason('ITSM_TICKET', '')).toBeNull();
+    expect(resolveRejectReason('ITSM_TICKET', 'some reason anyway')).toBeNull();
+  });
+
+  it('an unknown/future module_type is also left alone (explicit allowlist, not a negative check)', () => {
+    expect(resolveRejectReason('SOME_FUTURE_MODULE', undefined)).toBeNull();
   });
 });

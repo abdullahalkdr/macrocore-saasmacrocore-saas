@@ -126,4 +126,47 @@ describe('approvals.controller.ts source regressions (round 2 review, point 3)',
     expect(source).toContain('noteRequest = lockedRequest;');
     expect(source).toContain('notifyMakerReturned(companyId, noteRequest, String(comments))');
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 4 follow-up — mandatory rejection-reason wiring. resolveRejectReason()
+  // itself (the actual 400-vs-success validation logic) has real executable
+  // tests in utils/__tests__/financialApprovals.test.ts; what's left to check
+  // here is the WIRING — that actionRequest() actually calls it and threads its
+  // result into the right three places (the approval_steps_log row, the ITSM
+  // branch's own log row, and the requester's rejection email) instead of the
+  // raw, untrimmed body.
+  // -------------------------------------------------------------------------
+  describe('mandatory rejection-reason wiring', () => {
+    it('calls resolveRejectReason() with the actual request.module_type, only for a rejected action', () => {
+      expect(source).toContain("const trimmedRejectReason = action === 'rejected' ? resolveRejectReason(request.module_type, comments) : null;");
+    });
+
+    it('commentsToStore falls back to the raw (untrimmed) comments whenever resolveRejectReason() returns null — approve/returned/ITSM-rejection all unaffected', () => {
+      expect(source).toContain('const commentsToStore = trimmedRejectReason !== null ? trimmedRejectReason : comments || null;');
+    });
+
+    it('the ITSM_TICKET branch\'s approval_steps_log insert uses commentsToStore (not the raw `comments || null` it used before this fix)', () => {
+      const branch = extractBranch(
+        "if (request.module_type === 'ITSM_TICKET') {\n    const steps = await getWorkflowSteps",
+        '} else {\n    // Single-step modules'
+      );
+      expect(branch).toContain('[id, request.current_step, myId, action, commentsToStore, attachmentsJson]');
+      expect(branch).not.toContain('comments || null, attachmentsJson');
+    });
+
+    it('the single-step (financial) branch\'s approval_steps_log insert also uses commentsToStore', () => {
+      const branch = extractBranch(
+        '// Single-step modules — approve/reject resolve the request immediately,',
+        "if (action === 'returned') {\n    notifyMakerReturned"
+      );
+      expect(branch).toContain('[id, lockedRequest.current_step, myId, action, commentsToStore, attachmentsJson]');
+    });
+
+    it('notifyMakerResolved() (the requester rejection email) receives the TRIMMED reason, not the raw comments', () => {
+      expect(source).toContain(
+        "notifyMakerResolved(companyId, lockedRequest, action, action === 'rejected' ? trimmedRejectReason : null).catch(() => {});"
+      );
+      expect(source).not.toContain("action === 'rejected' ? comments || null : null");
+    });
+  });
 });

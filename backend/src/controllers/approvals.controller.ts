@@ -15,6 +15,7 @@ import {
   buildAmountSnippet,
   notifyEligibleApprovers,
   computeSlaDeadline,
+  resolveRejectReason,
 } from '../utils/financialApprovals';
 import { notifyUsers } from '../utils/notifications';
 import { validateAttachments } from '../utils/attachments';
@@ -410,6 +411,22 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   const myId = await myEmployeeId(req.auth!.userId);
   if (!myId) throw new AppError(400, 'Your account is not linked to an employee record.');
 
+  // Phase 4 follow-up — financial rejection reason (explicit allowlist,
+  // MODULE_LABEL-gated). See financialApprovals.ts's resolveRejectReason() for
+  // the full reasoning -- extracted there (not inlined here) so it's a plain,
+  // directly unit-testable function instead of logic buried in this handler.
+  //
+  // Trimmed exactly once, inside resolveRejectReason() -- this is the ONLY
+  // value used from this point on for the approval_steps_log row and the
+  // requester's rejection email (commentsToStore/trimmedRejectReason below),
+  // so there is no risk of the raw, untrimmed body leaking into either place.
+  const trimmedRejectReason = action === 'rejected' ? resolveRejectReason(request.module_type, comments) : null;
+  // What actually gets written to approval_steps_log.comments for THIS action --
+  // the trimmed, validated reason for a financial rejection; the raw `comments`
+  // exactly as before for every other case (approved/returned/an ITSM rejection),
+  // unchanged and out of this fix's scope.
+  const commentsToStore = trimmedRejectReason !== null ? trimmedRejectReason : comments || null;
+
   // MIGRATION_061 -- "resubmitted" is the maker's own move after a "returned"
   // decision, and theirs ALONE: the exact inverse of every other action here, which
   // maker-checker blocks the requester from taking on their own request. Handled as
@@ -557,7 +574,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       await client.query(
         `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [id, request.current_step, myId, action, comments || null, attachmentsJson]
+        [id, request.current_step, myId, action, commentsToStore, attachmentsJson]
       );
       if (action === 'rejected') {
         // A rejection at ANY step stops the whole chain immediately — see
@@ -615,7 +632,6 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       const allowed = !!requiredPermission && (await hasPermission(req.auth!.userId, requiredPermission));
       if (!allowed) throw new AppError(403, 'You do not have permission to act on this approval request.');
     }
-
     // BUGFIX (round 2, point 3) -- row lock (FOR UPDATE) + status revalidation
     // UNDER that lock, same guarded-concurrency shape as the resubmit branch
     // above. Without this, two reviewers acting on the same pending request at
@@ -642,7 +658,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
       await client.query(
         `INSERT INTO approval_steps_log (approval_request_id, step_number, approver_id, action, comments, attachments)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-        [id, lockedRequest.current_step, myId, action, comments || null, attachmentsJson]
+        [id, lockedRequest.current_step, myId, action, commentsToStore, attachmentsJson]
       );
 
       if (action === 'returned') {
@@ -676,7 +692,7 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
     // Post-commit only -- see the header comment above.
     noteRequest = lockedRequest;
     if (action === 'approved' || action === 'rejected') {
-      notifyMakerResolved(companyId, lockedRequest, action, action === 'rejected' ? comments || null : null).catch(() => {});
+      notifyMakerResolved(companyId, lockedRequest, action, action === 'rejected' ? trimmedRejectReason : null).catch(() => {});
     }
   }
 

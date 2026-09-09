@@ -82,6 +82,37 @@ export const MODULE_LABEL: Record<string, { ar: string; en: string }> = {
   EXPENSE: { ar: 'مصروف', en: 'Expense' },
 };
 
+// Phase 4 follow-up — mandatory rejection reason for the three financial
+// modules above. Gated on MODULE_LABEL (the SAME explicit allowlist every
+// other financial-vs-ITSM branch point in this file already uses, e.g.
+// notifyEligibleApprovers' own `if (!financialLabel) return;` below) rather
+// than a `moduleType !== 'ITSM_TICKET'` negative check — a negative check
+// would silently apply this requirement to any future module_type added to
+// the approval engine later; the allowlist only ever grows on purpose.
+// ITSM_TICKET (and anything else not in MODULE_LABEL) is untouched: this
+// returns null immediately and no reason is required.
+//
+// Pulled out of approvals.controller.ts's actionRequest() as its own plain
+// function (no request/response/DB) specifically so it's directly
+// unit-testable with real inputs/outputs -- this sandbox has no network path
+// to the live Railway database (see backend/docs/SMOKE_*.js for the scripts
+// Abdullah runs himself against it), so a pure function is the only way to
+// exercise the actual 400-vs-success branches with a real assertion instead
+// of a source-text regex.
+export const REJECT_REASON_MAX_LENGTH = 1000;
+
+export function resolveRejectReason(moduleType: string, rawComments: unknown): string | null {
+  if (!MODULE_LABEL[moduleType]) return null;
+  const trimmed = String(rawComments ?? '').trim();
+  if (!trimmed) {
+    throw new AppError(400, 'A reason is required when rejecting a request.');
+  }
+  if (trimmed.length > REJECT_REASON_MAX_LENGTH) {
+    throw new AppError(400, `Rejection reason must be ${REJECT_REASON_MAX_LENGTH} characters or fewer.`);
+  }
+  return trimmed;
+}
+
 export interface LatestApproval {
   id: string;
   status: 'pending' | 'approved' | 'rejected' | 'cancelled';

@@ -6,6 +6,7 @@ import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import RejectReasonModal, { isFinancialModuleType } from '../components/RejectReasonModal';
 import Tag from '../components/Tag';
 import ApprovalWorkflowModal from '../components/ApprovalWorkflowModal';
 import { IconEye } from '../components/Icon';
@@ -136,6 +137,24 @@ export default function ApprovalsInboxPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.approvals.actionFailed);
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  // Phase 4 follow-up — financial-module reject path (EXPENSE/PAYROLL/PURCHASE_ORDER).
+  // Kept separate from confirmReject() above: that one always clears rejectTarget and
+  // the acting spinner up front (fire-and-forget UX, errors surface in the page's own
+  // error banner). RejectReasonModal instead needs the request to stay open on failure
+  // so its own error display shows the API message, and needs this to actually throw.
+  async function confirmRejectWithReason(reason: string) {
+    if (!rejectTarget) return;
+    const r = rejectTarget;
+    setActingId(r.id);
+    try {
+      await post(`/approvals/${r.id}/action`, { action: 'rejected', comments: reason });
+      setRejectTarget(null);
+      load();
     } finally {
       setActingId(null);
     }
@@ -272,7 +291,10 @@ export default function ApprovalsInboxPage() {
         />
       )}
 
-      {rejectTarget && (
+      {rejectTarget && isFinancialModuleType(rejectTarget.module_type) && (
+        <RejectReasonModal onConfirm={confirmRejectWithReason} onCancel={() => setRejectTarget(null)} />
+      )}
+      {rejectTarget && !isFinancialModuleType(rejectTarget.module_type) && (
         <ConfirmDialog
           title={t.approvals.reject}
           message={t.approvals.rejectConfirm}
