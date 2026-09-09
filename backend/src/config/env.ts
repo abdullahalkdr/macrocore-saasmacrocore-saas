@@ -41,4 +41,14 @@ export const env = {
   // value. Defaults to false (off) so this can never accidentally reach production —
   // it must be explicitly set to 'true' in a .env file to activate.
   BYPASS_PLAN_GATING: process.env.BYPASS_PLAN_GATING === 'true',
+
+  // SLA timezone incident (2026-09-09) — see claude/sla-timezone-incident-2026-09-09.md
+  // (project doc) for the full root-cause writeup. A local dev backend (nodemon,
+  // NODE_ENV=development) was left running against the PRODUCTION DATABASE_URL and its
+  // own background sweep (index.ts's setInterval) raced the real Railway deployment,
+  // corrupting live SLA state. sweepApprovalSla()/sweepEmailQueue() both now refuse to
+  // run at all unless this is explicitly 'true' — disabled by default so any local
+  // process (whatever DATABASE_URL it happens to point at) never touches the sweep
+  // queues. Railway sets this to 'true' explicitly; no local .env should ever set it.
+  ENABLE_BACKGROUND_SWEEPS: process.env.ENABLE_BACKGROUND_SWEEPS === 'true',
 };

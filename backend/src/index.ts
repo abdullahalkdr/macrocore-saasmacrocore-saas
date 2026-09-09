@@ -6,6 +6,15 @@ import { sweepApprovalSla } from './utils/approvalSla';
 app.listen(env.PORT, () => {
   console.log(`macrocore backend listening on port ${env.PORT} [${env.NODE_ENV}]`);
 
+  // SLA timezone incident (2026-09-09) — logged ONCE at startup, not once per
+  // interval tick, so this is loud on boot without spamming the log every 60s.
+  // See claude/sla-timezone-incident-2026-09-09.md (project doc).
+  console.log(
+    env.ENABLE_BACKGROUND_SWEEPS
+      ? '[startup] Background sweeps (SLA reminder/breach + email queue) are ENABLED.'
+      : '[startup] Background sweeps (SLA reminder/breach + email queue) are DISABLED — set ENABLE_BACKGROUND_SWEEPS=true to enable. This MUST be true on Railway. It must stay false/unset for any local process, especially one pointed at the production DATABASE_URL.'
+  );
+
   // Background sweeps — email delivery (the crash-safety/multi-instance-safety
   // net for enqueueEmail()'s best-effort immediate send attempt) and Phase 4
   // (Chat 2)'s Financial Approval SLA reminder/breach sweep. Both are safe to
@@ -13,7 +22,9 @@ app.listen(env.PORT, () => {
   // LOCKED) and are exported standalone specifically so a future Railway Cron
   // hitting an internal endpoint could trigger either directly — this
   // setInterval is not the durability mechanism, it's just today's trigger
-  // for it.
+  // for it. Both functions now also self-guard on env.ENABLE_BACKGROUND_SWEEPS
+  // (see their own headers) — that guard is the real safety net; this
+  // setInterval firing on a disabled instance is a harmless no-op.
   //
   // BUGFIX (round 2, point 6) — ONE setInterval drives both, not two
   // independent timers. Each task keeps its own try/catch so a failure in

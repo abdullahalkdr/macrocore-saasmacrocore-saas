@@ -848,6 +848,17 @@ export async function reconcilePendingEmailEvents(limit = 50): Promise<{ reconci
 // BEFORE claiming a fresh batch, so a job that was just reclaimed into
 // 'queued' can be picked up in the same tick rather than waiting a full cycle.
 export async function sweepEmailQueue(limit = 20): Promise<{ claimed: number; sent: number; tempFailed: number; permanentlyFailed: number }> {
+  // SLA timezone incident (2026-09-09) — guard checked FIRST, before any DB
+  // access (reclaimStuckProcessingJobs/claimBatch), so a disabled instance
+  // never claims a single job. This is what stops a local process without
+  // RESEND_API_KEY from ever marking a real production job 'dev_skipped'.
+  // See claude/sla-timezone-incident-2026-09-09.md (project doc) and
+  // config/env.ts's ENABLE_BACKGROUND_SWEEPS header. No log line here on
+  // purpose — index.ts already logs the enabled/disabled state once at
+  // startup; logging here would repeat every 60s tick.
+  if (!env.ENABLE_BACKGROUND_SWEEPS) {
+    return { claimed: 0, sent: 0, tempFailed: 0, permanentlyFailed: 0 };
+  }
   try {
     await reclaimStuckProcessingJobs();
   } catch (err) {

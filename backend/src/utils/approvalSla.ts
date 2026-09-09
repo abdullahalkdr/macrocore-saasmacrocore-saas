@@ -76,6 +76,15 @@ async function notifyRequesterDelay(row: SlaCandidateRow, cycleKey: string): Pro
 }
 
 export async function sweepApprovalSla(limit = 50): Promise<{ reminded: number; breached: number; routingFailures: number }> {
+  // SLA timezone incident (2026-09-09) — guard checked FIRST, before any pool
+  // access, so a disabled instance never opens a client/transaction at all.
+  // See claude/sla-timezone-incident-2026-09-09.md (project doc) and
+  // config/env.ts's ENABLE_BACKGROUND_SWEEPS header for the full story. No
+  // log line here on purpose — index.ts already logs the enabled/disabled
+  // state once at startup; logging here would repeat every 60s tick.
+  if (!env.ENABLE_BACKGROUND_SWEEPS) {
+    return { reminded: 0, breached: 0, routingFailures: 0 };
+  }
   const client = await pool.connect();
   let reminded = 0;
   let breached = 0;

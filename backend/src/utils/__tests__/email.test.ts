@@ -528,3 +528,40 @@ describe('SQL parameter type consistency (regression: 42P08)', () => {
     expect(offenders.join('\n\n---\n\n')).toEqual('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// SLA timezone incident (2026-09-09) — ENABLE_BACKGROUND_SWEEPS guard.
+// A local dev backend was left running against the PRODUCTION DATABASE_URL;
+// with no RESEND_API_KEY and NODE_ENV=development, its own sweepEmailQueue()
+// tick claimed real production email jobs and finalized them 'dev_skipped'
+// (see claude/sla-timezone-incident-2026-09-09.md, project doc). This checks
+// the real source (no DB connection, no mocks) rather than calling
+// sweepEmailQueue() live — a live call would hit claimBatch()'s real query,
+// which is exactly the kind of live-DB dependency this sandbox has no
+// network path for.
+describe('SLA timezone incident (2026-09-09) — ENABLE_BACKGROUND_SWEEPS guard', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../email.ts'), 'utf-8');
+
+  it('checks env.ENABLE_BACKGROUND_SWEEPS and returns BEFORE any job is claimed', () => {
+    const guardIdx = source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)');
+    const reclaimIdx = source.indexOf('await reclaimStuckProcessingJobs()');
+    const claimIdx = source.indexOf('jobs = await claimBatch(limit)');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(reclaimIdx).toBeGreaterThan(-1);
+    expect(claimIdx).toBeGreaterThan(-1);
+    // The guard must precede BOTH — reclaimStuckProcessingJobs() also touches
+    // real email_jobs rows and must not run from a disabled instance either.
+    expect(guardIdx).toBeLessThan(reclaimIdx);
+    expect(guardIdx).toBeLessThan(claimIdx);
+  });
+
+  it("the guard's early return matches sweepEmailQueue()'s own resolved shape exactly (claimed/sent/tempFailed/permanentlyFailed all 0)", () => {
+    const guardBlock = source.slice(source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)'), source.indexOf('await reclaimStuckProcessingJobs()'));
+    expect(guardBlock).toContain('{ claimed: 0, sent: 0, tempFailed: 0, permanentlyFailed: 0 }');
+  });
+
+  it('never logs inside the guarded no-op path — the enabled/disabled state is logged once at startup (index.ts), not once per 60s tick', () => {
+    const guardBlock = source.slice(source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)'), source.indexOf('await reclaimStuckProcessingJobs()'));
+    expect(guardBlock).not.toMatch(/console\.\w+\(/);
+  });
+});

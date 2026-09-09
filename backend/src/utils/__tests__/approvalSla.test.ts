@@ -112,3 +112,37 @@ describe('approvalSla.ts source regressions (round 2 review fixes)', () => {
     expect(source).toMatch(/WHERE status = 'pending' AND module_type = ANY\(\$1::text\[\]\) AND sla_deadline_at IS NOT NULL\s*\n\s*AND sla_breached_at IS NULL/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SLA timezone incident (2026-09-09) — ENABLE_BACKGROUND_SWEEPS guard.
+// A local dev backend was left running against the PRODUCTION DATABASE_URL;
+// its own sweep tick raced the real Railway deployment and corrupted live
+// SLA state (see claude/sla-timezone-incident-2026-09-09.md, project doc).
+// sweepApprovalSla() must now refuse to run at all unless this env var is
+// explicitly 'true'. Executed the same way as the rest of this describe
+// block below (source-text regression, not a live call) — actually calling
+// sweepApprovalSla() here would hit `await pool.connect()` for real, which
+// is exactly the kind of live-DB call this sandbox has no network path for
+// (and is precisely what this guard exists to prevent an unconfigured
+// process from doing against a real database).
+describe('SLA timezone incident (2026-09-09) — ENABLE_BACKGROUND_SWEEPS guard', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../approvalSla.ts'), 'utf-8');
+
+  it('checks env.ENABLE_BACKGROUND_SWEEPS and returns BEFORE any pool access', () => {
+    const guardIdx = source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)');
+    const connectIdx = source.indexOf('await pool.connect()');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(connectIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeLessThan(connectIdx);
+  });
+
+  it("the guard's early return matches sweepApprovalSla()'s own resolved shape exactly (reminded/breached/routingFailures all 0)", () => {
+    const guardBlock = source.slice(source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)'), source.indexOf('await pool.connect()'));
+    expect(guardBlock).toContain('{ reminded: 0, breached: 0, routingFailures: 0 }');
+  });
+
+  it('never logs inside the guarded no-op path — the enabled/disabled state is logged once at startup (index.ts), not once per 60s tick', () => {
+    const guardBlock = source.slice(source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)'), source.indexOf('await pool.connect()'));
+    expect(guardBlock).not.toMatch(/console\.\w+\(/);
+  });
+});
