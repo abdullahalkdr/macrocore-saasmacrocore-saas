@@ -18,8 +18,12 @@ import {
   isWorkerFinalizeAllowed,
   STATUS_RANK,
   decideReconcileOutcome,
+  ticketLifecycleEmailHtml,
+  ticketReplyEmailHtml,
+  ticketSlaEmailHtml,
   type EmailCategory,
   type EmailJobStatus,
+  type EmailLang,
 } from '../email';
 
 // ---------------------------------------------------------------------------
@@ -563,5 +567,334 @@ describe('SLA timezone incident (2026-09-09) — ENABLE_BACKGROUND_SWEEPS guard'
   it('never logs inside the guarded no-op path — the enabled/disabled state is logged once at startup (index.ts), not once per 60s tick', () => {
     const guardBlock = source.slice(source.indexOf('if (!env.ENABLE_BACKGROUND_SWEEPS)'), source.indexOf('await reclaimStuckProcessingJobs()'));
     expect(guardBlock).not.toMatch(/console\.\w+\(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpdesk / ITSM templates (Chat 3B, Stage 1). No controller call site
+// exists yet — these are pure unit tests of the template functions
+// themselves (ticketLifecycleEmailHtml / ticketReplyEmailHtml /
+// ticketSlaEmailHtml), matching the verification list agreed for this stage.
+// ---------------------------------------------------------------------------
+const LINK = 'https://app.macrocore.io/support?ticket=abc-123';
+const LANGS: EmailLang[] = ['ar', 'en'];
+const LIFECYCLE_VARIANTS = ['created', 'assigned', 'status_changed', 'resolved', 'closed', 'reopened'] as const;
+
+describe('resolveSenderFrom / resolveReplyTo — helpdesk category', () => {
+  it("gives 'helpdesk' a notify.macrocore.io sender identity, same domain as every other category", () => {
+    expect(resolveSenderFrom('helpdesk')).toMatch(/@notify\.macrocore\.io>?$/);
+  });
+
+  it("routes 'helpdesk' replies to support@macrocore.io (reuses the existing support mailbox, no new inbox)", () => {
+    expect(resolveReplyTo('helpdesk')).toBe('support@macrocore.io');
+  });
+
+  it('adding the helpdesk category left every previously-tested category unchanged', () => {
+    const categories: EmailCategory[] = ['verification', 'password_reset', 'security', 'invitation', 'approval', 'test'];
+    for (const category of categories) {
+      expect(resolveSenderFrom(category)).toMatch(/@notify\.macrocore\.io>?$/);
+    }
+    expect(resolveReplyTo('security')).toBeUndefined();
+  });
+});
+
+describe('ticketLifecycleEmailHtml', () => {
+  it('renders every lifecycle variant in both Arabic and English with a distinct header, body and CTA', () => {
+    for (const variant of LIFECYCLE_VARIANTS) {
+      const ar = ticketLifecycleEmailHtml({
+        lang: 'ar',
+        ticketNumber: 'GEN-2609-0001',
+        isHrSensitive: false,
+        ticketSubject: null,
+        variant,
+        link: LINK,
+      });
+      const en = ticketLifecycleEmailHtml({
+        lang: 'en',
+        ticketNumber: 'GEN-2609-0001',
+        isHrSensitive: false,
+        ticketSubject: null,
+        variant,
+        link: LINK,
+      });
+      expect(ar.html).toContain('dir="rtl"');
+      expect(en.html).toContain('dir="ltr"');
+      expect(ar.html).not.toBe(en.html);
+      expect(ar.subject).not.toBe(en.subject);
+      // Every variant must carry its own ticket reference and CTA link.
+      expect(ar.subject).toContain('GEN-2609-0001');
+      expect(en.subject).toContain('GEN-2609-0001');
+      expect(ar.html).toContain(LINK);
+      expect(en.html).toContain(LINK);
+    }
+  });
+
+  it('embeds the exact ticket number (no subject) in both subject and body when no ticketSubject is given', () => {
+    const { subject, html } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0042',
+      isHrSensitive: false,
+      ticketSubject: null,
+      variant: 'created',
+      link: LINK,
+    });
+    expect(subject).toBe('Ticket received #GEN-2609-0042');
+    expect(html).toContain('#GEN-2609-0042');
+  });
+
+  it('status_changed includes the bilingual statusLabel text when provided, in the matching language only', () => {
+    const statusLabel = { en: 'In Progress', ar: 'قيد التنفيذ' };
+    const en = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: null,
+      variant: 'status_changed',
+      link: LINK,
+      statusLabel,
+    });
+    const ar = ticketLifecycleEmailHtml({
+      lang: 'ar',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: null,
+      variant: 'status_changed',
+      link: LINK,
+      statusLabel,
+    });
+    expect(en.html).toContain('In Progress');
+    expect(en.html).not.toContain('قيد التنفيذ');
+    expect(ar.html).toContain('قيد التنفيذ');
+    expect(ar.html).not.toContain('In Progress');
+  });
+
+  it('status_changed still renders a sensible body when no statusLabel is given (falls back to the generic "was updated" copy)', () => {
+    const { html } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: null,
+      variant: 'status_changed',
+      link: LINK,
+    });
+    expect(html).toContain('status was updated');
+  });
+
+  it('every CTA link in every variant/language exactly reproduces the passed-in link', () => {
+    for (const variant of LIFECYCLE_VARIANTS) {
+      for (const lang of LANGS) {
+        const { html } = ticketLifecycleEmailHtml({
+          lang,
+          ticketNumber: 'GEN-2609-0001',
+          isHrSensitive: false,
+          ticketSubject: null,
+          variant,
+          link: LINK,
+        });
+        expect(html).toContain(`href="${LINK}"`);
+      }
+    }
+  });
+});
+
+describe('ticketReplyEmailHtml', () => {
+  it('renders both languages with the ticket reference and the exact CTA link, and never includes any reply message text (no such parameter exists)', () => {
+    for (const lang of LANGS) {
+      const { subject, html } = ticketReplyEmailHtml({
+        lang,
+        ticketNumber: 'GEN-2609-0001',
+        isHrSensitive: false,
+        ticketSubject: null,
+        link: LINK,
+      });
+      expect(subject).toContain('GEN-2609-0001');
+      expect(html).toContain(`href="${LINK}"`);
+    }
+    const ar = ticketReplyEmailHtml({ lang: 'ar', ticketNumber: 'GEN-2609-0001', isHrSensitive: false, ticketSubject: null, link: LINK });
+    const en = ticketReplyEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', isHrSensitive: false, ticketSubject: null, link: LINK });
+    expect(ar.html).toContain('dir="rtl"');
+    expect(en.html).toContain('dir="ltr"');
+    expect(ar.subject).not.toBe(en.subject);
+  });
+});
+
+describe('ticketSlaEmailHtml', () => {
+  it('renders warning and breach for both response and resolution SLA types, in both languages, with the exact CTA link', () => {
+    const severities: Array<'warning' | 'breach'> = ['warning', 'breach'];
+    const slaTypes: Array<'response' | 'resolution'> = ['response', 'resolution'];
+    for (const severity of severities) {
+      for (const slaType of slaTypes) {
+        for (const lang of LANGS) {
+          const { subject, html } = ticketSlaEmailHtml({
+            lang,
+            ticketNumber: 'GEN-2609-0001',
+            severity,
+            slaType,
+            link: LINK,
+          });
+          expect(subject).toContain('GEN-2609-0001');
+          expect(html).toContain(`href="${LINK}"`);
+        }
+      }
+    }
+  });
+
+  it('renders escalated in both languages regardless of slaType, with the exact CTA link', () => {
+    for (const lang of LANGS) {
+      const { subject, html } = ticketSlaEmailHtml({ lang, ticketNumber: 'GEN-2609-0001', severity: 'escalated', link: LINK });
+      expect(subject).toContain('GEN-2609-0001');
+      expect(html).toContain(`href="${LINK}"`);
+    }
+    // slaType is ignored/irrelevant for 'escalated' — passing one changes nothing.
+    const withoutType = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', link: LINK });
+    const withType = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', slaType: 'response', link: LINK });
+    expect(withoutType.subject).toBe(withType.subject);
+    expect(withoutType.html).toBe(withType.html);
+  });
+
+  it('warning/response and warning/resolution produce distinct copy (the SLA type label actually varies the output)', () => {
+    const response = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'warning', slaType: 'response', link: LINK });
+    const resolution = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'warning', slaType: 'resolution', link: LINK });
+    expect(response.html).not.toBe(resolution.html);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HR-sensitive ticket subject protection — structural, not caller-dependent.
+// isHrSensitive: true must discard ticketSubject internally, before it ever
+// reaches the returned `subject` string OR the HTML body, even when a
+// non-null ticketSubject IS passed in (the exact mistake a future caller
+// could otherwise make).
+// ---------------------------------------------------------------------------
+describe('HR-sensitive ticket subject protection', () => {
+  const sensitiveSubject = 'Harassment complaint against my manager';
+
+  it('ticketLifecycleEmailHtml never leaks ticketSubject into the subject line or HTML body when isHrSensitive is true, for every variant/language', () => {
+    for (const variant of LIFECYCLE_VARIANTS) {
+      for (const lang of LANGS) {
+        const { subject, html } = ticketLifecycleEmailHtml({
+          lang,
+          ticketNumber: 'GEN-2609-0001',
+          isHrSensitive: true,
+          ticketSubject: sensitiveSubject,
+          variant,
+          link: LINK,
+        });
+        expect(subject).not.toContain(sensitiveSubject);
+        expect(subject).not.toContain('Harassment');
+        expect(html).not.toContain(sensitiveSubject);
+        expect(html).not.toContain('Harassment');
+        // The ticket reference must fall back to the bare "#ticketNumber" form
+        // (no " — <fragment>" suffix) rather than a redacted placeholder that
+        // could itself hint something was hidden.
+        expect(subject).toContain('#GEN-2609-0001');
+      }
+    }
+  });
+
+  it('ticketReplyEmailHtml never leaks ticketSubject when isHrSensitive is true', () => {
+    const { subject, html } = ticketReplyEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: true,
+      ticketSubject: sensitiveSubject,
+      link: LINK,
+    });
+    expect(subject).not.toContain(sensitiveSubject);
+    expect(html).not.toContain(sensitiveSubject);
+  });
+
+  it('the exact same ticketSubject IS shown (safely escaped) when isHrSensitive is false — proving the gate is the isHrSensitive flag, not some property of the subject text itself', () => {
+    const { subject, html } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: sensitiveSubject,
+      variant: 'created',
+      link: LINK,
+    });
+    expect(subject).toContain(sensitiveSubject);
+    expect(html).toContain(sensitiveSubject);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-HR-sensitive ticket subject: HTML escaping (body) vs. no escaping
+// (plain-text Subject: header) — same underlying ticketSubject, two output
+// channels, two different safety rules.
+// ---------------------------------------------------------------------------
+describe('non-HR ticket subject: HTML escaping vs. plain-text subject', () => {
+  it('HTML-escapes a dangerous ticket subject in the HTML body but leaves the plain-text subject line un-escaped', () => {
+    const dangerous = '<script>alert(1)</script> & "quoted" \'stuff\'';
+    const { subject, html } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: dangerous,
+      variant: 'created',
+      link: LINK,
+    });
+    // Plain-text Subject: header — raw characters preserved, no entity encoding.
+    expect(subject).toContain(dangerous);
+    // HTML body — the same text must be escaped, never appear as raw markup.
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('&amp;');
+    expect(html).toContain('&quot;');
+  });
+
+  it('truncates a ticket subject longer than 80 characters with an ellipsis, identically in both the plain subject and the escaped HTML body', () => {
+    const longSubject = 'A'.repeat(120);
+    const { subject, html } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: longSubject,
+      variant: 'created',
+      link: LINK,
+    });
+    expect(subject).not.toContain('A'.repeat(120));
+    expect(subject).toContain('…');
+    expect(html).toContain('…');
+    // 79 raw chars + the ellipsis marker = the 80-char cap.
+    expect(subject).toContain('A'.repeat(79) + '…');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plain-text email Subject: header safety — CR/LF/control-character stripping
+// (header-injection prevention). This must hold for the returned `subject`
+// string even though it is deliberately NEVER HTML-escaped.
+// ---------------------------------------------------------------------------
+describe('plain-text email Subject: header — CR/LF/control-character safety', () => {
+  it('strips CR, LF and other control characters out of ticketSubject before it reaches the returned subject string', () => {
+    const injected = 'Refund\r\nBcc: attacker@evil.example\nX-Injected: true\tend';
+    const { subject } = ticketLifecycleEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: injected,
+      variant: 'created',
+      link: LINK,
+    });
+    expect(subject).not.toMatch(/[\r\n\t]/);
+    // eslint-disable-next-line no-control-regex
+    expect(subject).not.toMatch(/[\x00-\x1F\x7F]/);
+    // The visible words survive — only the injection-capable characters and
+    // the collapsed whitespace runs they left behind are removed.
+    expect(subject).toContain('Refund');
+    expect(subject).toContain('Bcc: attacker@evil.example');
+  });
+
+  it('collapses the stripped control characters to single spaces rather than deleting words together', () => {
+    const injected = 'Wifi\r\nnot working';
+    const { subject } = ticketReplyEmailHtml({
+      lang: 'en',
+      ticketNumber: 'GEN-2609-0001',
+      isHrSensitive: false,
+      ticketSubject: injected,
+      link: LINK,
+    });
+    expect(subject).toContain('Wifi not working');
   });
 });

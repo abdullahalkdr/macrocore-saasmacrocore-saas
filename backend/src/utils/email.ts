@@ -4,11 +4,15 @@ import { env } from '../config/env';
 
 export type EmailLang = 'ar' | 'en';
 
-// Every transactional category this app sends. Chat 2 (Helpdesk/SLA) and
-// Chat 3 (Billing/Subscriptions) extend this union and CATEGORY_FROM below when
-// they add their own categories — never invent a second sender-identity or
-// queue mechanism, this one is meant to be shared.
-export type EmailCategory = 'verification' | 'password_reset' | 'security' | 'invitation' | 'approval' | 'test';
+// Every transactional category this app sends. Chat 3B (Helpdesk/ITSM,
+// Stage 1) adds 'helpdesk' below. A future chat extending this further
+// should do the same — extend this union and CATEGORY_FROM together, never
+// invent a second sender-identity or queue mechanism, this one is meant to
+// be shared. (Corrected 2026-09-10: this comment previously named "Chat 2"
+// as the Helpdesk/SLA work and "Chat 3" as Billing/Subscriptions — stale
+// numbering from an earlier plan. Chat 2 actually shipped Financial
+// Approvals; Helpdesk/ITSM is Chat 3B.)
+export type EmailCategory = 'verification' | 'password_reset' | 'security' | 'invitation' | 'approval' | 'helpdesk' | 'test';
 
 export type EmailJobStatus =
   | 'queued'
@@ -70,6 +74,8 @@ const CATEGORY_FROM: Record<EmailCategory, string> = {
   security: 'macrocore Security <security@notify.macrocore.io>',
   invitation: 'macrocore <invitations@notify.macrocore.io>',
   approval: 'macrocore Approvals <approvals@notify.macrocore.io>',
+  // Chat 3B, Stage 1 — DECIDED sender identity (Helpdesk/ITSM email work).
+  helpdesk: 'Macrocore Support <helpdesk@notify.macrocore.io>',
   test: 'macrocore <verification@notify.macrocore.io>',
 };
 
@@ -86,6 +92,8 @@ const CATEGORY_REPLY_TO: Partial<Record<EmailCategory, string>> = {
   password_reset: SUPPORT_REPLY_TO,
   invitation: SUPPORT_REPLY_TO,
   approval: SUPPORT_REPLY_TO,
+  // Chat 3B, Stage 1 — same shared support mailbox, reused rather than a new one.
+  helpdesk: SUPPORT_REPLY_TO,
 };
 
 export function resolveSenderFrom(category: EmailCategory): string {
@@ -1365,4 +1373,329 @@ export function approvalRoutingFailureEmailHtml(lang: EmailLang, label: Bilingua
     `,
     lang
   );
+}
+
+// ========================================================================
+// Helpdesk / ITSM templates (Chat 3B, Stage 1). Category 'helpdesk'
+// (CATEGORY_FROM/CATEGORY_REPLY_TO above). NO controller call site yet —
+// nothing in supportTickets.controller.ts / itsmApprovals.ts calls
+// enqueueEmail() with these outputs. That's Stage 3 (Chat 3B), gated on its
+// own approval. This stage builds and unit-tests the templates only.
+//
+// CTA contract: every function below takes a fully-built `link` string, same
+// convention as every template above it (see approvalSla.ts building
+// `${env.FRONTEND_URL}/approvals` and passing it in) — this file never reads
+// env.FRONTEND_URL itself. The Stage 3 call site is responsible for building
+// `${env.FRONTEND_URL}/support?ticket=<ticketId>` — the existing frontend
+// deep-link contract — before calling any function here.
+//
+// Content-safety, enforced structurally, not by caller discipline:
+//   - support_tickets.description and ticket_replies.message are NEVER
+//     accepted as a parameter anywhere in this section — there is no input
+//     to leak, because there is no such parameter to pass one through.
+//   - ticket_number is a server-generated formatted code (e.g.
+//     GEN-2609-0001, see MIGRATION_057), not user-controlled free text —
+//     safe to interpolate raw, same as requestNumber/numberSuffixOf() above.
+//   - ticket_subject IS user-controlled free text (the ticket creator's own
+//     words). It is used in two different output positions with two
+//     different safety rules — see normalizeTicketSubject()/
+//     truncateTicketSubject() below for why the plain-text email Subject:
+//     header is never HTML-escaped while the HTML body copy always is.
+//   - isHrSensitive is a required, explicit boolean on every function that
+//     ever accepts a ticketSubject — when true, the subject is discarded
+//     internally (never reaches the returned `subject` string OR the HTML
+//     body) regardless of what was passed in. A future Stage 3 call site
+//     cannot get this wrong by passing subject: null and forgetting the
+//     flag, or vice versa — the gate lives here, once.
+//   - ticketSlaEmailHtml never accepts a ticketSubject parameter at all —
+//     SLA warning/breach/escalation carry no ticket content beyond the
+//     ticket number by design (see this file's Stage 1 scope notes), so
+//     there is structurally nothing for it to leak.
+// ========================================================================
+
+const TICKET_SUBJECT_MAX_LEN = 80;
+
+// Shared first step for BOTH output positions below: strip CR/LF/tab/other
+// C0 control characters and DEL, then collapse runs of whitespace. This is
+// what keeps a raw newline in a user-supplied ticket subject from ever
+// reaching the plain-text email Subject: header, where it could inject an
+// extra mail header (classic header-injection surface) — not a decorative
+// cleanup, the one place in this file where the OUTPUT CHANNEL itself
+// (a raw SMTP header) is what's being defended, not markup injection.
+function normalizeTicketSubject(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function truncateTicketSubject(normalized: string): string {
+  return normalized.length > TICKET_SUBJECT_MAX_LEN ? `${normalized.slice(0, TICKET_SUBJECT_MAX_LEN - 1)}…` : normalized;
+}
+
+// Ticket number + optional subject fragment, e.g. " #GEN-2609-0001" or
+// " #GEN-2609-0001 — Printer not working". `subjectFragment` must already be
+// normalized+truncated (and, for the HTML position, escaped) by the caller —
+// this function only assembles the reference string, it applies no safety
+// transform of its own.
+function buildTicketRef(ticketNumber: string, subjectFragment: string | null): string {
+  return subjectFragment ? ` #${ticketNumber} — ${subjectFragment}` : ` #${ticketNumber}`;
+}
+
+// Derives the two safe subject fragments (plain-text-safe for the email
+// Subject: header, HTML-escaped for the body) from one raw ticketSubject —
+// or (null, null) when the ticket is HR-sensitive or no subject was given.
+// This is the ONE place isHrSensitive is consulted for subject content;
+// every caller below goes through this rather than checking the flag itself.
+function resolveTicketSubjectFragments(
+  isHrSensitive: boolean,
+  ticketSubject: string | null
+): { plain: string | null; html: string | null } {
+  if (isHrSensitive || !ticketSubject) return { plain: null, html: null };
+  const normalized = truncateTicketSubject(normalizeTicketSubject(ticketSubject));
+  if (!normalized) return { plain: null, html: null };
+  return { plain: normalized, html: escapeHtml(normalized) };
+}
+
+type LifecycleVariant = 'created' | 'assigned' | 'status_changed' | 'resolved' | 'closed' | 'reopened';
+
+const LIFECYCLE_COPY: Record<
+  LifecycleVariant,
+  {
+    headerEn: string;
+    headerAr: string;
+    bodyEn: (ref: string, statusText?: string) => string;
+    bodyAr: (ref: string, statusText?: string) => string;
+    ctaEn: string;
+    ctaAr: string;
+    subjectEn: (ref: string) => string;
+    subjectAr: (ref: string) => string;
+  }
+> = {
+  created: {
+    headerEn: 'Ticket received 🎫',
+    headerAr: 'تم استلام تذكرتك 🎫',
+    bodyEn: (ref) => `Your support ticket${ref} was received and is being reviewed. You'll get an email as soon as there's an update.`,
+    bodyAr: (ref) => `تم استلام تذكرة الدعم${ref} وجاري مراجعتها. بنرسل لك إيميل أول ما يصير أي تحديث.`,
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket received${ref}`,
+    subjectAr: (ref) => `تم استلام تذكرتك${ref}`,
+  },
+  assigned: {
+    headerEn: 'Ticket assigned to you 🧑‍💻',
+    headerAr: 'تم إسناد التذكرة لك 🧑‍💻',
+    bodyEn: (ref) => `Support ticket${ref} has been assigned to you.`,
+    bodyAr: (ref) => `تم إسناد تذكرة الدعم${ref} لك.`,
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket assigned to you${ref}`,
+    subjectAr: (ref) => `تم إسناد تذكرة لك${ref}`,
+  },
+  status_changed: {
+    headerEn: 'Ticket status updated 🔄',
+    headerAr: 'تحديث حالة التذكرة 🔄',
+    bodyEn: (ref, statusText) => (statusText ? `Support ticket${ref} status changed to "${statusText}".` : `Support ticket${ref} status was updated.`),
+    bodyAr: (ref, statusText) => (statusText ? `تم تحديث حالة تذكرة الدعم${ref} إلى "${statusText}".` : `تم تحديث حالة تذكرة الدعم${ref}.`),
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket status updated${ref}`,
+    subjectAr: (ref) => `تحديث حالة التذكرة${ref}`,
+  },
+  resolved: {
+    headerEn: 'Ticket resolved ✅',
+    headerAr: 'تم حل التذكرة ✅',
+    bodyEn: (ref) => `Support ticket${ref} has been marked resolved.`,
+    bodyAr: (ref) => `تم وضع تذكرة الدعم${ref} كـ «محلولة».`,
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket resolved${ref}`,
+    subjectAr: (ref) => `تم حل تذكرتك${ref}`,
+  },
+  closed: {
+    headerEn: 'Ticket closed 📁',
+    headerAr: 'تم إغلاق التذكرة 📁',
+    bodyEn: (ref) => `Support ticket${ref} has been closed.`,
+    bodyAr: (ref) => `تم إغلاق تذكرة الدعم${ref}.`,
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket closed${ref}`,
+    subjectAr: (ref) => `تم إغلاق تذكرتك${ref}`,
+  },
+  reopened: {
+    headerEn: 'Ticket reopened 🔓',
+    headerAr: 'تم إعادة فتح التذكرة 🔓',
+    bodyEn: (ref) => `Support ticket${ref} was reopened.`,
+    bodyAr: (ref) => `تم إعادة فتح تذكرة الدعم${ref}.`,
+    ctaEn: 'View ticket',
+    ctaAr: 'عرض التذكرة',
+    subjectEn: (ref) => `Ticket reopened${ref}`,
+    subjectAr: (ref) => `تم إعادة فتح تذكرتك${ref}`,
+  },
+};
+
+export interface TicketLifecycleParams {
+  lang: EmailLang;
+  ticketNumber: string;
+  // Required, explicit — see this section's own header comment on why this
+  // is never inferred from a nullable ticketSubject alone.
+  isHrSensitive: boolean;
+  ticketSubject: string | null;
+  variant: LifecycleVariant;
+  link: string;
+  // 'status_changed' only — a fixed, server-side bilingual label (one of
+  // support_tickets.status's four values), never user-controlled free text,
+  // so it needs no escaping/normalization of its own.
+  statusLabel?: BilingualLabel;
+}
+
+// Covers: ticket created, assigned, status changed (open<->in_progress),
+// resolved, closed, reopened — six business events sharing one layout
+// (header line + one sentence + CTA), consolidated into one function per
+// Chat 3B Stage 1's "reuse parameterized templates" instruction. Returns
+// { subject, html } as a pair so the HR-sensitivity gate above governs both
+// the actual outbound email Subject: header and the HTML body from the same
+// code path — a caller cannot build a leaking subject line even by mistake,
+// because it never gets the raw ticketSubject back.
+export function ticketLifecycleEmailHtml(params: TicketLifecycleParams): { subject: string; html: string } {
+  const { lang, ticketNumber, isHrSensitive, ticketSubject, variant, link, statusLabel } = params;
+  const copy = LIFECYCLE_COPY[variant];
+  const fragments = resolveTicketSubjectFragments(isHrSensitive, ticketSubject);
+  const plainRef = buildTicketRef(ticketNumber, fragments.plain);
+  const htmlRef = buildTicketRef(ticketNumber, fragments.html);
+  const statusText = statusLabel ? (lang === 'en' ? statusLabel.en : statusLabel.ar) : undefined;
+
+  const subject = lang === 'en' ? copy.subjectEn(plainRef) : copy.subjectAr(plainRef);
+  const header = lang === 'en' ? copy.headerEn : copy.headerAr;
+  const bodyText = lang === 'en' ? copy.bodyEn(htmlRef, statusText) : copy.bodyAr(htmlRef, statusText);
+  const ctaLabel = lang === 'en' ? copy.ctaEn : copy.ctaAr;
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">${header}</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">${bodyText}</p>
+      ${ctaButton(link, ctaLabel, lang)}
+    `,
+    lang
+  );
+  return { subject, html };
+}
+
+export interface TicketReplyParams {
+  lang: EmailLang;
+  ticketNumber: string;
+  isHrSensitive: boolean;
+  ticketSubject: string | null;
+  link: string;
+}
+
+// Symmetric — used for BOTH a staff reply reaching the requester and a
+// requester reply reaching the assignee/fallback (Stage 2 decides who; this
+// function doesn't know or care which direction it's being used for). Never
+// includes the reply's own message text — see this section's header comment.
+export function ticketReplyEmailHtml(params: TicketReplyParams): { subject: string; html: string } {
+  const { lang, ticketNumber, isHrSensitive, ticketSubject, link } = params;
+  const fragments = resolveTicketSubjectFragments(isHrSensitive, ticketSubject);
+  const plainRef = buildTicketRef(ticketNumber, fragments.plain);
+  const htmlRef = buildTicketRef(ticketNumber, fragments.html);
+
+  const subject = lang === 'en' ? `New reply on your ticket${plainRef}` : `رد جديد على تذكرتك${plainRef}`;
+  const html = emailShell(
+    lang === 'en'
+      ? `
+        <p style="font-size: 15px; margin: 0 0 4px;">New reply 💬</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">There's a new reply on support ticket${htmlRef}.</p>
+        ${ctaButton(link, 'View ticket', lang)}
+      `
+      : `
+        <p style="font-size: 15px; margin: 0 0 4px;">رد جديد 💬</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">فيه رد جديد على تذكرة الدعم${htmlRef}.</p>
+        ${ctaButton(link, 'عرض التذكرة', lang)}
+      `,
+    lang
+  );
+  return { subject, html };
+}
+
+const SLA_TYPE_LABEL: Record<'response' | 'resolution', BilingualLabel> = {
+  response: { en: 'response', ar: 'الاستجابة' },
+  resolution: { en: 'resolution', ar: 'الحل' },
+};
+
+export interface TicketSlaParams {
+  lang: EmailLang;
+  ticketNumber: string;
+  severity: 'warning' | 'breach' | 'escalated';
+  // Required for 'warning'/'breach', ignored for 'escalated' — today's
+  // escalation logic (supportTickets.controller.ts's slaReport(), and its
+  // planned Stage 5 sweepTicketSla() successor) only ever escalates off a
+  // response-SLA breach, never a resolution-SLA one, so there is no
+  // resolution-escalated case to label.
+  slaType?: 'response' | 'resolution';
+  link: string;
+}
+
+// Covers SLA warning, SLA breach (response or resolution), and escalation —
+// deliberately carries NO ticketSubject/isHrSensitive parameter at all: this
+// family shows only the ticket number, by design (see this section's header
+// comment), so there is nothing here for HR-sensitivity to gate.
+export function ticketSlaEmailHtml(params: TicketSlaParams): { subject: string; html: string } {
+  const { lang, ticketNumber, severity, slaType, link } = params;
+  const ref = ` #${ticketNumber}`;
+  const typeLabel = slaType ? SLA_TYPE_LABEL[slaType] : null;
+  const typeText = typeLabel ? (lang === 'en' ? typeLabel.en : typeLabel.ar) : '';
+
+  if (severity === 'escalated') {
+    const subject = lang === 'en' ? `Ticket escalated${ref}` : `تم تصعيد التذكرة${ref}`;
+    const html = emailShell(
+      lang === 'en'
+        ? `
+          <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">Ticket escalated 🚨</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Support ticket${ref} has been escalated and needs attention now.</p>
+          ${ctaButton(link, 'Review ticket now', lang)}
+        `
+        : `
+          <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">تم تصعيد التذكرة 🚨</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم تصعيد تذكرة الدعم${ref} وتحتاج إجراء فوري.</p>
+          ${ctaButton(link, 'مراجعة التذكرة الآن', lang)}
+        `,
+      lang
+    );
+    return { subject, html };
+  }
+
+  if (severity === 'warning') {
+    const subject = lang === 'en' ? `SLA reminder — ticket${ref}` : `تذكير SLA — تذكرة${ref}`;
+    const html = emailShell(
+      lang === 'en'
+        ? `
+          <p style="font-size: 15px; margin: 0 0 4px;">SLA reminder ⏰</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Support ticket${ref} is approaching its ${typeText} deadline.</p>
+          ${ctaButton(link, 'Review ticket', lang)}
+        `
+        : `
+          <p style="font-size: 15px; margin: 0 0 4px;">تذكير SLA ⏰</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تذكرة الدعم${ref} تقترب من مهلة ${typeText}.</p>
+          ${ctaButton(link, 'مراجعة التذكرة', lang)}
+        `,
+      lang
+    );
+    return { subject, html };
+  }
+
+  // severity === 'breach'
+  const subject = lang === 'en' ? `Overdue — ticket${ref}` : `تذكرة متأخرة${ref}`;
+  const html = emailShell(
+    lang === 'en'
+      ? `
+        <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">Overdue ticket 🚨</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Support ticket${ref} has passed its ${typeText} deadline and needs action now.</p>
+        ${ctaButton(link, 'Review ticket now', lang)}
+      `
+      : `
+        <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">تذكرة متأخرة 🚨</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تجاوزت تذكرة الدعم${ref} مهلة ${typeText} وتحتاج إجراء فوري.</p>
+        ${ctaButton(link, 'مراجعة التذكرة الآن', lang)}
+      `,
+    lang
+  );
+  return { subject, html };
 }
