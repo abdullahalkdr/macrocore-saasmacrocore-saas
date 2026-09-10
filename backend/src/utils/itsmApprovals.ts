@@ -1,6 +1,55 @@
 import { pool } from '../db/pool';
 import { notifyRoles, notifyUsers } from './notifications';
+import { hasPermission, usersWithPermission } from './permissions';
 import { generateApprovalRequestNumber } from './sequences';
+
+// One definition for every ITSM read/action/notification path. A ticket may be
+// marked sensitive by the legacy category string, the legacy category row, or
+// the current Service Catalog request type; dropping any one widens access.
+export const HR_TICKET_CATEGORIES = ['leave', 'grievance', 'document_request', 'payroll'];
+
+export interface ItsmTicketAccessContext {
+  request_type_id: string | null;
+  created_by: string;
+  category: string;
+  category_is_hr_sensitive?: boolean;
+  request_type_is_hr_sensitive?: boolean;
+}
+
+export function isHrSensitiveTicket(ticket: ItsmTicketAccessContext): boolean {
+  return (
+    HR_TICKET_CATEGORIES.includes(ticket.category) ||
+    ticket.category_is_hr_sensitive === true ||
+    ticket.request_type_is_hr_sensitive === true
+  );
+}
+
+export async function getItsmTicketAccessContext(companyId: string, ticketId: string): Promise<ItsmTicketAccessContext | null> {
+  const result = await pool.query(
+    `SELECT t.request_type_id, t.created_by, t.category,
+            COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
+            COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive
+     FROM support_tickets t
+     LEFT JOIN ticket_categories tc ON tc.id = t.category_id AND tc.company_id = t.company_id
+     LEFT JOIN service_request_types rt ON rt.id = t.request_type_id AND rt.company_id = t.company_id
+     WHERE t.id = $1 AND t.company_id = $2`,
+    [ticketId, companyId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// Normal ticket visibility: the requester always sees their own ticket; plain
+// employees see no coworkers' tickets; managers/admins need the explicit HR
+// permission before an HR-sensitive ticket becomes visible.
+export async function canAccessTicket(
+  auth: { userId: string; role: string },
+  ticket: ItsmTicketAccessContext
+): Promise<boolean> {
+  if (ticket.created_by === auth.userId) return true;
+  if (auth.role === 'employee') return false;
+  if (isHrSensitiveTicket(ticket)) return hasPermission(auth.userId, 'view_hr_tickets');
+  return true;
+}
 
 // MIGRATION_056 (legacy) + MIGRATION_072 (current) — the ITSM/Helpdesk ticketing
 // module's approval chain, shared between approvals.controller.ts (the generic
@@ -70,11 +119,7 @@ export async function getWorkflowSteps(requestTypeId: string | null): Promise<Wo
 // getApprovalSummary, this file's own getItsmApprovalSummary) need "which request type
 // is this ticket's chain for" before they can resolve its steps.
 export async function getTicketRequestTypeId(companyId: string, ticketId: string): Promise<string | null> {
-  const result = await pool.query(
-    'SELECT request_type_id FROM support_tickets WHERE id = $1 AND company_id = $2',
-    [ticketId, companyId]
-  );
-  return result.rows[0]?.request_type_id ?? null;
+  return (await getItsmTicketAccessContext(companyId, ticketId))?.request_type_id ?? null;
 }
 
 export interface StepEligibility {
@@ -153,14 +198,52 @@ export async function resolveItsmStepEligibility(
   return { userIds: jr.rows.map((r) => r.id), allowAnyManager: true };
 }
 
-// Admin can always act, on any step, regardless of resolution — universal safety
-// valve. Otherwise: a specifically-resolved approver must match by user id, or (when
-// nobody specific was resolved) any admin/manager may stand in.
+// Base step resolution rule. isEligibleForItsmStep() applies maker-checker and the
+// HR-sensitive permission first, then delegates here for the admin safety valve,
+// specifically resolved user, or understaffed-step manager fallback.
 export function isEligible(auth: { userId: string; role: string }, eligibility: StepEligibility): boolean {
   if (auth.role === 'admin') return true;
   if (eligibility.userIds.includes(auth.userId)) return true;
   if (eligibility.allowAnyManager && auth.role === 'manager') return true;
   return false;
+}
+
+// The complete server-side action rule for an ITSM step. HR authorization is
+// checked before isEligible() can apply its admin safety valve, and the ticket
+// creator is never reported as actionable (the action endpoint's maker-checker).
+export async function isEligibleForItsmStep(
+  auth: { userId: string; role: string },
+  eligibility: StepEligibility,
+  ticket: ItsmTicketAccessContext
+): Promise<boolean> {
+  if (ticket.created_by === auth.userId) return false;
+  if (isHrSensitiveTicket(ticket) && !(await hasPermission(auth.userId, 'view_hr_tickets'))) return false;
+  return isEligible(auth, eligibility);
+}
+
+// null means non-HR: keep the existing notifyUsers()/notifyRoles() path byte-for-
+// byte. HR tickets return an explicit, permission-filtered list for both specific
+// approvers and the admin/manager fallback.
+export async function resolveItsmNotificationRecipients(
+  companyId: string,
+  eligibility: StepEligibility,
+  ticket: ItsmTicketAccessContext
+): Promise<string[] | null> {
+  if (!isHrSensitiveTicket(ticket)) return null;
+
+  const permitted = new Set(await usersWithPermission(companyId, 'view_hr_tickets'));
+  if (eligibility.userIds.length > 0) {
+    return eligibility.userIds.filter((id) => id !== ticket.created_by && permitted.has(id));
+  }
+  if (!eligibility.allowAnyManager || permitted.size === 0) return [];
+
+  const fallback = await pool.query(
+    `SELECT id FROM users
+     WHERE company_id = $1 AND status = 'active'
+       AND role = ANY($2::text[]) AND id = ANY($3::uuid[])`,
+    [companyId, ['admin', 'manager'], [...permitted]]
+  );
+  return fallback.rows.map((r) => r.id).filter((id) => id !== ticket.created_by);
 }
 
 // Fires the "New Approval Required" in-app notification for whichever step is now
@@ -171,10 +254,9 @@ export function isEligible(auth: { userId: string; role: string }, eligibility: 
 // Notification-noise decision: always notify the specifically resolved userIds
 // (department manager / named job-role holders). Only ALSO notify every admin/manager
 // when userIds came back empty — i.e. the step genuinely couldn't resolve anyone (see
-// resolveItsmStepEligibility's own "understaffed step" comment). admin can still
-// always ACT on any step regardless (isEligible's universal safety valve) — this only
-// governs who gets proactively pinged, so a company with 20 managers doesn't get 20
-// notifications for every single ticket.
+// resolveItsmStepEligibility's own "understaffed step" comment). The admin safety
+// valve still applies after the HR permission gate; this block only governs who gets
+// proactively pinged, so a company with 20 managers doesn't get 20 notifications.
 // Best-effort: swallows its own errors, must never break ticket creation or the
 // approve/reject action that called it.
 export async function notifyItsmStepPending(
@@ -187,6 +269,9 @@ export async function notifyItsmStepPending(
 ): Promise<void> {
   try {
     const eligibility = await resolveItsmStepEligibility(companyId, requesterId, ticketId, step);
+    const ticket = await getItsmTicketAccessContext(companyId, ticketId);
+    if (!ticket) return;
+    const authorizedRecipients = await resolveItsmNotificationRecipients(companyId, eligibility, ticket);
     // BUGFIX — same as financialApprovals.ts's fileApprovalRequest(): employees has no
     // name_en column (that's a real column on other tables — raw_materials, products,
     // departments, job_roles — never on employees). Selecting it threw a raw Postgres
@@ -203,7 +288,11 @@ export async function notifyItsmStepPending(
     }`;
     const link = '/approvals';
 
-    if (eligibility.userIds.length > 0) {
+    if (authorizedRecipients !== null) {
+      if (authorizedRecipients.length > 0) {
+        await notifyUsers({ companyId, userIds: authorizedRecipients, type: 'approval_pending', title, body, link, approvalRequestId });
+      }
+    } else if (eligibility.userIds.length > 0) {
       await notifyUsers({ companyId, userIds: eligibility.userIds, type: 'approval_pending', title, body, link, approvalRequestId });
     } else if (eligibility.allowAnyManager) {
       await notifyRoles({ companyId, roles: ['admin', 'manager'], type: 'approval_pending', title, body, link, approvalRequestId });
@@ -310,8 +399,9 @@ export async function getItsmApprovalSummary(
   // global chain only if that request type has nothing configured — see this file's
   // header) — never from module_type alone, since MIGRATION_072 steps vary per
   // request type.
-  const requestTypeId = await getTicketRequestTypeId(companyId, ticketId);
-  const steps = await getWorkflowSteps(requestTypeId);
+  const ticket = await getItsmTicketAccessContext(companyId, ticketId);
+  if (!ticket) return null;
+  const steps = await getWorkflowSteps(ticket.request_type_id);
 
   const logResult = await pool.query(
     `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
@@ -327,7 +417,7 @@ export async function getItsmApprovalSummary(
     const step = steps.find((s) => s.step_number === request.current_step);
     if (step) {
       const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, ticketId, step);
-      isPendingApproverForMe = isEligible(currentUser, eligibility);
+      isPendingApproverForMe = await isEligibleForItsmStep(currentUser, eligibility, ticket);
     }
   }
 

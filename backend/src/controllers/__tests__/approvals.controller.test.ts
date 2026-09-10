@@ -104,9 +104,9 @@ describe('approvals.controller.ts source regressions (round 2 review, point 3)',
     });
   });
 
-  describe('ITSM_TICKET branch — untouched (out of Phase 4 / Chat 2 scope)', () => {
+  describe('ITSM_TICKET branch — keeps its original transaction shape after the Stage H authorization guard', () => {
     const branch = extractBranch(
-      "if (request.module_type === 'ITSM_TICKET') {\n    const steps = await getWorkflowSteps",
+      "if (request.module_type === 'ITSM_TICKET') {\n    const ticket = await getItsmTicketAccessContext",
       '} else {\n    // Single-step modules'
     );
 
@@ -147,7 +147,7 @@ describe('approvals.controller.ts source regressions (round 2 review, point 3)',
 
     it('the ITSM_TICKET branch\'s approval_steps_log insert uses commentsToStore (not the raw `comments || null` it used before this fix)', () => {
       const branch = extractBranch(
-        "if (request.module_type === 'ITSM_TICKET') {\n    const steps = await getWorkflowSteps",
+        "if (request.module_type === 'ITSM_TICKET') {\n    const ticket = await getItsmTicketAccessContext",
         '} else {\n    // Single-step modules'
       );
       expect(branch).toContain('[id, request.current_step, myId, action, commentsToStore, attachmentsJson]');

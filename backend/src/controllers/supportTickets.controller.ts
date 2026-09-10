@@ -5,24 +5,19 @@ import { AppError } from '../middleware/errorHandler';
 import { validateAttachments, Attachment as TicketAttachment } from '../utils/attachments';
 import { logAudit } from '../utils/audit';
 import { hasPermission } from '../utils/permissions';
-import { createItsmApprovalChain, getBlockingApproval, getItsmApprovalSummary } from '../utils/itsmApprovals';
+import {
+  HR_TICKET_CATEGORIES,
+  canAccessTicket,
+  createItsmApprovalChain,
+  getBlockingApproval,
+  getItsmApprovalSummary,
+} from '../utils/itsmApprovals';
 import { planLevelOf } from '../config/planFeatures';
 import { generateTicketNumber } from '../utils/sequences';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const CATEGORIES = ['general', 'leave', 'grievance', 'document_request', 'payroll', 'it', 'other'];
-
-// SECURITY (post-review correction): HR-sensitive ticket categories — leave disputes,
-// grievances, document requests (can reveal salary/personal data), payroll disputes.
-// These now share this table with general IT/system support, so without an explicit
-// gate a plain company admin/manager could read every employee's HR complaint. Nobody
-// sees an HR-category ticket that isn't their own by default — not even admin/manager
-// — unless they hold the 'view_hr_tickets' permission (see permissions.controller.ts;
-// unlike every other permission key, this one can be granted to any role, precisely
-// because its whole point is to name specific people trusted with HR ticket contents
-// regardless of their base role).
-const HR_CATEGORIES = ['leave', 'grievance', 'document_request', 'payroll'];
 
 // Used only when a company has no sla_policies row yet for a given priority (a brand
 // new tenant hasn't configured any) — keeps ticket creation working out of the box.
@@ -73,7 +68,7 @@ async function visibilityFilter(auth: { userId: string; role: string }, params: 
   if (canSeeHr) return '';
   params.push(auth.userId);
   const ownIdx = params.length;
-  params.push(HR_CATEGORIES);
+  params.push(HR_TICKET_CATEGORIES);
   const hrIdx = params.length;
   return ` AND (created_by = $${ownIdx} OR (
     category <> ALL($${hrIdx})
@@ -105,17 +100,6 @@ async function canManageTicketStatus(auth: { userId: string; role: string; compa
     [auth.userId, auth.companyId]
   );
   return result.rows.length > 0;
-}
-
-async function canAccessTicket(
-  auth: { userId: string; role: string },
-  ticket: { created_by: string; category: string; category_is_hr_sensitive?: boolean; request_type_is_hr_sensitive?: boolean }
-): Promise<boolean> {
-  if (ticket.created_by === auth.userId) return true;
-  if (auth.role === 'employee') return false;
-  const isHr = HR_CATEGORIES.includes(ticket.category) || ticket.category_is_hr_sensitive === true || ticket.request_type_is_hr_sensitive === true;
-  if (isHr) return hasPermission(auth.userId, 'view_hr_tickets');
-  return true;
 }
 
 // ITSM pivot Step 2.5: server-side validation of dynamic_data against the

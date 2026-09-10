@@ -5,7 +5,14 @@ import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { hasPermission, effectivePermissions } from '../utils/permissions';
 import { getHrScope } from '../utils/hrScope';
-import { getWorkflowSteps, resolveItsmStepEligibility, isEligible, notifyItsmStepPending, getTicketRequestTypeId } from '../utils/itsmApprovals';
+import {
+  canAccessTicket,
+  getItsmTicketAccessContext,
+  getWorkflowSteps,
+  isEligibleForItsmStep,
+  notifyItsmStepPending,
+  resolveItsmStepEligibility,
+} from '../utils/itsmApprovals';
 import {
   MODULE_APPROVER_PERMISSION,
   MODULE_LABEL,
@@ -318,12 +325,9 @@ export const createRequest = asyncHandler(async (req: Request, res: Response) =>
   res.status(201).json({ success: true, request });
 });
 
-// GET /api/approvals/pending — requests this logged-in user is eligible to act on:
-// admin/manager see every pending request in the company; anyone else sees only the
-// module types they individually/by-job-role hold the matching MODULE_APPROVER_PERMISSION
-// for (MIGRATION_054 layers). Maker-checker applies here too — a request never appears
-// in the requester's own inbox, even if their role/permission would otherwise qualify
-// them, since renderNavItem-level visibility is not the enforcement layer; this filter is.
+// GET /api/approvals/pending — requests this logged-in user is eligible to act on.
+// Single-step financial modules use role/permission eligibility; ITSM uses its live
+// step resolver plus the HR-sensitive permission gate. Maker-checker applies to both.
 export const listPending = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const isManager = req.auth!.role === 'admin' || req.auth!.role === 'manager';
@@ -355,12 +359,13 @@ export const listPending = asyncHandler(async (req: Request, res: Response) => {
     if (myId && r.requester_id === myId) continue; // maker-checker, applies to every module_type
 
     if (r.module_type === 'ITSM_TICKET') {
-      const requestTypeId = await getTicketRequestTypeId(companyId, r.reference_id);
-      const steps = await stepsFor(requestTypeId);
+      const ticket = await getItsmTicketAccessContext(companyId, r.reference_id);
+      if (!ticket) continue;
+      const steps = await stepsFor(ticket.request_type_id);
       const step = steps.find((s) => s.step_number === r.current_step);
       if (!step) continue; // defensive — no step defined for this stage, shouldn't happen
       const eligibility = await resolveItsmStepEligibility(companyId, r.requester_id, r.reference_id, step);
-      if (isEligible(req.auth!, eligibility)) {
+      if (await isEligibleForItsmStep(req.auth!, eligibility, ticket)) {
         requests.push({ ...r, current_step_label: step.step_label, current_step_label_en: step.step_label_en });
       }
       continue;
@@ -504,7 +509,8 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
 
     // Post-commit only -- see the header comment above.
     if (lockedRequest.module_type === 'ITSM_TICKET') {
-      const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, lockedRequest.reference_id));
+      const ticket = await getItsmTicketAccessContext(companyId, lockedRequest.reference_id);
+      const steps = await getWorkflowSteps(ticket?.request_type_id ?? null);
       const step1 = steps.find((s) => s.step_number === 1);
       if (step1) {
         notifyItsmStepPending(companyId, lockedRequest.reference_id, lockedRequest.requester_id, step1, lockedRequest.id, lockedRequest.request_number ?? null).catch(() => {});
@@ -559,12 +565,14 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
   let noteRequest: any = request;
 
   if (request.module_type === 'ITSM_TICKET') {
-    const steps = await getWorkflowSteps(await getTicketRequestTypeId(companyId, request.reference_id));
+    const ticket = await getItsmTicketAccessContext(companyId, request.reference_id);
+    if (!ticket) throw new AppError(404, 'Ticket not found');
+    const steps = await getWorkflowSteps(ticket.request_type_id);
     const step = steps.find((s) => s.step_number === request.current_step);
     if (!step) throw new AppError(500, 'No workflow step is defined for this stage — contact support.');
 
     const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, request.reference_id, step);
-    if (!isEligible(req.auth!, eligibility)) {
+    if (!(await isEligibleForItsmStep(req.auth!, eligibility, ticket))) {
       throw new AppError(403, 'You are not the pending approver for this step.');
     }
 
@@ -726,10 +734,10 @@ export const actionRequest = asyncHandler(async (req: Request, res: Response) =>
 // "Approval status" popup (frontend ApprovalWorkflowModal.tsx), opened by clicking any
 // approval status tag in Expenses/Payroll/Purchase Orders/the Approvals Inbox. Read-only
 // (approve/reject stay on their existing surfaces — this endpoint never mutates
-// anything), and open to ANY authenticated user in the company — including the
-// requester themselves, who previously had zero visibility into a pending
-// financial request once its Edit button was hidden. Returns the SAME shape for both
-// kinds of module_type so one frontend component renders either:
+// anything). Financial summaries retain their existing company-authenticated access;
+// ITSM summaries additionally require normal ticket visibility or current-step
+// eligibility, while the requester keeps access to their own history. Returns the
+// SAME shape for both kinds of module_type so one frontend component renders either:
 //   - ITSM_TICKET: real multi-step chain (approval_workflow_steps, MIGRATION_056),
 //     reusing the exact eligibility resolution getItsmApprovalSummary() already applies.
 //   - PAYROLL/PURCHASE_ORDER/EXPENSE: always exactly one synthesized step, since these
@@ -873,28 +881,23 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
     return;
   }
 
-  const logResult = await pool.query(
-    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
-     FROM approval_steps_log asl
-     LEFT JOIN employees e ON e.id = asl.approver_id
-     WHERE asl.approval_request_id = $1
-     ORDER BY asl.action_at ASC`,
-    [request.id]
-  );
-
   let steps: { step_number: number; step_label: string; step_label_en: string | null }[];
   let isPendingApprover = false;
 
   if (module_type === 'ITSM_TICKET') {
-    const requestTypeId = await getTicketRequestTypeId(companyId, reference_id);
-    const workflowSteps = await getWorkflowSteps(requestTypeId);
+    const ticket = await getItsmTicketAccessContext(companyId, reference_id);
+    if (!ticket) throw new AppError(404, 'Ticket not found');
+    const workflowSteps = await getWorkflowSteps(ticket.request_type_id);
     steps = workflowSteps.map((s) => ({ step_number: s.step_number, step_label: s.step_label, step_label_en: s.step_label_en }));
     if (request.status === 'pending') {
       const step = workflowSteps.find((s) => s.step_number === request.current_step);
       if (step) {
         const eligibility = await resolveItsmStepEligibility(companyId, request.requester_id, reference_id, step);
-        isPendingApprover = isEligible(req.auth!, eligibility);
+        isPendingApprover = await isEligibleForItsmStep(req.auth!, eligibility, ticket);
       }
+    }
+    if (!(await canAccessTicket(req.auth!, ticket)) && !isPendingApprover) {
+      throw new AppError(404, 'Ticket not found');
     }
   } else {
     const label = MODULE_LABEL[module_type];
@@ -916,6 +919,17 @@ export const getApprovalSummary = asyncHandler(async (req: Request, res: Respons
       }
     }
   }
+
+  // Authorization for ITSM summaries is complete before any workflow history,
+  // approver names/comments, or underlying ticket details are read.
+  const logResult = await pool.query(
+    `SELECT asl.step_number, asl.action, asl.comments, asl.action_at, asl.attachments, e.name AS approver_name
+     FROM approval_steps_log asl
+     LEFT JOIN employees e ON e.id = asl.approver_id
+     WHERE asl.approval_request_id = $1
+     ORDER BY asl.action_at ASC`,
+    [request.id]
+  );
 
   const recordDetail = await buildRecordDetail(companyId, module_type, reference_id);
 
