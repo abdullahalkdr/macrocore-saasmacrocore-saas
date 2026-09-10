@@ -51,6 +51,7 @@ const PERMISSION_KEYS = [
   'manual_attendance',
   'edit_waste',
   'edit_expenses',
+  'view_hr_tickets',
   'manage_payroll',
   'view_profit_margins',
   'view_all_employees',
