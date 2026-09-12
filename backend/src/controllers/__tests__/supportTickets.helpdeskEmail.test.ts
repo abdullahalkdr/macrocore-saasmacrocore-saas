@@ -470,7 +470,7 @@ describe('reply() — Stage 3 reply email wiring', () => {
 // ============================================================================
 // updateStatus()
 // ============================================================================
-describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
+describe('updateStatus() — Stage 3/4 assignment/status/reopen email wiring', () => {
   const TICKET_ID = 'ticket-1';
 
   function mockUpdateStatusPool(world: {
@@ -478,11 +478,21 @@ describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
     categoryId?: string | null;
     nextCategoryIsHrSensitive?: boolean;
     assignedToUserExists?: boolean;
-    updatedRow: Record<string, unknown>;
+    // Stage 4 — the sla_policies row for the reopen resolution-minutes
+    // lookup. undefined/null means "no configured policy" -> DEFAULT_SLA_MINUTES
+    // fallback; only ever queried when the transition classifies as reopening.
+    reopenPolicyRow?: { resolution_minutes: number } | null;
+    // Stage 4 — null (not just omitted) simulates the guarded UPDATE matching
+    // zero rows (the lost-race case): a concurrent request already moved the
+    // ticket out of resolved/closed before this one's UPDATE ran.
+    updatedRow: Record<string, unknown> | null;
   }) {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes('t.resolved_at, t.sla_resolution_due_at')) {
         return { rows: [world.existingRow] };
+      }
+      if (sql.includes('SELECT resolution_minutes FROM sla_policies WHERE company_id = $1 AND priority = $2')) {
+        return { rows: world.reopenPolicyRow ? [world.reopenPolicyRow] : [] };
       }
       if (sql.includes('SELECT id FROM users WHERE id = $1 AND company_id = $2')) {
         return world.assignedToUserExists === false ? { rows: [] } : { rows: [{ id: 'ignored' }] };
@@ -491,7 +501,7 @@ describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
         return world.categoryId ? { rows: [{ id: world.categoryId, is_hr_sensitive: !!world.nextCategoryIsHrSensitive }] } : { rows: [] };
       }
       if (sql.includes('SET status = COALESCE($1, status)')) {
-        return { rows: [world.updatedRow] };
+        return { rows: world.updatedRow ? [world.updatedRow] : [] };
       }
       throw new Error(`Unexpected query in updateStatus() test: ${sql}`);
     });
@@ -654,6 +664,14 @@ describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
   // Full old/new status transition table (Phase C, point 5). Explicitly
   // decoupled from stampResolved — verified here by exercising real status
   // pairs end to end, not by asserting on stampResolved at all.
+  //
+  // Stage 4: resolved/closed -> open/in_progress used to be silent (null)
+  // here; those four transitions now fire 'reopened' and moved to their own
+  // dedicated describe block below (they need the sla_policies mock and a
+  // different dedup-key shape, which doesn't fit this table's uniform
+  // `helpdesk_<event>:<id>:<updatedAtMs>` assertion). closed -> resolved is
+  // the one remaining silent terminal-state transition (unchanged, still a
+  // separate, not-yet-made decision).
   // --------------------------------------------------------------------
   const TRANSITIONS: Array<{ old: string; next: string; expectedEvent: 'status_active' | 'resolved' | 'closed' | null }> = [
     { old: 'open', next: 'in_progress', expectedEvent: 'status_active' },
@@ -663,10 +681,6 @@ describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
     { old: 'open', next: 'closed', expectedEvent: 'closed' },
     { old: 'in_progress', next: 'closed', expectedEvent: 'closed' },
     { old: 'resolved', next: 'closed', expectedEvent: 'closed' },
-    { old: 'resolved', next: 'open', expectedEvent: null },
-    { old: 'resolved', next: 'in_progress', expectedEvent: null },
-    { old: 'closed', next: 'open', expectedEvent: null },
-    { old: 'closed', next: 'in_progress', expectedEvent: null },
     { old: 'closed', next: 'resolved', expectedEvent: null },
   ];
 
@@ -784,5 +798,237 @@ describe('updateStatus() — Stage 3 assignment/status email wiring', () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.body.success).toBe(true);
+  });
+
+  // --------------------------------------------------------------------
+  // Stage 4 — reopen (resolved/closed -> open/in_progress). Corrected
+  // minimal test matrix (Phase C) plus the explicit lost-race 409 test
+  // (Phase D). Helper to locate the actual UPDATE call's bound params from
+  // mocks.query, since mockUpdateStatusPool intercepts by SQL substring and
+  // returns a canned row rather than a real DB — the params array is the
+  // only way to verify what the controller actually computed (reopening
+  // flag, reopenResolutionMinutes, WHERE-guard values) before the guarded
+  // UPDATE runs.
+  // --------------------------------------------------------------------
+  function findUpdateCall() {
+    const call = mocks.query.mock.calls.find((call: any[]) => (call[0] as string).includes('SET status = COALESCE($1, status)'));
+    if (!call) throw new Error('UPDATE support_tickets call not found in mocks.query');
+    return { sql: call[0] as string, params: call[1] as unknown[] };
+  }
+
+  it('resolved -> open fires reopened, resets the resolution SLA cycle, and never touches the response-SLA columns', async () => {
+    const existingRow = baseTicketRow({
+      id: TICKET_ID,
+      status: 'resolved',
+      priority: 'medium',
+      resolved_at: '2026-09-12T09:30:00.000Z',
+      updated_at: '2026-09-12T09:30:00.000Z',
+      first_response_at: '2026-09-12T09:05:00.000Z',
+    });
+    const updatedRow = baseTicketRow({
+      id: TICKET_ID,
+      status: 'open',
+      priority: 'medium',
+      resolved_at: null,
+      updated_at: '2026-09-12T15:00:00.000Z',
+    });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 999 }, updatedRow });
+    mocks.resolveHelpdeskRecipients.mockResolvedValue({
+      event: 'reopened',
+      recipients: [{ userId: 'requester-1', email: 'req@macrocore.io', recipientRole: 'requester', preferredLanguage: 'en' }],
+      diagnostic: null,
+    });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const resolverArgs = mocks.resolveHelpdeskRecipients.mock.calls[0][0];
+    expect(resolverArgs.event).toBe('reopened');
+
+    const { sql, params } = findUpdateCall();
+    // $7 stampResolved, $8 reopening, $9 reopenResolutionMinutes, $10 id, $11 companyId
+    expect(params[6]).toBe(false); // stampResolved
+    expect(params[7]).toBe(true); // reopening
+    expect(params[8]).toBe(999); // reopenResolutionMinutes from the configured policy
+    expect(params[9]).toBe(TICKET_ID);
+    expect(params[10]).toBe(COMPANY_ID);
+    expect(sql).toContain("WHERE id = $10 AND company_id = $11 AND (NOT $8 OR status IN ('resolved', 'closed'))");
+    // The response-SLA columns are never part of the SET clause at all —
+    // structural guarantee that first_response_at/sla_response_due_at/
+    // sla_response_breached survive a reopen exactly as stored, NULL included.
+    // (They DO appear later in the RETURNING clause — TICKET_FIELDS always
+    // returns them — so this checks only the SET...WHERE portion.)
+    const setClause = sql.slice(sql.indexOf('SET '), sql.indexOf('WHERE '));
+    expect(setClause).not.toContain('first_response_at');
+    expect(setClause).not.toContain('sla_response_due_at');
+    expect(setClause).not.toContain('sla_response_breached');
+
+    const preUpdateMs = new Date('2026-09-12T09:30:00.000Z').getTime();
+    expect(mocks.enqueueEmail.mock.calls[0][0].dedupKey).toBe(`helpdesk_reopened:${TICKET_ID}:${preUpdateMs}:requester-1`);
+  });
+
+  it('closed -> in_progress fires reopened the same way', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'closed', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'in_progress', updated_at: '2026-09-12T15:00:00.000Z' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 500 }, updatedRow });
+    mocks.resolveHelpdeskRecipients.mockResolvedValue({
+      event: 'reopened',
+      recipients: [{ userId: 'requester-1', email: 'req@macrocore.io', recipientRole: 'requester', preferredLanguage: 'en' }],
+      diagnostic: null,
+    });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'in_progress' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    expect(mocks.resolveHelpdeskRecipients.mock.calls[0][0].event).toBe('reopened');
+    const { params } = findUpdateCall();
+    expect(params[7]).toBe(true); // reopening
+  });
+
+  it('a ticket with no configured sla_policies row falls back to DEFAULT_SLA_MINUTES for the reopen priority', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', priority: 'urgent', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open', priority: 'urgent' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: null, updatedRow });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    // DEFAULT_SLA_MINUTES.urgent.resolution === 240 (module-level constant,
+    // the same one create() already falls back to).
+    const { params } = findUpdateCall();
+    expect(params[8]).toBe(240);
+  });
+
+  it('a compound reopen + assignment PATCH uses the NEW (post-update) assignee for reopened recipient resolution, as two distinct business events', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', assigned_to: 'employee-old', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open', assigned_to: 'employee-new', updated_at: '2026-09-12T15:00:00.000Z' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 480 }, assignedToUserExists: true, updatedRow });
+    mocks.resolveHelpdeskRecipients.mockResolvedValue({
+      event: 'assignment_changed',
+      recipients: [{ userId: 'employee-new', email: 'new@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'en' }],
+      diagnostic: null,
+    });
+
+    const req = makeReq({
+      auth: { userId: 'admin-1', companyId: COMPANY_ID, role: 'admin' },
+      params: { id: TICKET_ID },
+      body: { status: 'open', assigned_to: 'employee-new' },
+    });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    // Two distinct events, two distinct notifyHelpdeskLifecycle() calls —
+    // assignment_changed and reopened remain separate business events even
+    // in one PATCH (Phase C, point 2); acceptable to email the new assignee
+    // twice.
+    expect(mocks.resolveHelpdeskRecipients).toHaveBeenCalledTimes(2);
+    const events = mocks.resolveHelpdeskRecipients.mock.calls.map((c: any[]) => c[0].event);
+    expect(events).toEqual(expect.arrayContaining(['assignment_changed', 'reopened']));
+    const reopenedCall = mocks.resolveHelpdeskRecipients.mock.calls.find((c: any[]) => c[0].event === 'reopened')![0];
+    expect(reopenedCall.currentAssigneeUserId).toBe('employee-new');
+    expect(reopenedCall.ticket.assigned_to).toBe('employee-new');
+  });
+
+  it('a compound reopen + priority PATCH looks up the resolution SLA for the NEW (effective) priority, not the stale one', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', priority: 'low', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open', priority: 'urgent' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 42 }, updatedRow });
+
+    const req = makeReq({
+      auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' },
+      params: { id: TICKET_ID },
+      body: { status: 'open', priority: 'urgent' },
+    });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    const slaPolicyCall = mocks.query.mock.calls.find((call: any[]) => (call[0] as string).includes('SELECT resolution_minutes FROM sla_policies'));
+    expect(slaPolicyCall![1]).toEqual([COMPANY_ID, 'urgent']);
+    const { params } = findUpdateCall();
+    expect(params[8]).toBe(42);
+  });
+
+  it('a reopened event with two eligible recipients (requester + assignee) produces two distinct dedup keys sharing the same ticket/version prefix', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', assigned_to: 'agent-1', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open', assigned_to: 'agent-1' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 480 }, updatedRow });
+    mocks.resolveHelpdeskRecipients.mockResolvedValue({
+      event: 'reopened',
+      recipients: [
+        { userId: 'requester-1', email: 'req@macrocore.io', recipientRole: 'requester', preferredLanguage: 'en' },
+        { userId: 'agent-1', email: 'agent@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' },
+      ],
+      diagnostic: null,
+    });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    const preUpdateMs = new Date('2026-09-12T09:30:00.000Z').getTime();
+    expect(mocks.enqueueEmail).toHaveBeenCalledTimes(2);
+    const keys = mocks.enqueueEmail.mock.calls.map((c: any[]) => c[0].dedupKey);
+    expect(keys).toContain(`helpdesk_reopened:${TICKET_ID}:${preUpdateMs}:requester-1`);
+    expect(keys).toContain(`helpdesk_reopened:${TICKET_ID}:${preUpdateMs}:agent-1`);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('reopen creates no ITSM approval chain and does not consult getBlockingApproval', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'closed', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 480 }, updatedRow });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    expect(mocks.getBlockingApproval).not.toHaveBeenCalled();
+    expect(mocks.createItsmApprovalChain).not.toHaveBeenCalled();
+  });
+
+  it('a recipient-resolution or enqueue failure during reopen never fails the request', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', updated_at: '2026-09-12T09:30:00.000Z' });
+    const updatedRow = baseTicketRow({ id: TICKET_ID, status: 'open' });
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 480 }, updatedRow });
+    mocks.resolveHelpdeskRecipients.mockRejectedValue(new Error('boom'));
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await updateStatus(req, res, NOOP_NEXT);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('lost race: the guarded UPDATE matches zero rows for a classified reopen -> 409, and no notification is attempted', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'resolved', updated_at: '2026-09-12T09:30:00.000Z' });
+    // updatedRow: null -> mockUpdateStatusPool's UPDATE branch returns { rows: [] },
+    // simulating a concurrent request that already moved the ticket out of
+    // resolved/closed before this UPDATE's WHERE guard re-checked the predicate.
+    mockUpdateStatusPool({ existingRow, reopenPolicyRow: { resolution_minutes: 480 }, updatedRow: null });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { status: 'open' } });
+    const res = makeRes();
+    await expect(updateStatus(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(mocks.resolveHelpdeskRecipients).not.toHaveBeenCalled();
+    expect(mocks.enqueueEmail).not.toHaveBeenCalled();
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary (non-reopen) update against a nonexistent/wrong-tenant ticket still gets 404, not 409', async () => {
+    const existingRow = baseTicketRow({ id: TICKET_ID, status: 'open', updated_at: '2026-09-12T09:30:00.000Z' });
+    // A non-reopen edit (priority-only) whose UPDATE somehow matches zero
+    // rows — e.g. the ticket was deleted/moved between the pre-read and the
+    // UPDATE. reopening is false here, so the original 404 must be preserved.
+    mockUpdateStatusPool({ existingRow, updatedRow: null });
+
+    const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { priority: 'high' } });
+    const res = makeRes();
+    await expect(updateStatus(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
   });
 });

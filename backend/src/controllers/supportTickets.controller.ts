@@ -186,11 +186,11 @@ interface HelpdeskLifecycleNotifyParams {
   companyId: string;
   ticket: ItsmTicketAccessContext;
   priority: TicketPriority;
-  event: 'created' | 'assignment_changed' | 'status_active' | 'resolved' | 'closed';
+  event: 'created' | 'assignment_changed' | 'status_active' | 'resolved' | 'closed' | 'reopened';
   ticketId: string;
   ticketNumber: string;
   ticketSubject: string | null;
-  variant: 'created' | 'assigned' | 'status_changed' | 'resolved' | 'closed';
+  variant: 'created' | 'assigned' | 'status_changed' | 'resolved' | 'closed' | 'reopened';
   statusLabel?: { en: string; ar: string };
   currentAssigneeUserId?: string | null;
   newAssigneeUserId?: string | null;
@@ -221,13 +221,21 @@ async function notifyHelpdeskLifecycle(params: HelpdeskLifecycleNotifyParams): P
         link: ticketLink(params.ticketId),
         statusLabel: params.statusLabel,
       });
+      // Stage 4 — 'reopened' is a genuinely multi-recipient event (requester +
+      // eligible current assignee), so it needs a per-recipient dedup key.
+      // Every other event falls through to the exact Stage 3 key shape,
+      // byte-for-byte unchanged.
+      const dedupKey =
+        params.event === 'reopened'
+          ? `helpdesk_reopened:${params.dedupSuffix}:${recipient.userId}`
+          : `helpdesk_${params.event}:${params.dedupSuffix}`;
       await enqueueEmail({
         to: recipient.email,
         subject,
         html,
         category: 'helpdesk',
         lang: recipient.preferredLanguage,
-        dedupKey: `helpdesk_${params.event}:${params.dedupSuffix}`,
+        dedupKey,
         companyId: params.companyId,
         relatedEntityType: 'support_tickets',
         relatedEntityId: params.ticketId,
@@ -719,7 +727,7 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
             t.subject, t.ticket_number, t.priority,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
-            t.resolved_at, t.sla_resolution_due_at
+            t.resolved_at, t.sla_resolution_due_at, t.updated_at
      FROM support_tickets t
      LEFT JOIN ticket_categories tc ON tc.id = t.category_id AND tc.company_id = t.company_id
      LEFT JOIN service_request_types rt ON rt.id = t.request_type_id AND rt.company_id = t.company_id
@@ -817,20 +825,75 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     }
   }
 
+  // Stage 4 (reopen) — computed BEFORE the UPDATE so the reopen flag and its
+  // SLA-resolution-minutes lookup can both feed the same atomic UPDATE below.
+  // preUpdateUpdatedAtMs is deliberately the row's updated_at from THIS read
+  // (before this request's own write) — two truly-concurrent reopen requests
+  // that both read the ticket before either commits compute the identical
+  // per-recipient dedup key, so the loser's enqueueEmail() collides on
+  // email_jobs.dedup_key UNIQUE (second line of defense; the WHERE-clause
+  // guard on the UPDATE itself, below, is the primary one).
+  const oldStatus = existing.rows[0].status;
+  const newStatus = status !== undefined ? status : oldStatus;
+  const isActiveStatus = (s: string) => s === 'open' || s === 'in_progress';
+  const reopening = (oldStatus === 'resolved' || oldStatus === 'closed') && isActiveStatus(newStatus);
+  const preUpdateUpdatedAtMs = new Date(existing.rows[0].updated_at).getTime();
+
+  // Effective post-PATCH priority — accounts for a same-request priority
+  // change — using the exact same sla_policies lookup + DEFAULT_SLA_MINUTES
+  // fallback pattern create() already uses, not the ticket's stale priority.
+  let reopenResolutionMinutes = 0;
+  if (reopening) {
+    const effectivePriority = (priority as string | undefined) ?? existing.rows[0].priority;
+    const reopenPolicy = await pool.query(
+      'SELECT resolution_minutes FROM sla_policies WHERE company_id = $1 AND priority = $2',
+      [companyId, effectivePriority]
+    );
+    const reopenFallback = DEFAULT_SLA_MINUTES[effectivePriority] ?? DEFAULT_SLA_MINUTES.medium;
+    reopenResolutionMinutes = reopenPolicy.rows[0]?.resolution_minutes ?? reopenFallback.resolution;
+  }
+
   const result = await pool.query(
     `UPDATE support_tickets
      SET status = COALESCE($1, status),
          priority = COALESCE($2, priority),
          category_id = CASE WHEN $3 THEN $4::uuid ELSE category_id END,
          assigned_to = CASE WHEN $5 THEN $6::uuid ELSE assigned_to END,
-         resolved_at = CASE WHEN $7 THEN NOW() ELSE resolved_at END,
-         sla_resolution_breached = CASE WHEN $7 THEN (NOW() > sla_resolution_due_at) ELSE sla_resolution_breached END,
+         resolved_at = CASE WHEN $7 THEN NOW() WHEN $8 THEN NULL ELSE resolved_at END,
+         sla_resolution_due_at = CASE WHEN $8 THEN NOW() + ($9::int * INTERVAL '1 minute') ELSE sla_resolution_due_at END,
+         sla_resolution_breached = CASE WHEN $7 THEN (NOW() > sla_resolution_due_at) WHEN $8 THEN false ELSE sla_resolution_breached END,
+         escalation_level = CASE WHEN $8 THEN 0 ELSE escalation_level END,
+         escalated_to = CASE WHEN $8 THEN NULL ELSE escalated_to END,
+         escalated_at = CASE WHEN $8 THEN NULL ELSE escalated_at END,
          updated_at = NOW()
-     WHERE id = $8 AND company_id = $9
+     WHERE id = $10 AND company_id = $11 AND (NOT $8 OR status IN ('resolved', 'closed'))
      RETURNING ${TICKET_FIELDS}`,
-    [status ?? null, priority ?? null, touchesCategory, nextCategoryId, touchesAssignment, nextAssignedTo, stampResolved, id, companyId]
+    [
+      status ?? null,
+      priority ?? null,
+      touchesCategory,
+      nextCategoryId,
+      touchesAssignment,
+      nextAssignedTo,
+      stampResolved,
+      reopening,
+      reopenResolutionMinutes,
+      id,
+      companyId,
+    ]
   );
-  if (!result.rows[0]) throw new AppError(404, 'Ticket not found');
+  if (!result.rows[0]) {
+    // The pre-read classified this request as a reopen, but the guarded
+    // UPDATE matched zero rows — a concurrent request already moved the
+    // ticket out of resolved/closed first. This is a lost race, not a
+    // missing ticket: report 409 and do not notify or mutate anything else.
+    // An ordinary (non-reopen) update still gets the original 404 for a
+    // genuinely nonexistent/wrong-tenant ticket.
+    if (reopening) {
+      throw new AppError(409, 'This ticket was already updated by another request. Please refresh and try again.');
+    }
+    throw new AppError(404, 'Ticket not found');
+  }
 
   if (status !== undefined) {
     await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_status_updated', entityType: 'support_tickets', entityId: id as string, req });
@@ -883,7 +946,7 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
     });
   }
 
-  // Stage 3 — status-lifecycle email, from an explicit old/new transition
+  // Stage 3/4 — status-lifecycle email, from an explicit old/new transition
   // table. Never derived from stampResolved, which only answers "should
   // resolved_at be stamped right now" and is not itself a resolved-event
   // discriminator (it stays false on a second resolved transition after a
@@ -892,13 +955,11 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   // resolved email). Same-status resubmits and priority/category/assignment-
   // only updates naturally produce no email (oldStatus === newStatus in both
   // cases, since newStatus defaults to oldStatus when `status` wasn't sent).
-  // resolved/closed -> open/in_progress and closed -> resolved stay
-  // deliberately silent until Stage 4 (reopen) / a future terminal-state
-  // decision — no generic status email, no fake reopened email.
-  const oldStatus = existing.rows[0].status;
-  const newStatus = status !== undefined ? status : oldStatus;
-  const isActiveStatus = (s: string) => s === 'open' || s === 'in_progress';
-
+  // oldStatus/newStatus/isActiveStatus/reopening were already computed above
+  // (before the UPDATE, for the WHERE-clause guard and dedup suffix) — reused
+  // here rather than recomputed, to avoid any drift between the two. closed
+  // -> resolved stays deliberately silent (no generic status email, no fake
+  // reopened email) — a distinct, separately-decided terminal-state question.
   if (oldStatus !== newStatus) {
     if (isActiveStatus(oldStatus) && isActiveStatus(newStatus)) {
       await notifyHelpdeskLifecycle({
@@ -937,9 +998,28 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
         variant: 'closed',
         dedupSuffix: `${id}:${updatedAtMs}`,
       });
+    } else if (reopening) {
+      // Stage 4 — resolved/closed -> open/in_progress. Uses the PRE-update
+      // updated_at (not updatedAtMs) as the dedup version, per the approved
+      // design: two concurrent reopen requests reading the same pre-update
+      // row produce the identical key, so the loser's email collides on
+      // email_jobs.dedup_key UNIQUE (the WHERE-clause guard above is the
+      // primary defense against a duplicate SLA reset; this key is the
+      // second line of defense against a duplicate notification).
+      await notifyHelpdeskLifecycle({
+        companyId,
+        ticket: postUpdateContext,
+        priority: resultPriority,
+        event: 'reopened',
+        ticketId: id as string,
+        ticketNumber: result.rows[0].ticket_number,
+        ticketSubject: result.rows[0].subject,
+        variant: 'reopened',
+        currentAssigneeUserId: postUpdateContext.assigned_to,
+        dedupSuffix: `${id}:${preUpdateUpdatedAtMs}`,
+      });
     }
-    // else: resolved/closed -> open/in_progress, or closed -> resolved —
-    // intentionally no email, see comment above.
+    // else: closed -> resolved — intentionally no email, see comment above.
   }
 
   res.status(200).json({ success: true, ticket: result.rows[0] });

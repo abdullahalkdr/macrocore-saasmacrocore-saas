@@ -42,10 +42,10 @@ describe('supportTickets.controller.ts — assigned-employee access prerequisite
       expect(reply).toMatch(/WHERE t\.id = \$1 AND t\.company_id = \$2/);
     });
 
-    it('updateStatus() scopes its ticket lookup to t.company_id = $2, and its UPDATE to company_id = $9', () => {
+    it('updateStatus() scopes its ticket lookup to t.company_id = $2, and its UPDATE to company_id = $11 (Stage 4 — guarded against a lost-race reopen)', () => {
       const updateStatus = extractFn('updateStatus');
       expect(updateStatus).toMatch(/WHERE t\.id = \$1 AND t\.company_id = \$2/);
-      expect(updateStatus).toContain('WHERE id = $8 AND company_id = $9');
+      expect(updateStatus).toContain("WHERE id = $10 AND company_id = $11 AND (NOT $8 OR status IN ('resolved', 'closed'))");
     });
   });
 
