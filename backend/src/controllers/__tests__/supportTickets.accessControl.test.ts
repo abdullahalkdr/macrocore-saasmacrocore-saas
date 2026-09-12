@@ -212,8 +212,14 @@ describe('supportTickets.controller.ts — assigned-employee access prerequisite
       expect(reply).toContain('const finalIsInternalNote = canWriteInternalNote && is_internal_note === true;');
       // An assigned plain employee is support-side (isStaffReply) but must never
       // be able to write an internal note — the internal-note gate must not
-      // reference isStaffReply anywhere.
-      const internalNoteLine = reply.slice(reply.indexOf('const canWriteInternalNote'), reply.indexOf('const result = await pool.query'));
+      // reference isStaffReply anywhere. Sliced up to the Stage 3 helpdesk-email
+      // block (not all the way to the INSERT) — that later block legitimately
+      // reads isStaffReply to pick the email event, which is a separate,
+      // intentional concern from this authorization gate, not a regression of it.
+      const internalNoteLine = reply.slice(
+        reply.indexOf('const canWriteInternalNote'),
+        reply.indexOf('// Stage 3 — which (if any) Helpdesk email event')
+      );
       expect(internalNoteLine).not.toContain('isStaffReply');
     });
 

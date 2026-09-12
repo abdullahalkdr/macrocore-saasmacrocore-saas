@@ -7,13 +7,18 @@ import { logAudit } from '../utils/audit';
 import { hasPermission } from '../utils/permissions';
 import {
   HR_TICKET_CATEGORIES,
+  ItsmTicketAccessContext,
   canAccessTicket,
   createItsmApprovalChain,
   getBlockingApproval,
   getItsmApprovalSummary,
+  isHrSensitiveTicket,
 } from '../utils/itsmApprovals';
 import { planLevelOf } from '../config/planFeatures';
 import { generateTicketNumber } from '../utils/sequences';
+import { resolveHelpdeskRecipients, TicketPriority } from '../utils/helpdeskRecipients';
+import { enqueueEmail, ticketLifecycleEmailHtml, ticketReplyEmailHtml } from '../utils/email';
+import { env } from '../config/env';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
@@ -153,6 +158,133 @@ async function validateDynamicData(companyId: string, requestTypeId: string, dyn
   }
 }
 
+// ============================================================================
+// Stage 3 (Chat 3C follow-on) — Helpdesk lifecycle/reply email wiring.
+// Every notification here is best-effort: recipient resolution, template
+// rendering, AND every enqueueEmail() call are wrapped in ONE try/catch per
+// event, so a failure anywhere in that pipeline is logged and never turns an
+// already-successful ticket write into a failed response. enqueueEmail()
+// itself never throws (see utils/email.ts's own contract), but
+// resolveHelpdeskRecipients() and the template functions run BEFORE it and
+// have no such guarantee — this boundary is what protects the controller
+// from those, not from enqueueEmail() (which needs no protecting).
+// ============================================================================
+
+function ticketLink(ticketId: string): string {
+  return `${env.FRONTEND_URL}/support?ticket=${ticketId}`;
+}
+
+// Fixed, server-side bilingual labels for the two "active" statuses — reused
+// as-is from the frontend's own displayed strings (i18n.ts statusOpen/
+// statusInProgress), never derived from user-provided free text.
+const STATUS_EMAIL_LABEL: Record<'open' | 'in_progress', { en: string; ar: string }> = {
+  open: { en: 'open', ar: 'مفتوحة' },
+  in_progress: { en: 'in_progress', ar: 'قيد المعالجة' },
+};
+
+interface HelpdeskLifecycleNotifyParams {
+  companyId: string;
+  ticket: ItsmTicketAccessContext;
+  priority: TicketPriority;
+  event: 'created' | 'assignment_changed' | 'status_active' | 'resolved' | 'closed';
+  ticketId: string;
+  ticketNumber: string;
+  ticketSubject: string | null;
+  variant: 'created' | 'assigned' | 'status_changed' | 'resolved' | 'closed';
+  statusLabel?: { en: string; ar: string };
+  currentAssigneeUserId?: string | null;
+  newAssigneeUserId?: string | null;
+  // Full dedup-key suffix (already includes the ticket id) — built by the
+  // caller per the Stage 3 dedup table, since what belongs in it (recipient
+  // id, updated_at, ...) differs per event.
+  dedupSuffix: string;
+}
+
+async function notifyHelpdeskLifecycle(params: HelpdeskLifecycleNotifyParams): Promise<void> {
+  try {
+    const resolution = await resolveHelpdeskRecipients({
+      event: params.event,
+      companyId: params.companyId,
+      ticket: params.ticket,
+      priority: params.priority,
+      currentAssigneeUserId: params.currentAssigneeUserId,
+      newAssigneeUserId: params.newAssigneeUserId,
+    });
+    const isHrSensitive = isHrSensitiveTicket(params.ticket);
+    for (const recipient of resolution.recipients) {
+      const { subject, html } = ticketLifecycleEmailHtml({
+        lang: recipient.preferredLanguage,
+        ticketNumber: params.ticketNumber,
+        isHrSensitive,
+        ticketSubject: params.ticketSubject,
+        variant: params.variant,
+        link: ticketLink(params.ticketId),
+        statusLabel: params.statusLabel,
+      });
+      await enqueueEmail({
+        to: recipient.email,
+        subject,
+        html,
+        category: 'helpdesk',
+        lang: recipient.preferredLanguage,
+        dedupKey: `helpdesk_${params.event}:${params.dedupSuffix}`,
+        companyId: params.companyId,
+        relatedEntityType: 'support_tickets',
+        relatedEntityId: params.ticketId,
+      });
+    }
+  } catch (err) {
+    console.error(`[helpdesk-email] failed to notify for event ${params.event} on ticket ${params.ticketId}`, err);
+  }
+}
+
+interface HelpdeskReplyNotifyParams {
+  companyId: string;
+  ticket: ItsmTicketAccessContext;
+  priority: TicketPriority;
+  event: 'staff_reply' | 'requester_reply';
+  ticketId: string;
+  ticketNumber: string;
+  ticketSubject: string | null;
+  replyId: string;
+  currentAssigneeUserId?: string | null;
+}
+
+async function notifyHelpdeskReply(params: HelpdeskReplyNotifyParams): Promise<void> {
+  try {
+    const resolution = await resolveHelpdeskRecipients({
+      event: params.event,
+      companyId: params.companyId,
+      ticket: params.ticket,
+      priority: params.priority,
+      currentAssigneeUserId: params.currentAssigneeUserId,
+    });
+    const isHrSensitive = isHrSensitiveTicket(params.ticket);
+    for (const recipient of resolution.recipients) {
+      const { subject, html } = ticketReplyEmailHtml({
+        lang: recipient.preferredLanguage,
+        ticketNumber: params.ticketNumber,
+        isHrSensitive,
+        ticketSubject: params.ticketSubject,
+        link: ticketLink(params.ticketId),
+      });
+      await enqueueEmail({
+        to: recipient.email,
+        subject,
+        html,
+        category: 'helpdesk',
+        lang: recipient.preferredLanguage,
+        dedupKey: `helpdesk_${params.event}:${params.ticketId}:${params.replyId}:${recipient.userId}`,
+        companyId: params.companyId,
+        relatedEntityType: 'support_tickets',
+        relatedEntityId: params.ticketId,
+      });
+    }
+  } catch (err) {
+    console.error(`[helpdesk-email] failed to notify for event ${params.event} on ticket ${params.ticketId}`, err);
+  }
+}
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const params: unknown[] = [companyId];
@@ -211,11 +343,17 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   // support_tickets and ticket_categories, so it's checked explicitly here,
   // same pattern canAccessTicket() already uses for cross-row checks.
   let finalCategoryId: string | null = null;
+  // Stage 3 — retained from this same validation query (not a fresh SELECT,
+  // and never read off the RETURNING row below, which carries no
+  // is_hr_sensitive column at all) so the created-ticket email's HR gate is
+  // correct even when the legacy `category` string is still 'general'.
+  let categoryIsHrSensitive = false;
   if (category_id !== undefined && category_id !== null) {
     if (typeof category_id !== 'string') throw new AppError(400, 'category_id must be a string');
-    const catCheck = await pool.query('SELECT id FROM ticket_categories WHERE id = $1 AND company_id = $2', [category_id, companyId]);
+    const catCheck = await pool.query('SELECT id, is_hr_sensitive FROM ticket_categories WHERE id = $1 AND company_id = $2', [category_id, companyId]);
     if (!catCheck.rows[0]) throw new AppError(400, 'category_id does not belong to this company');
     finalCategoryId = category_id;
+    categoryIsHrSensitive = catCheck.rows[0].is_hr_sensitive === true;
   }
 
   // ITSM pivot: request_type_id, same cross-tenant-validation shape as
@@ -223,11 +361,14 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   // transition — which one the create-ticket UI actually offers per company
   // is a frontend decision (Step 3+), not enforced here.
   let finalRequestTypeId: string | null = null;
+  // Stage 3 — same reasoning as categoryIsHrSensitive above.
+  let requestTypeIsHrSensitive = false;
   if (request_type_id !== undefined && request_type_id !== null) {
     if (typeof request_type_id !== 'string') throw new AppError(400, 'request_type_id must be a string');
-    const rtCheck = await pool.query('SELECT id FROM service_request_types WHERE id = $1 AND company_id = $2', [request_type_id, companyId]);
+    const rtCheck = await pool.query('SELECT id, is_hr_sensitive FROM service_request_types WHERE id = $1 AND company_id = $2', [request_type_id, companyId]);
     if (!rtCheck.rows[0]) throw new AppError(400, 'request_type_id does not belong to this company');
     finalRequestTypeId = request_type_id;
+    requestTypeIsHrSensitive = rtCheck.rows[0].is_hr_sensitive === true;
   }
 
   // dynamic_data: shape check only (must be a plain JSON object, not an
@@ -302,6 +443,22 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   );
   const ticket = result.rows[0];
 
+  // Stage 3 — the access/template context for this brand-new ticket, built
+  // from the is_hr_sensitive flags captured above during category_id/
+  // request_type_id validation, NOT from `ticket` itself: TICKET_FIELDS (the
+  // RETURNING clause) has no is_hr_sensitive column at all, so reading it off
+  // `ticket` would silently evaluate as HR-insensitive for a request-type-
+  // based HR ticket whose legacy `category` is still 'general' — exactly the
+  // leak this construction avoids.
+  const ticketAccessContext: ItsmTicketAccessContext = {
+    request_type_id: ticket.request_type_id,
+    created_by: ticket.created_by,
+    category: ticket.category,
+    category_is_hr_sensitive: categoryIsHrSensitive,
+    request_type_is_hr_sensitive: requestTypeIsHrSensitive,
+    assigned_to: ticket.assigned_to ?? null,
+  };
+
   // MIGRATION_056 (legacy global chain) + MIGRATION_072 (per-request-type config) —
   // spawn the ticket's approval chain, if any, for every new ticket. Gated on the
   // company's LIVE plan level being Gold (3) or higher, checked here rather than via
@@ -323,6 +480,18 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   }
 
   await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_created', entityType: 'support_tickets', entityId: ticket.id, req });
+
+  await notifyHelpdeskLifecycle({
+    companyId,
+    ticket: ticketAccessContext,
+    priority: finalPriority as TicketPriority,
+    event: 'created',
+    ticketId: ticket.id,
+    ticketNumber: ticket.ticket_number,
+    ticketSubject: ticket.subject,
+    variant: 'created',
+    dedupSuffix: ticket.id,
+  });
 
   res.status(201).json({ success: true, ticket });
 });
@@ -406,6 +575,7 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
 
   const ticket = await pool.query(
     `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id, t.assigned_to,
+            t.subject, t.ticket_number, t.priority,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.first_response_at, t.sla_response_due_at
@@ -469,6 +639,25 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
   const canWriteInternalNote = req.auth!.role === 'admin' || req.auth!.role === 'manager';
   const finalIsInternalNote = canWriteInternalNote && is_internal_note === true;
 
+  // Stage 3 — which (if any) Helpdesk email event this reply triggers.
+  // Internal notes never trigger an email, checked FIRST and independent of
+  // isStaffReply — otherwise an admin/manager's internal note on their OWN
+  // ticket (isStaffReply === false there, since they're the creator) would
+  // wrongly fall through to requester_reply. Beyond that: isStaffReply ===
+  // true is staff_reply; otherwise, only the ticket's actual creator
+  // triggers requester_reply — never "anyone isStaffReply says isn't staff",
+  // which would also pull in a non-creator Viewer's reply and add a new
+  // notification side effect to the still-undecided Viewer access-breadth
+  // gap (explicitly out of scope for Stage 3).
+  let helpdeskReplyEvent: 'staff_reply' | 'requester_reply' | null = null;
+  if (!finalIsInternalNote) {
+    if (isStaffReply) {
+      helpdeskReplyEvent = 'staff_reply';
+    } else if (ticket.rows[0].created_by === req.auth!.userId) {
+      helpdeskReplyEvent = 'requester_reply';
+    }
+  }
+
   const result = await pool.query(
     `INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin_reply, is_internal_note, attachments)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -493,6 +682,20 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
     await pool.query('UPDATE support_tickets SET updated_at = NOW() WHERE id = $1', [id]);
   }
 
+  if (helpdeskReplyEvent) {
+    await notifyHelpdeskReply({
+      companyId,
+      ticket: ticket.rows[0],
+      priority: ticket.rows[0].priority as TicketPriority,
+      event: helpdeskReplyEvent,
+      ticketId: id as string,
+      ticketNumber: ticket.rows[0].ticket_number,
+      ticketSubject: ticket.rows[0].subject,
+      replyId: result.rows[0].id,
+      currentAssigneeUserId: ticket.rows[0].assigned_to,
+    });
+  }
+
   res.status(201).json({ success: true, reply: result.rows[0] });
 });
 
@@ -513,6 +716,7 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
 
   const existing = await pool.query(
     `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id, t.assigned_to, t.status,
+            t.subject, t.ticket_number, t.priority,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.resolved_at, t.sla_resolution_due_at
@@ -553,14 +757,21 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   // all, separately from what value it should end up as.
   let touchesCategory = false;
   let nextCategoryId: string | null = null;
+  // Stage 3 — HR-sensitivity of the category THIS PATCH IS SETTING, separate
+  // from existing.rows[0].category_is_hr_sensitive (which reflects the OLD
+  // category only). Needed for the compound-edit case where the same PATCH
+  // changes both category_id and assigned_to — see postUpdateContext below.
+  let nextCategoryIsHrSensitive = false;
   if (category_id !== undefined) {
     touchesCategory = true;
     if (category_id !== null) {
       if (typeof category_id !== 'string') throw new AppError(400, 'category_id must be a string or null');
-      const catCheck = await pool.query('SELECT id FROM ticket_categories WHERE id = $1 AND company_id = $2', [category_id, companyId]);
+      const catCheck = await pool.query('SELECT id, is_hr_sensitive FROM ticket_categories WHERE id = $1 AND company_id = $2', [category_id, companyId]);
       if (!catCheck.rows[0]) throw new AppError(400, 'category_id does not belong to this company');
       nextCategoryId = category_id;
+      nextCategoryIsHrSensitive = catCheck.rows[0].is_hr_sensitive === true;
     }
+    // category_id === null (explicit clear) -> nextCategoryIsHrSensitive stays false.
   }
 
   // ITSM pivot: agent assignment. Reuses this existing endpoint rather than
@@ -632,6 +843,103 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   }
   if (touchesAssignment) {
     await logAudit({ companyId, userId: req.auth!.userId, action: 'ticket_assigned', entityType: 'support_tickets', entityId: id as string, req });
+  }
+
+  // Stage 3 — post-update access/template context: the UPDATED row's
+  // assigned_to/category/created_by/request_type_id, combined with HR
+  // sensitivity flags. category_is_hr_sensitive comes from the query just
+  // run for THIS field when it was touched in this same PATCH (handles the
+  // compound category_id + assigned_to case correctly); otherwise it's
+  // carried over unchanged from the pre-update joined lookup.
+  // request_type_is_hr_sensitive never changes here — this endpoint has no
+  // field that alters request_type_id.
+  const postUpdateContext: ItsmTicketAccessContext = {
+    request_type_id: result.rows[0].request_type_id,
+    created_by: result.rows[0].created_by,
+    category: result.rows[0].category,
+    category_is_hr_sensitive: touchesCategory ? nextCategoryIsHrSensitive : existing.rows[0].category_is_hr_sensitive,
+    request_type_is_hr_sensitive: existing.rows[0].request_type_is_hr_sensitive,
+    assigned_to: result.rows[0].assigned_to,
+  };
+  // Canonical dedup discriminator — the updated row's own returned
+  // updated_at, normalized to an epoch-ms number (never a raw Date object or
+  // an environment-dependent date string), same pattern this repo already
+  // uses elsewhere for a version/cycle discriminator.
+  const updatedAtMs = new Date(result.rows[0].updated_at).getTime();
+  const resultPriority = result.rows[0].priority as TicketPriority;
+
+  if (touchesAssignment && nextAssignedTo !== existing.rows[0].assigned_to) {
+    await notifyHelpdeskLifecycle({
+      companyId,
+      ticket: postUpdateContext,
+      priority: resultPriority,
+      event: 'assignment_changed',
+      ticketId: id as string,
+      ticketNumber: result.rows[0].ticket_number,
+      ticketSubject: result.rows[0].subject,
+      variant: 'assigned',
+      newAssigneeUserId: nextAssignedTo,
+      dedupSuffix: `${id}:${nextAssignedTo}:${updatedAtMs}`,
+    });
+  }
+
+  // Stage 3 — status-lifecycle email, from an explicit old/new transition
+  // table. Never derived from stampResolved, which only answers "should
+  // resolved_at be stamped right now" and is not itself a resolved-event
+  // discriminator (it stays false on a second resolved transition after a
+  // manual resolved->open->resolved cycle, since resolved_at was never
+  // cleared — using it here would silently drop that second, legitimate
+  // resolved email). Same-status resubmits and priority/category/assignment-
+  // only updates naturally produce no email (oldStatus === newStatus in both
+  // cases, since newStatus defaults to oldStatus when `status` wasn't sent).
+  // resolved/closed -> open/in_progress and closed -> resolved stay
+  // deliberately silent until Stage 4 (reopen) / a future terminal-state
+  // decision — no generic status email, no fake reopened email.
+  const oldStatus = existing.rows[0].status;
+  const newStatus = status !== undefined ? status : oldStatus;
+  const isActiveStatus = (s: string) => s === 'open' || s === 'in_progress';
+
+  if (oldStatus !== newStatus) {
+    if (isActiveStatus(oldStatus) && isActiveStatus(newStatus)) {
+      await notifyHelpdeskLifecycle({
+        companyId,
+        ticket: postUpdateContext,
+        priority: resultPriority,
+        event: 'status_active',
+        ticketId: id as string,
+        ticketNumber: result.rows[0].ticket_number,
+        ticketSubject: result.rows[0].subject,
+        variant: 'status_changed',
+        statusLabel: STATUS_EMAIL_LABEL[newStatus as 'open' | 'in_progress'],
+        dedupSuffix: `${id}:${updatedAtMs}`,
+      });
+    } else if (isActiveStatus(oldStatus) && newStatus === 'resolved') {
+      await notifyHelpdeskLifecycle({
+        companyId,
+        ticket: postUpdateContext,
+        priority: resultPriority,
+        event: 'resolved',
+        ticketId: id as string,
+        ticketNumber: result.rows[0].ticket_number,
+        ticketSubject: result.rows[0].subject,
+        variant: 'resolved',
+        dedupSuffix: `${id}:${updatedAtMs}`,
+      });
+    } else if ((isActiveStatus(oldStatus) || oldStatus === 'resolved') && newStatus === 'closed') {
+      await notifyHelpdeskLifecycle({
+        companyId,
+        ticket: postUpdateContext,
+        priority: resultPriority,
+        event: 'closed',
+        ticketId: id as string,
+        ticketNumber: result.rows[0].ticket_number,
+        ticketSubject: result.rows[0].subject,
+        variant: 'closed',
+        dedupSuffix: `${id}:${updatedAtMs}`,
+      });
+    }
+    // else: resolved/closed -> open/in_progress, or closed -> resolved —
+    // intentionally no email, see comment above.
   }
 
   res.status(200).json({ success: true, ticket: result.rows[0] });
