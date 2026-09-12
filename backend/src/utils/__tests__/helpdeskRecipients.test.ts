@@ -43,6 +43,7 @@ interface FakeUser {
   status: string;
   role: string;
   company_id: string;
+  preferred_language: 'ar' | 'en';
 }
 
 function user(over: Partial<FakeUser> & { id: string }): FakeUser {
@@ -51,6 +52,7 @@ function user(over: Partial<FakeUser> & { id: string }): FakeUser {
     status: 'active',
     role: 'employee',
     company_id: COMPANY_ID,
+    preferred_language: 'ar',
     ...over,
   };
 }
@@ -75,7 +77,7 @@ function installMockWorld(world: MockWorld) {
   const usersById = new Map((world.users ?? []).map((u) => [u.id, u]));
 
   mocks.query.mockImplementation(async (sql: string, params: unknown[] = []) => {
-    if (sql.includes('SELECT id, email, status, role, company_id FROM users WHERE id = $1 AND company_id = $2')) {
+    if (sql.includes("COALESCE(preferred_language, 'ar') AS preferred_language")) {
       const [id, companyId] = params as [string, string];
       const u = usersById.get(id);
       if (!u || u.company_id !== companyId) return { rows: [] };
@@ -139,7 +141,7 @@ describe('requester-only events', () => {
     for (const event of events) {
       const result = await resolveHelpdeskRecipients(baseParams({ event }));
       expect(result.diagnostic).toBeNull();
-      expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester' }]);
+      expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester', preferredLanguage: 'ar' }]);
     }
   });
 
@@ -173,19 +175,20 @@ describe('requester-only events', () => {
 // ---------------------------------------------------------------------------
 describe('assignment_changed', () => {
   it('notifies only the eligible new assignee', async () => {
-    // role: 'manager' — under the real, unchanged canAccessTicket(), a plain
-    // 'employee' who isn't the ticket creator can never access it (Option A);
-    // 'manager'/'admin' is the role that can currently open a ticket it
-    // doesn't own, so that's what a genuinely-eligible fixture needs here.
+    // role: 'manager' here is just an arbitrary genuinely-eligible fixture — a
+    // plain 'employee' assignee would ALSO be eligible now (Chat 3C), see the
+    // dedicated assigned-employee test in "recipient eligibility rules" below.
     installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'manager' })] });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'assignment_changed', newAssigneeUserId: 'agent-1' }));
     expect(result.diagnostic).toBeNull();
-    expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee' }]);
+    expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' }]);
   });
 
   it('sends to nobody, with a diagnostic, when the new assignee is ineligible — and never substitutes a fallback recipient', async () => {
-    // 'agent-1' is a plain employee who is NOT the ticket creator, on an
-    // HR-sensitive ticket — the known canAccessTicket() gap (Option A).
+    // 'agent-1' is a plain employee assignee on an HR-sensitive ticket without
+    // view_hr_tickets (mocked false by default) — still denied by the HR gate
+    // in canAccessTicket() even though a plain employee assignee is no longer
+    // blocked outright on a non-HR ticket (Chat 3C).
     installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'employee' })] });
     const result = await resolveHelpdeskRecipients(
       baseParams({ event: 'assignment_changed', ticket: hrTicket, newAssigneeUserId: 'agent-1' })
@@ -213,8 +216,8 @@ describe('reopened', () => {
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'reopened', currentAssigneeUserId: 'agent-1' }));
     expect(result.diagnostic).toBeNull();
     expect(result.recipients).toEqual([
-      { userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester' },
-      { userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee' },
+      { userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester', preferredLanguage: 'ar' },
+      { userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' },
     ]);
   });
 
@@ -222,7 +225,7 @@ describe('reopened', () => {
     installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', status: 'inactive' })] });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'reopened', currentAssigneeUserId: 'agent-1' }));
     expect(result.diagnostic).toBeNull();
-    expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester' }]);
+    expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester', preferredLanguage: 'ar' }]);
     // The fallback ladder must never be consulted for the assignee slot here.
     expect(calledSql()).not.toMatch(/departments|sla_policies|role = ANY/i);
   });
@@ -230,7 +233,7 @@ describe('reopened', () => {
   it('works with no current assignee at all (ticket was never assigned) — requester only', async () => {
     installMockWorld({ users: [user({ id: REQUESTER_ID })] });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'reopened', currentAssigneeUserId: null }));
-    expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester' }]);
+    expect(result.recipients).toEqual([{ userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester', preferredLanguage: 'ar' }]);
   });
 
   it('returns an explicit no-recipient diagnostic when both the requester and the assignee are ineligible', async () => {
@@ -256,7 +259,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
     for (const event of events) {
       const result = await resolveHelpdeskRecipients(baseParams({ event, currentAssigneeUserId: 'agent-1' }));
       expect(result.diagnostic).toBeNull();
-      expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee' }]);
+      expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' }]);
     }
     expect(calledSql()).not.toMatch(/departments|sla_policies|role = ANY/i);
   });
@@ -271,7 +274,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'requester_reply', currentAssigneeUserId: null }));
     expect(result.diagnostic).toBeNull();
-    expect(result.recipients).toEqual([{ userId: 'mgr-1', email: 'mgr-1@macrocore.io', recipientRole: 'department_manager' }]);
+    expect(result.recipients).toEqual([{ userId: 'mgr-1', email: 'mgr-1@macrocore.io', recipientRole: 'department_manager', preferredLanguage: 'ar' }]);
   });
 
   it('falls back to the department manager when the current assignee is ineligible (not merely absent)', async () => {
@@ -283,7 +286,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
       managerUserId: 'mgr-1',
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'sla_warning', currentAssigneeUserId: 'agent-1' }));
-    expect(result.recipients).toEqual([{ userId: 'mgr-1', email: 'mgr-1@macrocore.io', recipientRole: 'department_manager' }]);
+    expect(result.recipients).toEqual([{ userId: 'mgr-1', email: 'mgr-1@macrocore.io', recipientRole: 'department_manager', preferredLanguage: 'ar' }]);
   });
 
   it('a service-request type never affects department-manager resolution — only the requester\'s own employee/department chain is queried', async () => {
@@ -307,7 +310,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
       escalationRoleUserIdsInOrder: ['esc-1'],
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'requester_reply', currentAssigneeUserId: null }));
-    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role' }]);
+    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role', preferredLanguage: 'ar' }]);
   });
 
   it('walks past an ineligible earlier escalation-role holder to the next one, in the existing deterministic (created_at ASC) order', async () => {
@@ -322,7 +325,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
       escalationRoleUserIdsInOrder: ['esc-1', 'esc-2'],
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'sla_warning', currentAssigneeUserId: null }));
-    expect(result.recipients).toEqual([{ userId: 'esc-2', email: 'esc-2@macrocore.io', recipientRole: 'escalation_role' }]);
+    expect(result.recipients).toEqual([{ userId: 'esc-2', email: 'esc-2@macrocore.io', recipientRole: 'escalation_role', preferredLanguage: 'ar' }]);
   });
 
   it('defaults the escalation role to admin when the company has no sla_policies row for this priority', async () => {
@@ -333,7 +336,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
       escalationRoleUserIdsInOrder: ['esc-1'],
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'sla_breach', currentAssigneeUserId: null }));
-    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role' }]);
+    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role', preferredLanguage: 'ar' }]);
   });
 
   it('falls back to EVERY eligible admin/manager (step 3, plural) when steps 1 and 2 both yield nothing', async () => {
@@ -352,8 +355,8 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'requester_reply', currentAssigneeUserId: null }));
     expect(result.diagnostic).toBeNull();
     expect(result.recipients).toEqual([
-      { userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback' },
-      { userId: 'admin-3', email: 'admin-3@macrocore.io', recipientRole: 'admin_manager_fallback' },
+      { userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback', preferredLanguage: 'ar' },
+      { userId: 'admin-3', email: 'admin-3@macrocore.io', recipientRole: 'admin_manager_fallback', preferredLanguage: 'ar' },
     ]);
   });
 
@@ -366,7 +369,7 @@ describe('requester_reply / sla_warning / sla_breach — assignee-first, then th
       adminManagerUserIdsInOrder: ['admin-1', 'admin-1'],
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'sla_warning', currentAssigneeUserId: null }));
-    expect(result.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback' }]);
+    expect(result.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback', preferredLanguage: 'ar' }]);
   });
 
   it('produces an explicit, testable no-recipient outcome (not an exception) when the entire ladder is exhausted', async () => {
@@ -394,7 +397,7 @@ describe('escalation', () => {
       baseParams({ event: 'escalation', explicitEscalationTargetUserId: 'esc-target' })
     );
     expect(result.diagnostic).toBeNull();
-    expect(result.recipients).toEqual([{ userId: 'esc-target', email: 'esc-target@macrocore.io', recipientRole: 'escalation_target' }]);
+    expect(result.recipients).toEqual([{ userId: 'esc-target', email: 'esc-target@macrocore.io', recipientRole: 'escalation_target', preferredLanguage: 'ar' }]);
     expect(calledSql()).not.toMatch(/departments|sla_policies|role = ANY/i);
   });
 
@@ -408,7 +411,7 @@ describe('escalation', () => {
       baseParams({ event: 'escalation', explicitEscalationTargetUserId: 'esc-target' })
     );
     expect(result.diagnostic).toBeNull();
-    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role' }]);
+    expect(result.recipients).toEqual([{ userId: 'esc-1', email: 'esc-1@macrocore.io', recipientRole: 'escalation_role', preferredLanguage: 'ar' }]);
     // Step 1's queries (employees/departments) must never fire for escalation.
     expect(calledSql()).not.toMatch(/SELECT department_id FROM employees|SELECT manager_id FROM departments/);
   });
@@ -421,7 +424,7 @@ describe('escalation', () => {
       adminManagerUserIdsInOrder: ['admin-1'],
     });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'escalation', explicitEscalationTargetUserId: null }));
-    expect(result.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback' }]);
+    expect(result.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'admin_manager_fallback', preferredLanguage: 'ar' }]);
   });
 
   it('returns an explicit no-recipient diagnostic when everything is exhausted', async () => {
@@ -464,7 +467,7 @@ describe('recipient eligibility rules', () => {
   it('trims harmless surrounding whitespace from an otherwise-usable email before returning it', async () => {
     installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'manager', email: '  agent-1@macrocore.io  ' })] });
     const result = await resolveHelpdeskRecipients(baseParams({ event: 'assignment_changed', newAssigneeUserId: 'agent-1' }));
-    expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee' }]);
+    expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' }]);
   });
 
   it('rejects the requester themselves as an assignee/fallback candidate (excludeSelf)', async () => {
@@ -476,13 +479,45 @@ describe('recipient eligibility rules', () => {
     expect(result.diagnostic?.reason).toBe('new_assignee_ineligible');
   });
 
-  it('rejects a plain-employee candidate who is not the ticket creator on an HR-sensitive ticket (the known canAccessTicket() gap, Option A)', async () => {
+  it('rejects a plain-employee candidate who is not the ticket creator on an HR-sensitive ticket without view_hr_tickets (Chat 3C — the HR gate runs before the assignee/employee-role check now)', async () => {
     installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'employee' })] });
     const result = await resolveHelpdeskRecipients(
       baseParams({ event: 'assignment_changed', ticket: hrTicket, newAssigneeUserId: 'agent-1' })
     );
     expect(result.recipients).toEqual([]);
-    expect(mocks.hasPermission).not.toHaveBeenCalled(); // employee role short-circuits before the HR permission check
+    // canAccessTicket() now checks the HR gate for every non-creator BEFORE the
+    // assignee/employee-role checks, so hasPermission IS called here (mocked
+    // false by default) — unlike before this fix, when a plain employee's
+    // role check short-circuited before the HR permission was ever consulted.
+    expect(mocks.hasPermission).toHaveBeenCalledWith('agent-1', 'view_hr_tickets');
+  });
+
+  it('grants a plain-employee candidate who is the ticket\'s assigned_to on a non-HR ticket (Chat 3C — the assigned-employee access prerequisite)', async () => {
+    const assignedTicket: ItsmTicketAccessContext = { ...nonHrTicket, assigned_to: 'agent-1' };
+    installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'employee' })] });
+    const result = await resolveHelpdeskRecipients(
+      baseParams({ event: 'assignment_changed', ticket: assignedTicket, newAssigneeUserId: 'agent-1' })
+    );
+    expect(result.diagnostic).toBeNull();
+    expect(result.recipients).toEqual([{ userId: 'agent-1', email: 'agent-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' }]);
+    expect(mocks.hasPermission).not.toHaveBeenCalled(); // non-HR ticket — the HR gate never fires at all
+  });
+
+  it('still denies an unassigned plain-employee bystander on a non-HR ticket — assigned-employee access does not become general coworker visibility', async () => {
+    const assignedTicket: ItsmTicketAccessContext = { ...nonHrTicket, assigned_to: 'someone-else' };
+    installMockWorld({ users: [user({ id: REQUESTER_ID }), user({ id: 'agent-1', role: 'employee' })] });
+    const result = await resolveHelpdeskRecipients(
+      baseParams({ event: 'assignment_changed', ticket: assignedTicket, newAssigneeUserId: 'agent-1' })
+    );
+    expect(result.recipients).toEqual([]);
+  });
+
+  it('propagates a non-default preferred_language onto the resolved recipient', async () => {
+    installMockWorld({ users: [user({ id: REQUESTER_ID, preferred_language: 'en' })] });
+    const result = await resolveHelpdeskRecipients(baseParams({ event: 'created' }));
+    expect(result.recipients).toEqual([
+      { userId: REQUESTER_ID, email: `${REQUESTER_ID}@macrocore.io`, recipientRole: 'requester', preferredLanguage: 'en' },
+    ]);
   });
 
   it('rejects an admin/manager candidate on an HR-sensitive ticket unless they hold view_hr_tickets', async () => {
@@ -498,7 +533,7 @@ describe('recipient eligibility rules', () => {
     const allowed = await resolveHelpdeskRecipients(
       baseParams({ event: 'assignment_changed', ticket: hrTicket, newAssigneeUserId: 'admin-1' })
     );
-    expect(allowed.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'assignee' }]);
+    expect(allowed.recipients).toEqual([{ userId: 'admin-1', email: 'admin-1@macrocore.io', recipientRole: 'assignee', preferredLanguage: 'ar' }]);
   });
 
   it('never invents a new permission key — HR gating always calls hasPermission with view_hr_tickets, the existing key', async () => {

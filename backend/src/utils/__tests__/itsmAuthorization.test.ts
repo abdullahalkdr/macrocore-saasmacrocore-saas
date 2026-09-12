@@ -93,6 +93,38 @@ describe('ITSM HR authorization policy', () => {
     await expect(isEligibleForItsmStep({ userId: 'admin', role: 'admin' }, fallback, nonHrTicket)).resolves.toBe(true);
     expect(mocks.hasPermission).not.toHaveBeenCalled();
   });
+
+  // Chat 3C — assigned-employee access prerequisite. canAccessTicket() now also
+  // grants access to a plain employee who is the ticket's assigned_to, subject to
+  // the same HR gate every other non-creator already goes through.
+  describe('assigned-employee access (Chat 3C)', () => {
+    const assignedNonHrTicket: ItsmTicketAccessContext = { ...nonHrTicket, assigned_to: 'assignee' };
+    const assignedHrTicket: ItsmTicketAccessContext = { ...hrTicket, assigned_to: 'assignee' };
+
+    it('grants a plain employee assignee access to a non-HR ticket they did not create', async () => {
+      await expect(canAccessTicket({ userId: 'assignee', role: 'employee' }, assignedNonHrTicket)).resolves.toBe(true);
+      expect(mocks.hasPermission).not.toHaveBeenCalled();
+    });
+
+    it('still denies an unassigned bystander employee on the same ticket', async () => {
+      await expect(canAccessTicket({ userId: 'bystander', role: 'employee' }, assignedNonHrTicket)).resolves.toBe(false);
+    });
+
+    it('denies the assigned employee on an HR-sensitive ticket without view_hr_tickets', async () => {
+      await expect(canAccessTicket({ userId: 'assignee', role: 'employee' }, assignedHrTicket)).resolves.toBe(false);
+      expect(mocks.hasPermission).toHaveBeenCalledWith('assignee', 'view_hr_tickets');
+    });
+
+    it('grants the assigned employee an HR-sensitive ticket once they hold view_hr_tickets', async () => {
+      mocks.hasPermission.mockResolvedValueOnce(true);
+      await expect(canAccessTicket({ userId: 'assignee', role: 'employee' }, assignedHrTicket)).resolves.toBe(true);
+    });
+
+    it('leaves manager/admin behavior as an assignee unchanged — they already had access regardless of assignment', async () => {
+      await expect(canAccessTicket({ userId: 'assignee', role: 'manager' }, assignedNonHrTicket)).resolves.toBe(true);
+      await expect(canAccessTicket({ userId: 'assignee', role: 'admin' }, assignedNonHrTicket)).resolves.toBe(true);
+    });
+  });
 });
 
 describe('ITSM approval notification recipients', () => {

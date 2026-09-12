@@ -14,6 +14,11 @@ export interface ItsmTicketAccessContext {
   category: string;
   category_is_hr_sensitive?: boolean;
   request_type_is_hr_sensitive?: boolean;
+  // Assigned-employee access prerequisite (Chat 3C) — optional because a couple of
+  // call sites (see canAccessTicket()'s callers) only ever construct this context
+  // for the requester-only checks and never populate it. Treated as "no assignee"
+  // when absent/null.
+  assigned_to?: string | null;
 }
 
 export function isHrSensitiveTicket(ticket: ItsmTicketAccessContext): boolean {
@@ -26,7 +31,7 @@ export function isHrSensitiveTicket(ticket: ItsmTicketAccessContext): boolean {
 
 export async function getItsmTicketAccessContext(companyId: string, ticketId: string): Promise<ItsmTicketAccessContext | null> {
   const result = await pool.query(
-    `SELECT t.request_type_id, t.created_by, t.category,
+    `SELECT t.request_type_id, t.created_by, t.category, t.assigned_to,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive
      FROM support_tickets t
@@ -38,16 +43,21 @@ export async function getItsmTicketAccessContext(companyId: string, ticketId: st
   return result.rows[0] ?? null;
 }
 
-// Normal ticket visibility: the requester always sees their own ticket; plain
-// employees see no coworkers' tickets; managers/admins need the explicit HR
-// permission before an HR-sensitive ticket becomes visible.
+// Normal ticket visibility: the requester always sees their own ticket; every
+// non-creator (assignee included) is HR-gated first on an HR-sensitive ticket;
+// the assigned employee is then let in on a non-HR ticket (Chat 3C — the email
+// deep link must be able to open the ticket it's assigned to); any other plain
+// employee (an unassigned bystander) is still denied; managers/admins fall
+// through unchanged. Order matters — do not reorder without re-checking every
+// case in __tests__/itsmAuthorization.test.ts.
 export async function canAccessTicket(
   auth: { userId: string; role: string },
   ticket: ItsmTicketAccessContext
 ): Promise<boolean> {
   if (ticket.created_by === auth.userId) return true;
+  if (isHrSensitiveTicket(ticket) && !(await hasPermission(auth.userId, 'view_hr_tickets'))) return false;
+  if (ticket.assigned_to != null && ticket.assigned_to === auth.userId) return true;
   if (auth.role === 'employee') return false;
-  if (isHrSensitiveTicket(ticket)) return hasPermission(auth.userId, 'view_hr_tickets');
   return true;
 }
 

@@ -353,14 +353,16 @@ export const getOne = asyncHandler(async (req: Request, res: Response) => {
     [id]
   );
 
-  // Data scrubbing: a caller who can only see this ticket because they're its
-  // creator — a plain employee, not an admin/manager or someone with HR
-  // access — must never see internal notes. That's the entire point of the
-  // flag (see MIGRATION_046). Anyone whose access isn't "only the creator"
-  // (admin/manager, or an employee individually granted view_hr_tickets) is
-  // trusted with the full thread including internal notes.
-  const isPlainCreator = req.auth!.role === 'employee' && ticket.created_by === req.auth!.userId;
-  const replies = isPlainCreator ? repliesResult.rows.filter((r) => !r.is_internal_note) : repliesResult.rows;
+  // Data scrubbing (Chat 3C — broadened from "plain creator" to every plain-
+  // employee-role user, explicitly required once assigned-employee access shipped):
+  // ANY caller whose role is 'employee' must never see internal notes, full stop —
+  // whether they can see this ticket because they're its creator, its assigned
+  // employee, or (on an HR-sensitive ticket) hold view_hr_tickets individually.
+  // That's the entire point of the flag (see MIGRATION_046); it is not relaxed by
+  // having view_hr_tickets, only by not being a plain employee at all. Admin/manager
+  // are trusted with the full thread including internal notes.
+  const isPlainEmployee = req.auth!.role === 'employee';
+  const replies = isPlainEmployee ? repliesResult.rows.filter((r) => !r.is_internal_note) : repliesResult.rows;
 
   // category_is_hr_sensitive/request_type_is_hr_sensitive are join-only
   // helpers for canAccessTicket() above, never part of the ticket's public
@@ -403,7 +405,7 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
   const finalAttachments = validateAttachments(attachments);
 
   const ticket = await pool.query(
-    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id,
+    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id, t.assigned_to,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.first_response_at, t.sla_response_due_at
@@ -416,28 +418,72 @@ export const reply = asyncHandler(async (req: Request, res: Response) => {
   if (!ticket.rows[0]) throw new AppError(404, 'Ticket not found');
   if (!(await canAccessTicket(req.auth!, ticket.rows[0]))) throw new AppError(404, 'Ticket not found');
 
-  // Simplification: "admin reply" = written by an admin/manager on the tenant side.
-  // There's no separate macrocore support-staff role in this schema yet.
-  const isAdminReply = req.auth!.role === 'admin' || req.auth!.role === 'manager';
+  // Chat 3C follow-up — public reply direction ("is this a support-side reply or
+  // the requester's own follow-up?") must come from the TICKET RELATIONSHIP, not
+  // from role alone, now that a plain-employee assignee can reply at all. Role
+  // alone would misclassify an assigned employee's reply as a requester reply
+  // (wrong side in the frontend thread, and it could never stamp first_response_at
+  // — an SLA-breaking regression on top of the misclassification). The stored
+  // column is still named is_admin_reply (no migration/rename — see the INSERT
+  // below), but what it now encodes is "not the ticket's own creator AND
+  // operationally staff on this ticket", matching Stage 3's future staff_reply
+  // vs requester_reply event split.
+  //
+  // Corrected again (second follow-up): "not the creator" alone is NOT enough —
+  // this route is authenticated-only and canAccessTicket() falls through to
+  // true for any non-employee role (e.g. 'viewer') on a non-HR ticket, so a
+  // plain `created_by !== userId` check would newly make a viewer's reply on
+  // someone else's ticket support-side and let it stamp first_response_at.
+  // That's a real scope leak this prerequisite must NOT introduce. Support-side
+  // is narrowed to exactly: not the creator, AND (admin/manager, OR an employee
+  // who is this ticket's assigned_to). A viewer (or any other non-employee,
+  // non-admin/manager role) replying to someone else's ticket is therefore
+  // still requester-side under this formula and can never stamp
+  // first_response_at — whether that's the RIGHT long-term behavior for
+  // viewers is a separate, not-yet-made policy decision (viewer route/ticket
+  // access scope is pre-existing and untouched here), not something this
+  // narrow prerequisite fix broadens either way.
+  //
+  //   - An assigned employee's reply on someone else's ticket -> support-side.
+  //   - Admin/manager replying on someone else's ticket -> support-side (unchanged).
+  //   - Admin/manager replying on THEIR OWN ticket -> requester-side (this is new:
+  //     previously any admin/manager reply was always "admin reply", even on their
+  //     own ticket — that was already slightly wrong, and this fix corrects it too).
+  //   - A viewer (or any other non-employee, non-admin/manager role) replying on
+  //     someone else's ticket -> requester-side (unchanged from before this whole
+  //     prerequisite — NOT newly broadened to support-side).
+  const isStaffReply =
+    ticket.rows[0].created_by !== req.auth!.userId &&
+    (req.auth!.role === 'admin' ||
+      req.auth!.role === 'manager' ||
+      (req.auth!.role === 'employee' && ticket.rows[0].assigned_to === req.auth!.userId));
 
-  // Security: only an admin/manager reply can ever be marked internal. A
-  // standard employee sending is_internal_note: true gets silently downgraded
-  // to false rather than rejected — matches how this controller already
-  // treats other unauthorized-but-harmless client input (finalPriority/
-  // finalCategory fall back instead of erroring on an invalid value).
-  const finalIsInternalNote = isAdminReply && is_internal_note === true;
+  // Internal-note AUTHORIZATION stays a separate, role-only concept — completely
+  // independent of isStaffReply. An assigned plain employee is support-side for
+  // reply-direction purposes but must never be able to write an internal note;
+  // only admin/manager can. A standard employee (creator or assignee) sending
+  // is_internal_note: true gets silently downgraded to false rather than
+  // rejected — matches how this controller already treats other
+  // unauthorized-but-harmless client input (finalPriority/finalCategory fall
+  // back instead of erroring on an invalid value).
+  const canWriteInternalNote = req.auth!.role === 'admin' || req.auth!.role === 'manager';
+  const finalIsInternalNote = canWriteInternalNote && is_internal_note === true;
 
   const result = await pool.query(
     `INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin_reply, is_internal_note, attachments)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
      RETURNING id, user_id, message, is_admin_reply, is_internal_note, attachments, created_at`,
-    [id, req.auth!.userId, message.trim(), isAdminReply, finalIsInternalNote, JSON.stringify(finalAttachments)]
+    [id, req.auth!.userId, message.trim(), isStaffReply, finalIsInternalNote, JSON.stringify(finalAttachments)]
   );
 
   // Correctness fix while touching this: an internal note is never seen by the
   // ticket's creator, so it can't count as the "first response" for SLA
-  // purposes — only a real (non-internal) admin reply stamps first_response_at.
-  if (isAdminReply && !finalIsInternalNote && !ticket.rows[0].first_response_at) {
+  // purposes — only a real (non-internal) support-side reply stamps
+  // first_response_at. Gated on isStaffReply, not role, for the same reason as
+  // above: an assigned employee's reply is support-side and must be able to
+  // satisfy first-response SLA; an admin/manager replying to their own ticket
+  // must NOT (it's a requester-side reply, same as any other requester).
+  if (isStaffReply && !finalIsInternalNote && !ticket.rows[0].first_response_at) {
     await pool.query(
       `UPDATE support_tickets SET first_response_at = NOW(), sla_response_breached = (NOW() > sla_response_due_at), updated_at = NOW()
        WHERE id = $1`,
@@ -466,7 +512,7 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   }
 
   const existing = await pool.query(
-    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id,
+    `SELECT t.id, t.created_by, t.category, t.category_id, t.request_type_id, t.assigned_to, t.status,
             COALESCE(tc.is_hr_sensitive, false) AS category_is_hr_sensitive,
             COALESCE(rt.is_hr_sensitive, false) AS request_type_is_hr_sensitive,
             t.resolved_at, t.sla_resolution_due_at
@@ -479,18 +525,26 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   if (!existing.rows[0]) throw new AppError(404, 'Ticket not found');
   if (!(await canAccessTicket(req.auth!, existing.rows[0]))) throw new AppError(404, 'Ticket not found');
 
-  // Status AND Priority are both fields a ticket's own requester must not be able
-  // to move themselves — see canManageTicketStatus()'s own comment. Priority is
-  // governed by the exact same rule (this feature's own spec: "apply the exact
-  // same can_manage_status UI logic to the Priority dropdown"), so it's checked
-  // against the same function rather than a separate one. Unlike assigned_to's
-  // silent-ignore-if-unauthorized convention below, this is a hard 403: both
-  // fields are hidden client-side for anyone without this right, so a request
-  // that still sends them past that point is either a stale UI or a direct API
-  // call, and either way deserves a real error, not a silent no-op that looks
+  // Status, Priority, AND category_id are all fields a ticket's own requester must
+  // not be able to move themselves — see canManageTicketStatus()'s own comment.
+  // Priority is governed by the exact same rule (this feature's own spec: "apply
+  // the exact same can_manage_status UI logic to the Priority dropdown"). category_id
+  // was folded in here (Chat 3C, Option B) once the assigned-employee access
+  // broadening in canAccessTicket() gave a non-creator, non-IT assignee reachability
+  // into this endpoint with no field-level guard on category_id at all — rather than
+  // add a narrower, special-cased guard just for that one new path, category_id now
+  // gets the same hard-403 treatment status/priority already had. Accepted
+  // consequence: a ticket's own creator (plain employee) can no longer recategorize
+  // their own ticket through a direct API call unless they're IT staff/manager/admin
+  // — the current frontend doesn't expose post-creation category editing anyway, and
+  // category is operational triage data, not something the requester owns. Unlike
+  // assigned_to's silent-ignore-if-unauthorized convention below, this is a hard 403:
+  // all three fields are hidden client-side for anyone without this right, so a
+  // request that still sends them past that point is either a stale UI or a direct
+  // API call, and either way deserves a real error, not a silent no-op that looks
   // like success.
-  if ((status !== undefined || priority !== undefined) && !(await canManageTicketStatus(req.auth!))) {
-    throw new AppError(403, 'Only IT staff, managers, and admins can change a ticket status or priority.');
+  if ((status !== undefined || priority !== undefined || category_id !== undefined) && !(await canManageTicketStatus(req.auth!))) {
+    throw new AppError(403, 'Only IT staff, managers, and admins can change a ticket status, priority, or category.');
   }
 
   // category_id is explicit-null-vs-omitted aware (unlike most COALESCE-on-

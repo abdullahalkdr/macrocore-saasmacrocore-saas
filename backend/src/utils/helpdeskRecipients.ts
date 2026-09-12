@@ -1,5 +1,6 @@
 import { pool } from '../db/pool';
 import { canAccessTicket, ItsmTicketAccessContext } from './itsmApprovals';
+import type { EmailLang } from './email';
 
 // ============================================================================
 // Helpdesk / ITSM recipient resolution (Chat 3B, Stage 2).
@@ -20,17 +21,15 @@ import { canAccessTicket, ItsmTicketAccessContext } from './itsmApprovals';
 // every candidate (requester, assignee, department manager, escalation-role
 // holder, admin/manager fallback) passes through.
 //
-// Known authorization gap (Option A, unchanged from the Stage 1/2 planning
-// discussion): a plain `employee`-role user who is assigned a ticket but did
-// not create it currently fails canAccessTicket() (that function only ever
-// returns true for `employee` when they're the ticket's own creator). This
-// file does NOT work around that — an assignee/escalation-role/fallback
-// candidate who can't open the ticket is simply treated as ineligible and
-// the resolver moves on (to the next fallback step, where the event's matrix
-// allows one, or to a no-recipient diagnostic otherwise). Broadening ticket
-// access for an assigned employee is an explicit prerequisite logged for
-// Stage 3 (Chat 3C) before assignment emails are ever enabled end-to-end —
-// not something to fix here.
+// Assigned-employee access (formerly "Option A", now fixed — Chat 3C): a plain
+// `employee`-role user who is assigned a ticket but did not create it now
+// passes canAccessTicket() on a non-HR ticket, same as its creator would. On
+// an HR-sensitive ticket an assignee still needs view_hr_tickets — the HR gate
+// runs before the assignee check in canAccessTicket(), unchanged for every
+// non-creator. A candidate can therefore still come back ineligible here (HR
+// gate, inactive/wrong-tenant, no usable email) — the resolver treats that the
+// same as before: move on to the next fallback step where the event's matrix
+// allows one, or a no-recipient diagnostic otherwise.
 //
 // Dedup key (out of scope here): Stage 3's actual enqueueEmail() call sites
 // will need a dedup_key per (ticket, event, recipient, ...) to use the
@@ -67,6 +66,10 @@ export interface ResolvedRecipient {
   userId: string;
   email: string;
   recipientRole: RecipientRole;
+  // Normalized from users.preferred_language (COALESCE(..., 'ar')) — Stage 3's
+  // sending stage picks the email template language from this rather than
+  // re-querying the recipient itself.
+  preferredLanguage: EmailLang;
 }
 
 // Short, stable, machine-checkable reason codes — safe to log server-side
@@ -125,6 +128,7 @@ interface CandidateUserRow {
   status: string;
   role: string;
   company_id: string;
+  preferred_language: EmailLang;
 }
 
 // The single eligibility gate every candidate — no matter how it was found —
@@ -145,9 +149,9 @@ async function resolveEligibleCandidate(
   ticket: ItsmTicketAccessContext,
   requesterUserId: string,
   excludeSelf: boolean
-): Promise<{ userId: string; email: string } | null> {
+): Promise<{ userId: string; email: string; preferredLanguage: EmailLang } | null> {
   const result = await pool.query<CandidateUserRow>(
-    'SELECT id, email, status, role, company_id FROM users WHERE id = $1 AND company_id = $2',
+    "SELECT id, email, status, role, company_id, COALESCE(preferred_language, 'ar') AS preferred_language FROM users WHERE id = $1 AND company_id = $2",
     [userId, companyId]
   );
   const row = result.rows[0];
@@ -159,7 +163,7 @@ async function resolveEligibleCandidate(
   if (!(await canAccessTicket({ userId: row.id, role: row.role }, ticket))) return null;
   // Return the trimmed value — harmless surrounding whitespace on the stored
   // address must not be forwarded into the later sending stage.
-  return { userId: row.id, email: trimmedEmail };
+  return { userId: row.id, email: trimmedEmail, preferredLanguage: row.preferred_language };
 }
 
 function dedupeRecipients(recipients: ResolvedRecipient[]): ResolvedRecipient[] {
@@ -355,7 +359,7 @@ export async function resolveHelpdeskRecipients(params: ResolveHelpdeskRecipient
         recipients: [],
         diagnostic: {
           reason: 'new_assignee_ineligible',
-          detail: `New assignee ${params.newAssigneeUserId} is not an eligible recipient (commonly the known canAccessTicket() gap for a plain employee assignee). No fallback recipient is substituted for an assignment notification — Option A, per the Stage 2 decision log.`,
+          detail: `New assignee ${params.newAssigneeUserId} is not an eligible recipient (commonly missing view_hr_tickets on an HR-sensitive ticket, or inactive/wrong-tenant/no usable email — a plain employee assignee is no longer blocked by canAccessTicket() itself on a non-HR ticket, see Chat 3C). No fallback recipient is substituted for an assignment notification, per the Stage 2 decision log.`,
         },
       };
     }
