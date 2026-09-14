@@ -2,6 +2,7 @@ import { app } from './app';
 import { env } from './config/env';
 import { sweepEmailQueue } from './utils/email';
 import { sweepApprovalSla } from './utils/approvalSla';
+import { sweepTicketSla } from './utils/ticketSla';
 
 app.listen(env.PORT, () => {
   console.log(`macrocore backend listening on port ${env.PORT} [${env.NODE_ENV}]`);
@@ -34,6 +35,9 @@ app.listen(env.PORT, () => {
   const runSweeps = (): void => {
     void sweepEmailQueue().catch((err) => console.error('[email] sweep failed', err));
     void sweepApprovalSla().catch((err) => console.error('[approvalSla] sweep failed', err));
+    // Chat 3D Stage 5 — Helpdesk SLA sweep, same isolated-catch shape as the
+    // two above: a failure here never affects or delays either other sweep.
+    void sweepTicketSla().catch((err) => console.error('[ticketSla] sweep failed', err));
   };
   runSweeps(); // once right away — picks up anything left over from before a restart
   setInterval(runSweeps, 60_000);

@@ -89,18 +89,23 @@ describe('index.ts scheduler (round 2 review, point 6)', () => {
     expect(matches.length).toBe(1);
   });
 
-  it('the single interval task calls both sweepEmailQueue() and sweepApprovalSla(), each with its own isolated catch', () => {
+  it('the single interval task calls sweepEmailQueue(), sweepApprovalSla(), and sweepTicketSla(), each with its own isolated catch', () => {
     const runSweepsMatch = source.match(/const runSweeps = \(\): void => \{[\s\S]*?\};/);
     expect(runSweepsMatch).not.toBeNull();
     const body = runSweepsMatch![0];
     expect(body).toContain('sweepEmailQueue()');
     expect(body).toContain('sweepApprovalSla()');
+    // Chat 3D Stage 5 — a third sweep (Helpdesk SLA) joins the same
+    // scheduler tick; it must not replace or couple to the existing two.
+    expect(body).toContain('sweepTicketSla()');
     // Each call has its own .catch(...) -- a failure in one must never abort
-    // or delay the other.
+    // or delay the others.
     const emailCallMatch = body.match(/sweepEmailQueue\(\)\.catch\(/);
     const slaCallMatch = body.match(/sweepApprovalSla\(\)\.catch\(/);
+    const ticketSlaCallMatch = body.match(/sweepTicketSla\(\)\.catch\(/);
     expect(emailCallMatch).not.toBeNull();
     expect(slaCallMatch).not.toBeNull();
+    expect(ticketSlaCallMatch).not.toBeNull();
   });
 
   it('runs the sweeps once immediately (startup) in addition to the interval', () => {

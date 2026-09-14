@@ -1624,12 +1624,13 @@ export interface TicketSlaParams {
   lang: EmailLang;
   ticketNumber: string;
   severity: 'warning' | 'breach' | 'escalated';
-  // Required for 'warning'/'breach', ignored for 'escalated' — today's
-  // escalation logic (supportTickets.controller.ts's slaReport(), and its
-  // planned Stage 5 sweepTicketSla() successor) only ever escalates off a
-  // response-SLA breach, never a resolution-SLA one, so there is no
-  // resolution-escalated case to label.
-  slaType?: 'response' | 'resolution';
+  // Required for all three severities. Stage 5 (sweepTicketSla()) escalates
+  // both the response AND resolution SLA cycles independently (see
+  // claude/chat3d-helpdesk-sla-sweep-readonly-audit-2026-09-12.md, project
+  // doc) — an 'escalated' email with no slaType would be unable to say which
+  // cycle actually escalated, so this is no longer optional/ignored for that
+  // severity the way it was before Stage 5 existed.
+  slaType: 'response' | 'resolution';
   link: string;
 }
 
@@ -1649,12 +1650,12 @@ export function ticketSlaEmailHtml(params: TicketSlaParams): { subject: string; 
       lang === 'en'
         ? `
           <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">Ticket escalated 🚨</p>
-          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Support ticket${ref} has been escalated and needs attention now.</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Support ticket${ref}'s ${typeText} deadline has been escalated and needs attention now.</p>
           ${ctaButton(link, 'Review ticket now', lang)}
         `
         : `
           <p style="font-size: 15px; margin: 0 0 4px; color:#b91c1c;">تم تصعيد التذكرة 🚨</p>
-          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم تصعيد تذكرة الدعم${ref} وتحتاج إجراء فوري.</p>
+          <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم تصعيد مهلة ${typeText} لتذكرة الدعم${ref} وتحتاج إجراء فوري.</p>
           ${ctaButton(link, 'مراجعة التذكرة الآن', lang)}
         `,
       lang

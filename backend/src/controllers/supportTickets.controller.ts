@@ -18,20 +18,16 @@ import { planLevelOf } from '../config/planFeatures';
 import { generateTicketNumber } from '../utils/sequences';
 import { resolveHelpdeskRecipients, TicketPriority } from '../utils/helpdeskRecipients';
 import { enqueueEmail, ticketLifecycleEmailHtml, ticketReplyEmailHtml } from '../utils/email';
+// DEFAULT_SLA_MINUTES lives in utils/ticketSla.ts, not here — Chat 3D Stage 5:
+// a controller may import from a utility, but a background utility must never
+// import a controller, so the constant moved to its other (and now only
+// other) consumer instead of staying local and being imported the wrong way.
+import { DEFAULT_SLA_MINUTES } from '../utils/ticketSla';
 import { env } from '../config/env';
 
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const CATEGORIES = ['general', 'leave', 'grievance', 'document_request', 'payroll', 'it', 'other'];
-
-// Used only when a company has no sla_policies row yet for a given priority (a brand
-// new tenant hasn't configured any) — keeps ticket creation working out of the box.
-const DEFAULT_SLA_MINUTES: Record<string, { response: number; resolution: number }> = {
-  low: { response: 480, resolution: 4320 },
-  medium: { response: 240, resolution: 1440 },
-  high: { response: 60, resolution: 480 },
-  urgent: { response: 30, resolution: 240 },
-};
 
 // ITSM pivot (MIGRATION_047): request_type_id/dynamic_data added alongside
 // the existing category/category_id pair, not replacing them yet — a ticket
@@ -862,9 +858,29 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
          resolved_at = CASE WHEN $7 THEN NOW() WHEN $8 THEN NULL ELSE resolved_at END,
          sla_resolution_due_at = CASE WHEN $8 THEN NOW() + ($9::int * INTERVAL '1 minute') ELSE sla_resolution_due_at END,
          sla_resolution_breached = CASE WHEN $7 THEN (NOW() > sla_resolution_due_at) WHEN $8 THEN false ELSE sla_resolution_breached END,
-         escalation_level = CASE WHEN $8 THEN 0 ELSE escalation_level END,
-         escalated_to = CASE WHEN $8 THEN NULL ELSE escalated_to END,
-         escalated_at = CASE WHEN $8 THEN NULL ELSE escalated_at END,
+         -- Chat 3D Stage 5 — dual escalation reopen semantics (a deliberate,
+         -- approved NEW behavior change to Stage 4's shipped reset, not a bug
+         -- fix — see the Chat 3D audit, project doc
+         -- claude/chat3d-helpdesk-sla-sweep-readonly-audit-2026-09-12.md,
+         -- rev. 5 §1/§2 and rev. 7 §A). Only the resolution dimension resets
+         -- on reopen; the response dimension's own escalation (if any) is
+         -- left untouched. escalation_level/escalated_to/escalated_at are
+         -- recomputed from sla_response_escalated_at's OLD (pre-update) value
+         -- — safe because this statement never writes that column itself, so
+         -- every SET-list expression reading it sees its true current state.
+         sla_resolution_escalated_at = CASE WHEN $8 THEN NULL ELSE sla_resolution_escalated_at END,
+         escalation_level = CASE WHEN $8
+           THEN (CASE WHEN sla_response_escalated_at IS NOT NULL THEN 1 ELSE 0 END)
+           ELSE escalation_level END,
+         escalated_to = CASE WHEN $8 THEN
+             CASE WHEN sla_response_escalated_at IS NOT NULL
+                       AND sla_resolution_escalated_at IS NULL
+                  THEN escalated_to
+                  ELSE NULL END
+           ELSE escalated_to END,
+         escalated_at = CASE WHEN $8 THEN
+             CASE WHEN sla_response_escalated_at IS NOT NULL THEN sla_response_escalated_at ELSE NULL END
+           ELSE escalated_at END,
          updated_at = NOW()
      WHERE id = $10 AND company_id = $11 AND (NOT $8 OR status IN ('resolved', 'closed'))
      RETURNING ${TICKET_FIELDS}`,
@@ -1031,38 +1047,16 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
 export const slaReport = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
 
-  // Lazy sweep: flip breach flags + escalate for tickets whose due date has already
-  // passed but haven't been touched (no admin reply / not yet resolved). Runs on every
-  // report request rather than a scheduled job — no extra infra, correct as of "now".
-  await pool.query(
-    `UPDATE support_tickets sp
-     SET sla_response_breached = true
-     WHERE sp.company_id = $1 AND sp.first_response_at IS NULL AND sp.sla_response_due_at < NOW() AND sp.sla_response_breached = false`,
-    [companyId]
-  );
-  await pool.query(
-    `UPDATE support_tickets sp
-     SET sla_resolution_breached = true
-     WHERE sp.company_id = $1 AND sp.status NOT IN ('resolved', 'closed') AND sp.sla_resolution_due_at < NOW() AND sp.sla_resolution_breached = false`,
-    [companyId]
-  );
-  // Escalate: only for tickets whose policy defines an escalate_after_minutes window,
-  // still open, response-breached, and not already escalated.
-  await pool.query(
-    `UPDATE support_tickets t
-     SET escalation_level = 1, escalated_at = NOW(),
-         escalated_to = (
-           SELECT u.id FROM users u
-           WHERE u.company_id = t.company_id AND u.role = COALESCE(sp.escalate_to_role, 'admin')
-           ORDER BY u.created_at ASC LIMIT 1
-         )
-     FROM sla_policies sp
-     WHERE sp.company_id = t.company_id AND sp.priority = t.priority
-       AND t.company_id = $1 AND t.escalation_level = 0 AND t.sla_response_breached = true
-       AND sp.escalate_after_minutes IS NOT NULL
-       AND t.sla_response_due_at + (sp.escalate_after_minutes * INTERVAL '1 minute') < NOW()`,
-    [companyId]
-  );
+  // Chat 3D Stage 5 — read-only. The lazy sweep that used to live here (flip
+  // breach flags + escalate on every report request) is now
+  // sweepTicketSla()'s job (backend/src/utils/ticketSla.ts), running on its
+  // own schedule regardless of whether anyone ever opens this report. This
+  // endpoint only ever reads support_tickets from here on — see the Chat 3D
+  // audit (project doc
+  // claude/chat3d-helpdesk-sla-sweep-readonly-audit-2026-09-12.md) for why a
+  // request-triggered mutation was never safe to keep once a background
+  // sweep exists (double-processing, no multi-instance locking, no per-row
+  // failure isolation).
 
   const params: unknown[] = [companyId];
   const visibility = await visibilityFilter(req.auth!, params);

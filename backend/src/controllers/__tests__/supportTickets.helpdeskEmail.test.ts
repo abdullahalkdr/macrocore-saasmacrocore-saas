@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 
 // ============================================================================
 // Stage 3 (Helpdesk/ITSM email wiring) — controller-level behavioral tests.
@@ -82,7 +84,7 @@ vi.mock('../../utils/email', async (importOriginal) => {
 // ticketLink() will use — asserted against directly via the real `env`
 // import below rather than a hardcoded duplicate string.
 import { env } from '../../config/env';
-import { create, reply, updateStatus } from '../supportTickets.controller';
+import { create, reply, updateStatus, slaReport } from '../supportTickets.controller';
 
 const COMPANY_ID = 'company-1';
 
@@ -1030,5 +1032,117 @@ describe('updateStatus() — Stage 3/4 assignment/status/reopen email wiring', (
     const req = makeReq({ auth: { userId: 'manager-1', companyId: COMPANY_ID, role: 'manager' }, params: { id: TICKET_ID }, body: { priority: 'high' } });
     const res = makeRes();
     await expect(updateStatus(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  // --------------------------------------------------------------------
+  // Stage 5 (Chat 3D rev. 7 §A) — reopen's dual-escalation reset. The exact
+  // CASE arithmetic for sla_resolution_escalated_at/escalation_level/
+  // escalated_to/escalated_at cannot be exercised through mocks.query (it
+  // intercepts by SQL substring and returns a hand-typed canned row rather
+  // than actually running Postgres CASE expressions against a real prior
+  // row) — the same live-DB gap disclosed in ticketSla.test.ts's header
+  // comment. What CAN be verified here, and is verified below, is that the
+  // shipped SQL text contains the exact corrected CASE structure for all
+  // four rows of the truth table the user's rev. 7 review settled on:
+  //   1. neither dimension escalated before reopen -> level 0, escalated_to
+  //      NULL, escalated_at NULL, sla_resolution_escalated_at NULL
+  //   2. response-only escalated                  -> level 1, escalated_to
+  //      PRESERVED, escalated_at = old sla_response_escalated_at,
+  //      sla_resolution_escalated_at NULL (was already NULL)
+  //   3. resolution-only escalated                 -> level 0, escalated_to
+  //      NULL, escalated_at NULL, sla_resolution_escalated_at reset to NULL
+  //   4. both escalated                            -> level 1 (response
+  //      survives), escalated_to NULL (cleared — rev. 7's tie-break fix:
+  //      we can no longer tell which dimension the old escalated_to
+  //      pointed at once resolution's escalation is wiped), escalated_at =
+  //      old sla_response_escalated_at, sla_resolution_escalated_at NULL
+  // A live-DB run against all four seeded rows is still required before
+  // sign-off (per the audit's own live-test standard) — this only proves
+  // the shipped statement is byte-for-byte the one rev. 7 approved.
+  // --------------------------------------------------------------------
+  describe('reopen dual-escalation reset SQL (source regression — Chat 3D rev. 7 §A)', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../supportTickets.controller.ts'), 'utf-8');
+    const updateBlockStart = source.indexOf('SET status = COALESCE($1, status)');
+    const updateBlockEnd = source.indexOf('RETURNING ${TICKET_FIELDS}', updateBlockStart);
+    const updateBlock = source.slice(updateBlockStart, updateBlockEnd);
+
+    it('resets sla_resolution_escalated_at to NULL on reopen, and only on reopen', () => {
+      expect(updateBlock).toContain('sla_resolution_escalated_at = CASE WHEN $8 THEN NULL ELSE sla_resolution_escalated_at END');
+    });
+
+    it('row 1 & 3 (resolution escalated pre-reopen, response not) collapse escalation_level to 0 on reopen', () => {
+      // escalation_level's reopen branch keys off sla_response_escalated_at
+      // ONLY (the pre-update value — this statement never writes that
+      // column) — resolution's own prior escalation contributes nothing,
+      // which is exactly rows 1 and 3 of the table.
+      expect(updateBlock).toMatch(
+        /escalation_level = CASE WHEN \$8\s*\n\s*THEN \(CASE WHEN sla_response_escalated_at IS NOT NULL THEN 1 ELSE 0 END\)\s*\n\s*ELSE escalation_level END/
+      );
+    });
+
+    it('row 2 (response-only escalated) preserves escalated_to; rows 1, 3 & 4 clear it', () => {
+      // escalated_to survives reopen only when response was escalated AND
+      // resolution was NOT (row 2) — every other row (neither escalated,
+      // resolution-only, or both) clears it to NULL, per rev. 7's
+      // corrected tie-break (row 4 can no longer tell which dimension the
+      // stored escalated_to belonged to once resolution's flag is wiped).
+      expect(updateBlock).toMatch(
+        /escalated_to = CASE WHEN \$8 THEN\s*\n\s*CASE WHEN sla_response_escalated_at IS NOT NULL\s*\n\s*AND sla_resolution_escalated_at IS NULL\s*\n\s*THEN escalated_to\s*\n\s*ELSE NULL END\s*\n\s*ELSE escalated_to END/
+      );
+    });
+
+    it('escalated_at on reopen mirrors sla_response_escalated_at (rows 2 & 4), else NULL (rows 1 & 3)', () => {
+      expect(updateBlock).toMatch(
+        /escalated_at = CASE WHEN \$8 THEN\s*\n\s*CASE WHEN sla_response_escalated_at IS NOT NULL THEN sla_response_escalated_at ELSE NULL END\s*\n\s*ELSE escalated_at END/
+      );
+    });
+
+    it('never writes the response-SLA columns in the same statement (unchanged guarantee, re-asserted alongside the new escalation columns)', () => {
+      expect(updateBlock).not.toContain('sla_response_escalated_at =');
+      expect(updateBlock).not.toContain('first_response_at =');
+      expect(updateBlock).not.toContain('sla_response_due_at =');
+      expect(updateBlock).not.toContain('sla_response_breached =');
+    });
+  });
+});
+
+// ============================================================================
+// slaReport() — Chat 3D Stage 5: read-only triage view.
+//
+// Before this stage, slaReport() ran three mutating UPDATEs (breach flags +
+// escalation) on every GET request — replaced by sweepTicketSla()'s own
+// schedule. This asserts the replacement behaviorally (real handler, mocked
+// pool), not just by absence of source text: exactly one query reaches the
+// database, and it is a read (SELECT ... GROUP BY), never an UPDATE.
+// ============================================================================
+describe('slaReport() — Chat 3D Stage 5 (read-only, no mutation)', () => {
+  it('issues exactly one query — a SELECT summary — and never an UPDATE', async () => {
+    mocks.query.mockResolvedValue({
+      rows: [{ category: 'general', priority: 'medium', status: 'open', total: 3, response_breached: 1, resolution_breached: 0, escalated: 1 }],
+    });
+
+    const req = makeReq({ auth: { userId: 'admin-1', companyId: COMPANY_ID, role: 'admin' } });
+    const res = makeRes();
+    await slaReport(req, res, NOOP_NEXT);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(mocks.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = mocks.query.mock.calls[0];
+    expect(sql).toMatch(/^\s*SELECT category, priority, status/);
+    expect(sql).not.toMatch(/UPDATE/i);
+    expect(params).toEqual([COMPANY_ID]);
+    expect((res as any).body.summary).toHaveLength(1);
+  });
+
+  it('a plain employee only sees their own tickets in the summary (visibility filter still applied)', async () => {
+    mocks.query.mockResolvedValue({ rows: [] });
+    const req = makeReq({ auth: { userId: 'employee-9', companyId: COMPANY_ID, role: 'employee' } });
+    const res = makeRes();
+    await slaReport(req, res, NOOP_NEXT);
+
+    expect(mocks.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = mocks.query.mock.calls[0];
+    expect(sql).toContain('AND created_by = $2');
+    expect(params).toEqual([COMPANY_ID, 'employee-9']);
   });
 });

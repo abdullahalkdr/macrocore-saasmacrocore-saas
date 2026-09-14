@@ -739,17 +739,28 @@ describe('ticketSlaEmailHtml', () => {
     }
   });
 
-  it('renders escalated in both languages regardless of slaType, with the exact CTA link', () => {
-    for (const lang of LANGS) {
-      const { subject, html } = ticketSlaEmailHtml({ lang, ticketNumber: 'GEN-2609-0001', severity: 'escalated', link: LINK });
-      expect(subject).toContain('GEN-2609-0001');
-      expect(html).toContain(`href="${LINK}"`);
+  // Chat 3D Stage 5 — dual escalation (response AND resolution can now
+  // escalate independently, see claude/chat3d-helpdesk-sla-sweep-readonly-
+  // audit-2026-09-12.md, project doc, rev. 5 §6). slaType is no longer
+  // ignored for 'escalated' — it is required, exactly like warning/breach —
+  // and MUST vary the copy, or a resolution escalation and a response
+  // escalation would be indistinguishable to whoever receives them.
+  it('renders escalated for both response and resolution SLA types, in both languages, with distinct copy', () => {
+    const slaTypes: Array<'response' | 'resolution'> = ['response', 'resolution'];
+    for (const slaType of slaTypes) {
+      for (const lang of LANGS) {
+        const { subject, html } = ticketSlaEmailHtml({ lang, ticketNumber: 'GEN-2609-0001', severity: 'escalated', slaType, link: LINK });
+        expect(subject).toContain('GEN-2609-0001');
+        expect(html).toContain(`href="${LINK}"`);
+      }
     }
-    // slaType is ignored/irrelevant for 'escalated' — passing one changes nothing.
-    const withoutType = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', link: LINK });
-    const withType = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', slaType: 'response', link: LINK });
-    expect(withoutType.subject).toBe(withType.subject);
-    expect(withoutType.html).toBe(withType.html);
+    const response = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', slaType: 'response', link: LINK });
+    const resolution = ticketSlaEmailHtml({ lang: 'en', ticketNumber: 'GEN-2609-0001', severity: 'escalated', slaType: 'resolution', link: LINK });
+    expect(response.html).not.toBe(resolution.html);
+    // Subject stays generic (ticket number only) for 'escalated', matching
+    // warning/breach's own existing pattern — only the body varies by
+    // slaType. This is intended, not an oversight.
+    expect(response.subject).toBe(resolution.subject);
   });
 
   it('warning/response and warning/resolution produce distinct copy (the SLA type label actually varies the output)', () => {
