@@ -270,6 +270,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
       try {
         const { subject, html } = trialStartedEmailHtml({
           lang: recipient.preferredLanguage,
+          timeZone: recipient.companyTimezone,
           companyName: company.name,
           trialStartDate: company.trial_start_date,
           trialEndDate: company.trial_end_date,

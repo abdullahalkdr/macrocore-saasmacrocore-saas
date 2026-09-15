@@ -35,12 +35,14 @@ export interface ResolvedBillingRecipient {
   userId: string;
   email: string;
   preferredLanguage: EmailLang;
+  companyTimezone: string;
 }
 
 interface BillingCandidateRow {
   id: string;
   email: string;
   preferred_language: string | null;
+  company_timezone: string | null;
 }
 
 // Deliberately permissive shape check, not a full RFC 5322 validator — this
@@ -72,10 +74,11 @@ function resolveLang(raw: string | null): EmailLang {
  */
 export async function resolveBillingRecipients(companyId: string): Promise<ResolvedBillingRecipient[]> {
   const result = await pool.query<BillingCandidateRow>(
-    `SELECT id, email, preferred_language
-     FROM users
-     WHERE company_id = $1 AND role = 'admin' AND status = 'active'
-     ORDER BY created_at ASC, id ASC`,
+    `SELECT u.id, u.email, u.preferred_language, c.timezone AS company_timezone
+     FROM users u
+     JOIN companies c ON c.id = u.company_id
+     WHERE u.company_id = $1 AND u.role = 'admin' AND u.status = 'active'
+     ORDER BY u.created_at ASC, u.id ASC`,
     [companyId]
   );
 
@@ -87,7 +90,12 @@ export async function resolveBillingRecipients(companyId: string): Promise<Resol
     const normalized = trimmedEmail.toLowerCase();
     if (seenEmails.has(normalized)) continue;
     seenEmails.add(normalized);
-    out.push({ userId: row.id, email: trimmedEmail, preferredLanguage: resolveLang(row.preferred_language) });
+    out.push({
+      userId: row.id,
+      email: trimmedEmail,
+      preferredLanguage: resolveLang(row.preferred_language),
+      companyTimezone: row.company_timezone?.trim() || 'Asia/Kuwait',
+    });
   }
   return out;
 }

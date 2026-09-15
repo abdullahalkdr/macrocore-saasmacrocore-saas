@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 // ============================================================================
@@ -87,11 +87,17 @@ function mockSuccessPool() {
 const VALID_BODY = { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-09-15T12:00:00.000Z'));
   vi.clearAllMocks();
   mocks.logAudit.mockResolvedValue(undefined);
   mockSuccessPool();
   mocks.resolveBillingRecipients.mockResolvedValue([]);
   mocks.enqueueEmail.mockResolvedValue({ jobId: 'job-1', deduped: false });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('activateSubscription() — subscription-activated billing email, post-commit wiring', () => {
@@ -145,12 +151,15 @@ describe('activateSubscription() — subscription-activated billing email, post-
   });
 
   it('the activated-plan email content reflects the exact request amount/currency/dates, never a stale/default value', async () => {
-    mocks.resolveBillingRecipients.mockResolvedValue([{ userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en' }]);
+    vi.setSystemTime(new Date('2026-09-15T22:00:00.000Z'));
+    mocks.resolveBillingRecipients.mockResolvedValue([
+      { userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en', companyTimezone: 'Asia/Kuwait' },
+    ]);
     await activateSubscription(makeReq({ id: 'company-1' }, VALID_BODY), makeRes(), NOOP_NEXT);
     const enqueueArgs = mocks.enqueueEmail.mock.calls[0][0];
     expect(enqueueArgs.html).toContain('660.00 USD');
-    expect(enqueueArgs.html).toContain('2026-09-15');
-    expect(enqueueArgs.html).toContain('2027-09-15');
+    expect(enqueueArgs.html).toContain('2026-09-16');
+    expect(enqueueArgs.html).toContain('2027-09-16');
     expect(enqueueArgs.html).toContain('/account?section=billing');
   });
 

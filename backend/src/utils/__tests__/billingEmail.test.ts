@@ -41,6 +41,7 @@ describe("resolveSenderFrom / resolveReplyTo — 'billing' category", () => {
 // ---------------------------------------------------------------------------
 describe('trialStartedEmailHtml', () => {
   const base = {
+    timeZone: 'Asia/Kuwait',
     companyName: 'Al Salam Trading Co.',
     trialStartDate: new Date('2026-09-15T08:00:00.000Z'),
     trialEndDate: new Date('2026-09-29T08:00:00.000Z'),
@@ -59,13 +60,22 @@ describe('trialStartedEmailHtml', () => {
     expect(en.html).toContain(`href="${LINK}"`);
   });
 
-  it('shows the company name, and the trial start/end dates as plain UTC calendar dates (YYYY-MM-DD), in both languages', () => {
+  it('shows the company name and tenant-local trial dates as YYYY-MM-DD in both languages', () => {
     for (const lang of LANGS) {
       const { html } = trialStartedEmailHtml({ ...base, lang });
       expect(html).toContain('Al Salam Trading Co.');
       expect(html).toContain('2026-09-15');
       expect(html).toContain('2026-09-29');
     }
+  });
+
+  it('renders a post-midnight Kuwait event on the Kuwait calendar day, not the previous UTC day', () => {
+    const { html } = trialStartedEmailHtml({
+      ...base,
+      lang: 'ar',
+      trialStartDate: '2026-09-15T22:59:27.715Z',
+    });
+    expect(html).toContain('2026-09-16');
   });
 
   it('accepts an ISO string for the dates too (not just a Date object), producing the same calendar date', () => {
@@ -117,6 +127,7 @@ describe('trialStartedEmailHtml', () => {
 // ---------------------------------------------------------------------------
 describe('subscriptionActivatedEmailHtml', () => {
   const base = {
+    timeZone: 'Asia/Kuwait',
     plan: 'gold',
     billingInterval: 'monthly' as const,
     periodAmount: 149.5,
@@ -197,6 +208,7 @@ describe('subscriptionActivatedEmailHtml', () => {
 // ---------------------------------------------------------------------------
 describe('subscriptionInvoiceIssuedEmailHtml', () => {
   const base = {
+    timeZone: 'Asia/Kuwait',
     invoiceNumber: 'MC-SUB-000123',
     plan: 'silver',
     billingInterval: 'annual' as const,

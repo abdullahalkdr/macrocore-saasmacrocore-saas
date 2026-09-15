@@ -27,8 +27,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function row(overrides: Partial<{ id: string; email: string; preferred_language: string | null }> = {}) {
-  return { id: 'user-1', email: 'admin@acme.example', preferred_language: 'en', ...overrides };
+function row(overrides: Partial<{ id: string; email: string; preferred_language: string | null; company_timezone: string | null }> = {}) {
+  return { id: 'user-1', email: 'admin@acme.example', preferred_language: 'en', company_timezone: 'Asia/Kuwait', ...overrides };
 }
 
 describe('resolveBillingRecipients()', () => {
@@ -37,17 +37,18 @@ describe('resolveBillingRecipients()', () => {
     await resolveBillingRecipients('company-1');
     expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mocks.poolQuery.mock.calls[0];
-    expect(sql).toContain("role = 'admin'");
-    expect(sql).toContain("status = 'active'");
-    expect(sql).toContain('company_id = $1');
-    expect(sql).toContain('ORDER BY created_at ASC, id ASC');
+    expect(sql).toContain("u.role = 'admin'");
+    expect(sql).toContain("u.status = 'active'");
+    expect(sql).toContain('u.company_id = $1');
+    expect(sql).toContain('JOIN companies c ON c.id = u.company_id');
+    expect(sql).toContain('ORDER BY u.created_at ASC, u.id ASC');
     expect(params).toEqual(['company-1']);
   });
 
   it('returns a usable active admin with a valid email, normalized language', async () => {
     mocks.poolQuery.mockResolvedValue({ rows: [row()] });
     const out = await resolveBillingRecipients('company-1');
-    expect(out).toEqual([{ userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en' }]);
+    expect(out).toEqual([{ userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en', companyTimezone: 'Asia/Kuwait' }]);
   });
 
   // The WHERE clause itself is what excludes non-admin/inactive/cross-tenant
@@ -77,7 +78,7 @@ describe('resolveBillingRecipients()', () => {
   it('trims a valid email with surrounding whitespace before use', async () => {
     mocks.poolQuery.mockResolvedValue({ rows: [row({ email: '  admin@acme.example  ' })] });
     const out = await resolveBillingRecipients('company-1');
-    expect(out).toEqual([{ userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en' }]);
+    expect(out).toEqual([{ userId: 'user-1', email: 'admin@acme.example', preferredLanguage: 'en', companyTimezone: 'Asia/Kuwait' }]);
   });
 
   it('deduplicates by normalized (trimmed, lower-cased) email, keeping the first deterministically ordered userId', async () => {
@@ -105,6 +106,18 @@ describe('resolveBillingRecipients()', () => {
     mocks.poolQuery.mockResolvedValue({ rows: [row({ preferred_language: 'en' })] });
     const out = await resolveBillingRecipients('company-1');
     expect(out[0].preferredLanguage).toBe('en');
+  });
+
+  it('returns the tenant timezone used to render billing calendar dates', async () => {
+    mocks.poolQuery.mockResolvedValue({ rows: [row({ company_timezone: 'Europe/London' })] });
+    const out = await resolveBillingRecipients('company-1');
+    expect(out[0].companyTimezone).toBe('Europe/London');
+  });
+
+  it.each([null, '', '   '])('falls back company timezone %p to Asia/Kuwait', async (value) => {
+    mocks.poolQuery.mockResolvedValue({ rows: [row({ company_timezone: value })] });
+    const out = await resolveBillingRecipients('company-1');
+    expect(out[0].companyTimezone).toBe('Asia/Kuwait');
   });
 
   it.each([null, 'fr', '', 'AR', 'english'])('falls back preferred_language %p to ar', async (value) => {

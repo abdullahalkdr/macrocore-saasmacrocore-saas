@@ -1747,15 +1747,30 @@ export function ticketSlaEmailHtml(params: TicketSlaParams): { subject: string; 
 //     own header comment) — this file never reads env.FRONTEND_URL itself.
 // ============================================================================
 
-// Plain calendar date (YYYY-MM-DD), deliberately NOT toLocaleDateString() —
-// that's locale/timezone-dependent and is exactly the class of bug behind
-// the Stage 5 SLA timezone incident (claude/sla-timezone-incident-2026-09-09.md,
-// project doc). A trial/billing period boundary is a calendar date, not an
-// instant, so this reads it via toISOString() (always UTC) and takes just the
-// date portion — unambiguous in both languages, no timezone decision needed.
-function formatDateForEmail(value: Date | string, lang: EmailLang): string {
+// Plain calendar date (YYYY-MM-DD) in the tenant's configured IANA timezone.
+// The database values reaching these templates are instants: slicing their
+// UTC ISO string can show the previous day for a Kuwait tenant shortly after
+// midnight (caught by the B4A production QA). formatToParts keeps the output
+// deterministic while applying the tenant timezone explicitly.
+function formatDateForEmail(value: Date | string, lang: EmailLang, timeZone: string): string {
   const d = typeof value === 'string' ? new Date(value) : value;
   if (Number.isNaN(d.getTime())) return lang === 'en' ? 'N/A' : 'غير متوفر';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(d);
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // companies.timezone is validated on write, but preserve email delivery
+    // if old/imported data contains an invalid zone.
+  }
   return d.toISOString().slice(0, 10);
 }
 
@@ -1808,6 +1823,7 @@ function billingSummaryTable(rows: Array<[string, string]>, lang: EmailLang): st
 
 export interface TrialStartedEmailParams {
   lang: EmailLang;
+  timeZone: string;
   // The company's own registered name — free text, always escaped below.
   companyName: string;
   trialStartDate: Date | string;
@@ -1826,11 +1842,11 @@ export interface TrialStartedEmailParams {
 // account link (locked rule — no claim that registration/verification/
 // payment happened beyond what the company row itself proves).
 export function trialStartedEmailHtml(params: TrialStartedEmailParams): { subject: string; html: string } {
-  const { lang, companyName, trialStartDate, trialEndDate, plan, link } = params;
+  const { lang, timeZone, companyName, trialStartDate, trialEndDate, plan, link } = params;
   const safeCompany = escapeHtml(companyName);
   const planText = labelOrRaw(PLAN_LABEL, plan, lang);
-  const startText = formatDateForEmail(trialStartDate, lang);
-  const endText = formatDateForEmail(trialEndDate, lang);
+  const startText = formatDateForEmail(trialStartDate, lang, timeZone);
+  const endText = formatDateForEmail(trialEndDate, lang, timeZone);
 
   if (lang === 'en') {
     const html = emailShell(
@@ -1873,6 +1889,7 @@ export function trialStartedEmailHtml(params: TrialStartedEmailParams): { subjec
 
 export interface SubscriptionActivatedEmailParams {
   lang: EmailLang;
+  timeZone: string;
   plan: string;
   billingInterval: string;
   // subscriptions.period_amount — the exact agreed period charge, already a
@@ -1891,12 +1908,12 @@ export interface SubscriptionActivatedEmailParams {
 // conflict (409, subscriptions_one_live_per_company) never reaches this
 // function at all — the controller only calls it on the real INSERT path.
 export function subscriptionActivatedEmailHtml(params: SubscriptionActivatedEmailParams): { subject: string; html: string } {
-  const { lang, plan, billingInterval, periodAmount, currency, currentPeriodStart, currentPeriodEnd, link } = params;
+  const { lang, timeZone, plan, billingInterval, periodAmount, currency, currentPeriodStart, currentPeriodEnd, link } = params;
   const planText = labelOrRaw(PLAN_LABEL, plan, lang);
   const intervalText = labelOrRaw(BILLING_INTERVAL_LABEL, billingInterval, lang);
   const amountText = formatMoneyForEmail(periodAmount, currency);
-  const startText = formatDateForEmail(currentPeriodStart, lang);
-  const endText = formatDateForEmail(currentPeriodEnd, lang);
+  const startText = formatDateForEmail(currentPeriodStart, lang, timeZone);
+  const endText = formatDateForEmail(currentPeriodEnd, lang, timeZone);
 
   if (lang === 'en') {
     const html = emailShell(
@@ -1941,6 +1958,7 @@ export function subscriptionActivatedEmailHtml(params: SubscriptionActivatedEmai
 
 export interface SubscriptionInvoiceIssuedEmailParams {
   lang: EmailLang;
+  timeZone: string;
   // Server-generated formatted code (e.g. MC-SUB-000123, MIGRATION_083's
   // sequence-backed column DEFAULT). It is still escaped in HTML like every
   // other dynamic field.
@@ -1963,14 +1981,14 @@ export interface SubscriptionInvoiceIssuedEmailParams {
 // conflict (409, invoices_one_invoice_per_period) never reaches this
 // function — the controller only calls it on the real INSERT path.
 export function subscriptionInvoiceIssuedEmailHtml(params: SubscriptionInvoiceIssuedEmailParams): { subject: string; html: string } {
-  const { lang, invoiceNumber, plan, billingInterval, amount, currency, periodStart, periodEnd, issueDate, dueDate, link } = params;
+  const { lang, timeZone, invoiceNumber, plan, billingInterval, amount, currency, periodStart, periodEnd, issueDate, dueDate, link } = params;
   const safeInvoiceNumber = escapeHtml(invoiceNumber);
   const planText = labelOrRaw(PLAN_LABEL, plan, lang);
   const intervalText = labelOrRaw(BILLING_INTERVAL_LABEL, billingInterval, lang);
   const amountText = formatMoneyForEmail(amount, currency);
-  const periodText = `${formatDateForEmail(periodStart, lang)} → ${formatDateForEmail(periodEnd, lang)}`;
-  const issueText = formatDateForEmail(issueDate, lang);
-  const dueText = formatDateForEmail(dueDate, lang);
+  const periodText = `${formatDateForEmail(periodStart, lang, timeZone)} → ${formatDateForEmail(periodEnd, lang, timeZone)}`;
+  const issueText = formatDateForEmail(issueDate, lang, timeZone);
+  const dueText = formatDateForEmail(dueDate, lang, timeZone);
 
   if (lang === 'en') {
     const html = emailShell(

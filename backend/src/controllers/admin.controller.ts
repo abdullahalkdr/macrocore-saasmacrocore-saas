@@ -451,6 +451,7 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
       try {
         const { subject, html } = subscriptionActivatedEmailHtml({
           lang: recipient.preferredLanguage,
+          timeZone: recipient.companyTimezone,
           plan,
           billingInterval: billing_interval,
           periodAmount: resolvedAmount,
@@ -695,6 +696,7 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
       try {
         const { subject, html } = subscriptionInvoiceIssuedEmailHtml({
           lang: recipient.preferredLanguage,
+          timeZone: recipient.companyTimezone,
           invoiceNumber: invoice.invoice_number,
           plan: invoice.plan,
           billingInterval: invoice.billing_interval,
