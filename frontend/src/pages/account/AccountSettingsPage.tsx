@@ -12,8 +12,9 @@ import SetupSection from './SetupSection';
 import CustomizationsSection from './CustomizationsSection';
 import DeveloperSection from './DeveloperSection';
 import EmailDeliverySection from './EmailDeliverySection';
+import { resolveAccountDeepLinkSection, type AccountSectionId } from '../../utils/accountDeepLink';
 
-type SectionId = 'index' | 'profile' | 'company' | 'billing' | 'users' | 'setup' | 'customizations' | 'developer' | 'emailDelivery';
+type SectionId = AccountSectionId;
 
 interface SectionLink {
   id: SectionId;
@@ -30,10 +31,17 @@ export default function AccountSettingsPage() {
   // Policy Gate pilot (MIGRATION_074/075) — Step 3. The notification bell links here as
   // `/account?section=profile` so it always lands on the permanent "Policies &
   // Acknowledgments" card rather than trying (and failing, once dismissed) to reopen a
-  // specific modal. Deliberately narrowed to the one section id a query param is
-  // allowed to open — every other SectionId still requires an explicit click from the
-  // index grid, so a stray/crafted query value can never deep-link into an admin-only
-  // section (company/billing/users/setup/customizations/developer).
+  // specific modal. Deliberately narrowed to the section ids resolveAccountDeepLinkSection()
+  // allows a query param to open — every other SectionId still requires an explicit click
+  // from the index grid, so a stray/crafted query value can never deep-link into an
+  // admin-only section (company/users/setup/customizations/developer).
+  //
+  // Chat 4B, Stage B4A adds 'billing' to that allowlist — the subscription-activated
+  // and invoice-issued billing emails link here via `?section=billing` — but ONLY for
+  // an authenticated tenant admin (see resolveAccountDeepLinkSection() in
+  // utils/accountDeepLink.ts for why this can't just be a passthrough of the raw query
+  // value): an employee opening that same link must see the index page, exactly as if
+  // the query param weren't there at all.
   //
   // BUGFIX (2026-09, first pass) — react-router doesn't remount this page for a
   // same-route navigation (e.g. clicking the bell while already on /account, on any
@@ -63,14 +71,17 @@ export default function AccountSettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [active, setActive] = useState<SectionId>(searchParams.get('section') === 'profile' ? 'profile' : 'index');
+  const [active, setActive] = useState<SectionId>(resolveAccountDeepLinkSection(searchParams.get('section'), isAdmin) ?? 'index');
 
   useEffect(() => {
-    if (searchParams.get('section') === 'profile') setActive('profile');
+    const requested = searchParams.get('section');
+    const resolved = resolveAccountDeepLinkSection(requested, isAdmin);
+    if (resolved) setActive(resolved);
+    else if (requested === 'billing') setActive('index');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the
     // navigation event (location.key) rather than searchParams's memoized value; see
     // the second-pass comment above for why.
-  }, [location.key]);
+  }, [location.key, isAdmin]);
 
   // Keeps the address bar in sync with the visible section when leaving Profile via
   // this button — otherwise a later notification click landing on the same
@@ -144,7 +155,7 @@ export default function AccountSettingsPage() {
         </div>
         {active === 'profile' && <ProfileSection />}
         {active === 'company' && <CompanySection />}
-        {active === 'billing' && <BillingSection />}
+        {active === 'billing' && isAdmin && <BillingSection />}
         {active === 'users' && <UsersRolesSection />}
         {active === 'setup' && <SetupSection />}
         {active === 'customizations' && <CustomizationsSection />}

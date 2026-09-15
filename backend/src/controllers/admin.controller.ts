@@ -12,6 +12,18 @@ import {
   computePeriodBounds,
 } from '../utils/subscriptionLifecycle';
 import { APPROVED_PRICING_CATALOG } from '../config/pricingCatalog';
+import { env } from '../config/env';
+// Chat 4B, Stage B4A — billing emails for the two real B2/B3 events this
+// controller already implements (subscription activated, invoice issued).
+// See claude/chat4b-b4a-immediate-subscription-invoice-emails-2026-09-15.md
+// (project doc). Reviewed design (baseline fa379ff): enqueueEmail() is
+// called strictly AFTER each transaction's own COMMIT, on the plain `pool`
+// — never inside the open business transaction (see the B4A brief's
+// "Transaction and failure boundaries" section) — reusing the existing
+// durable email_jobs queue exactly the way verification/invitation emails
+// already do elsewhere in this codebase. No second queue/worker/scheduler.
+import { enqueueEmail, subscriptionActivatedEmailHtml, subscriptionInvoiceIssuedEmailHtml } from '../utils/email';
+import { resolveBillingRecipients } from '../utils/billingRecipients';
 
 // Matches the public pricing page (frontend/src/pages/PricingPage.tsx) — 'trial' is
 // what every signup starts on, not a purchasable tier.
@@ -408,6 +420,7 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
       `UPDATE companies SET plan = $1, subscription_status = 'active' WHERE id = $2`,
       [plan, id]
     );
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -417,6 +430,55 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
   }
 
   const subscription = shapeSubscription(subscriptionRow) as { id: string; current_period_start: string; current_period_end: string };
+
+  // Billing email — Chat 4B, Stage B4A. Reviewed design (baseline fa379ff):
+  // strictly post-commit, never inside the transaction above — the
+  // subscription row is already durably committed by this point, so a plain
+  // pool-backed recipient lookup + enqueueEmail() always sees it. Started
+  // immediately after COMMIT, ahead of logAudit/the response below (the
+  // reviewed brief: begin post-commit notification work promptly, not behind
+  // unrelated post-commit work). The whole block, and each recipient inside
+  // it, is independently try/caught: a lookup, template, or enqueue failure
+  // for one recipient can never affect another recipient, and none of it can
+  // ever change this already-committed activation or the 201 response below.
+  // The 409 "already has a live subscription" conflict path above returns
+  // before this line is ever reached, so a repeated activation conflict
+  // never enqueues an email.
+  try {
+    const billingRecipients = await resolveBillingRecipients(id);
+    const billingLink = `${env.FRONTEND_URL}/account?section=billing`;
+    for (const recipient of billingRecipients) {
+      try {
+        const { subject, html } = subscriptionActivatedEmailHtml({
+          lang: recipient.preferredLanguage,
+          plan,
+          billingInterval: billing_interval,
+          periodAmount: resolvedAmount,
+          currency,
+          currentPeriodStart: start,
+          currentPeriodEnd: end,
+          link: billingLink,
+        });
+        await enqueueEmail({
+          to: recipient.email,
+          subject,
+          html,
+          category: 'billing',
+          lang: recipient.preferredLanguage,
+          // Brief's exact dedup-key format for this event: event type +
+          // subscription ID + recipient user ID.
+          dedupKey: `billing:subscription_activated:${subscription.id}:${recipient.userId}`,
+          companyId: id,
+          relatedEntityType: 'subscriptions',
+          relatedEntityId: subscription.id,
+        });
+      } catch {
+        console.error('[billing email] subscription-activated enqueue failed for one recipient — the activation itself is unaffected');
+      }
+    }
+  } catch {
+    console.error('[billing email] subscription-activated recipient resolution failed — the activation itself is unaffected');
+  }
 
   // Best-effort, after COMMIT, same non-transactional pattern as B1's
   // updateCompany — a logAudit() failure here never undoes the activation.
@@ -604,7 +666,66 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
     client.release();
   }
 
-  const invoice = shapeInvoice(invoiceRow) as { id: string };
+  const invoice = shapeInvoice(invoiceRow) as {
+    id: string;
+    invoice_number: string;
+    plan: string;
+    billing_interval: string;
+    currency: string;
+    amount: number;
+    period_start: string;
+    period_end: string;
+    issue_date: string;
+    due_date: string;
+  };
+
+  // Billing email — Chat 4B, Stage B4A. Reviewed design (baseline fa379ff):
+  // strictly post-commit, never inside the transaction above — same pattern
+  // as activateSubscription above. Started immediately after COMMIT, ahead
+  // of logAudit/the response below. The whole block, and each recipient
+  // inside it, is independently try/caught: nothing here can ever affect
+  // the already-committed invoice or the 201 response. The 409 "invoice
+  // already exists for this period" conflict path above returns before this
+  // line is ever reached, so a duplicate invoice-issuance conflict never
+  // enqueues a second email for the same period.
+  try {
+    const billingRecipients = await resolveBillingRecipients(id);
+    const billingLink = `${env.FRONTEND_URL}/account?section=billing`;
+    for (const recipient of billingRecipients) {
+      try {
+        const { subject, html } = subscriptionInvoiceIssuedEmailHtml({
+          lang: recipient.preferredLanguage,
+          invoiceNumber: invoice.invoice_number,
+          plan: invoice.plan,
+          billingInterval: invoice.billing_interval,
+          amount: invoice.amount,
+          currency: invoice.currency,
+          periodStart: invoice.period_start,
+          periodEnd: invoice.period_end,
+          issueDate: invoice.issue_date,
+          dueDate: invoice.due_date,
+          link: billingLink,
+        });
+        await enqueueEmail({
+          to: recipient.email,
+          subject,
+          html,
+          category: 'billing',
+          lang: recipient.preferredLanguage,
+          // Brief's exact dedup-key format for this event: event type +
+          // invoice ID + recipient user ID.
+          dedupKey: `billing:invoice_issued:${invoice.id}:${recipient.userId}`,
+          companyId: id,
+          relatedEntityType: 'invoices',
+          relatedEntityId: invoice.id,
+        });
+      } catch {
+        console.error('[billing email] invoice-issued enqueue failed for one recipient — the invoice itself is unaffected');
+      }
+    }
+  } catch {
+    console.error('[billing email] invoice-issued recipient resolution failed — the invoice itself is unaffected');
+  }
 
   // Best-effort, after COMMIT — same non-transactional pattern as B2's
   // activateSubscription/updateCompany. logAudit() catches its own errors

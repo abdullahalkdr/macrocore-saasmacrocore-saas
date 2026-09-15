@@ -12,7 +12,10 @@ export type EmailLang = 'ar' | 'en';
 // as the Helpdesk/SLA work and "Chat 3" as Billing/Subscriptions — stale
 // numbering from an earlier plan. Chat 2 actually shipped Financial
 // Approvals; Helpdesk/ITSM is Chat 3B.)
-export type EmailCategory = 'verification' | 'password_reset' | 'security' | 'invitation' | 'approval' | 'helpdesk' | 'test';
+// Chat 4B, Stage B4A adds 'billing' below (macrocore's OWN subscription/invoice
+// notifications to a tenant — never sales_invoices, never a payment-provider
+// event; see claude/chat4b-b4a-immediate-subscription-invoice-emails-2026-09-15.md).
+export type EmailCategory = 'verification' | 'password_reset' | 'security' | 'invitation' | 'approval' | 'helpdesk' | 'billing' | 'test';
 
 export type EmailJobStatus =
   | 'queued'
@@ -76,6 +79,10 @@ const CATEGORY_FROM: Record<EmailCategory, string> = {
   approval: 'macrocore Approvals <approvals@notify.macrocore.io>',
   // Chat 3B, Stage 1 — DECIDED sender identity (Helpdesk/ITSM email work).
   helpdesk: 'Macrocore Support <helpdesk@notify.macrocore.io>',
+  // Chat 4B, Stage B4A — DECIDED sender identity for macrocore's own
+  // subscription/invoice notifications (the brief's fixed choice; no new env
+  // var, covered by the already-verified notify.macrocore.io sending domain).
+  billing: 'Macrocore Billing <billing@notify.macrocore.io>',
   test: 'macrocore <verification@notify.macrocore.io>',
 };
 
@@ -94,6 +101,9 @@ const CATEGORY_REPLY_TO: Partial<Record<EmailCategory, string>> = {
   approval: SUPPORT_REPLY_TO,
   // Chat 3B, Stage 1 — same shared support mailbox, reused rather than a new one.
   helpdesk: SUPPORT_REPLY_TO,
+  // Chat 4B, Stage B4A — same established policy: the monitored support
+  // mailbox, matching every other category a human might need to reply to.
+  billing: SUPPORT_REPLY_TO,
 };
 
 export function resolveSenderFrom(category: EmailCategory): string {
@@ -985,11 +995,13 @@ function emailShell(bodyHtml: string, lang: EmailLang): string {
 }
 
 function ctaButton(link: string, label: string, lang: EmailLang): string {
+  const safeLink = escapeHtml(link);
+  const safeLabel = escapeHtml(label);
   return `
     <div style="text-align: center; margin: 28px 0;">
-      <a href="${link}" style="display: inline-block; background: #f59e0b; color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 10px; font-weight: 700; font-size: 15px;">${label}</a>
+      <a href="${safeLink}" style="display: inline-block; background: #f59e0b; color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 10px; font-weight: 700; font-size: 15px;">${safeLabel}</a>
     </div>
-    <p style="font-size: 12px; color: #a8a29e; line-height: 1.7;">${SHELL_COPY[lang].fallbackLine(link)}</p>
+    <p style="font-size: 12px; color: #a8a29e; line-height: 1.7;">${SHELL_COPY[lang].fallbackLine(safeLink)}</p>
   `;
 }
 
@@ -1699,4 +1711,310 @@ export function ticketSlaEmailHtml(params: TicketSlaParams): { subject: string; 
     lang
   );
   return { subject, html };
+}
+
+// ============================================================================
+// Billing templates — Chat 4B, Stage B4A. Category 'billing' (CATEGORY_FROM/
+// CATEGORY_REPLY_TO above). Cover exactly the three business events in scope:
+// trial started (auth.controller.ts::register), subscription activated
+// (admin.controller.ts::activateSubscription, B2), and subscription invoice
+// issued (admin.controller.ts::createSubscriptionInvoice, B3). See
+// claude/chat4b-b4a-immediate-subscription-invoice-emails-2026-09-15.md
+// (project doc) for the full brief — no other billing/payment event is
+// implemented here by design (no payment-succeeded/failed/cancelled, renewal,
+// suspension, etc. — those workflows don't exist in real code yet).
+//
+// Content-safety, enforced structurally, not by caller discipline:
+//   - companyName is user-controlled free text (the company's own registered
+//     name at signup) -> always HTML-escaped, same treatment
+//     invitationEmailHtml already gives its own companyName parameter above.
+//   - plan / billing interval / subscription status are fixed, server-
+//     controlled enum values (subscriptionLifecycle.ts's
+//     ActivatablePlan/BillingInterval, or the companies.plan /
+//     companies.subscription_status / subscriptions.status columns), but
+//     the shared summary renderer still escapes every label and value so a
+//     future caller cannot accidentally turn a display fallback into markup.
+//   - subscriptionActivatedEmailHtml never uses the word "payment"/"paid"
+//     anywhere in its copy, by design (locked rule: an administrative
+//     activation is not evidence a payment was made) — it names the event
+//     an "activation".
+//   - subscriptionInvoiceIssuedEmailHtml takes no gateway reference/payment
+//     token/card/provider-payload parameter at all — there is structurally
+//     nothing here for one to leak through, same pattern as the Helpdesk
+//     section's description-less ticket templates.
+//   - Every function in this section takes a fully-built `link` string, the
+//     same convention as every template above (see the Helpdesk section's
+//     own header comment) — this file never reads env.FRONTEND_URL itself.
+// ============================================================================
+
+// Plain calendar date (YYYY-MM-DD), deliberately NOT toLocaleDateString() —
+// that's locale/timezone-dependent and is exactly the class of bug behind
+// the Stage 5 SLA timezone incident (claude/sla-timezone-incident-2026-09-09.md,
+// project doc). A trial/billing period boundary is a calendar date, not an
+// instant, so this reads it via toISOString() (always UTC) and takes just the
+// date portion — unambiguous in both languages, no timezone decision needed.
+function formatDateForEmail(value: Date | string, lang: EmailLang): string {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(d.getTime())) return lang === 'en' ? 'N/A' : 'غير متوفر';
+  return d.toISOString().slice(0, 10);
+}
+
+// Minor-unit precision per currency, for display only — mirrors
+// subscriptionLifecycle.ts's own (unexported) MINOR_UNIT_DECIMALS rather than
+// importing it, keeping this file's existing no-cross-module-import style for
+// templates. USD has cents (2); KWD has fils (3). Falls back to 2 for any
+// future currency this map hasn't been updated for yet — display-only, never
+// used to validate or store an amount.
+const CURRENCY_DISPLAY_DECIMALS: Record<string, number> = { USD: 2, KWD: 3 };
+function formatMoneyForEmail(amount: number, currency: string): string {
+  const decimals = CURRENCY_DISPLAY_DECIMALS[currency] ?? 2;
+  return `${amount.toFixed(decimals)} ${currency}`;
+}
+
+const PLAN_LABEL: Record<string, BilingualLabel> = {
+  trial: { en: 'Trial', ar: 'تجريبي' },
+  bronze: { en: 'Bronze', ar: 'برونزي' },
+  silver: { en: 'Silver', ar: 'فضي' },
+  gold: { en: 'Gold', ar: 'ذهبي' },
+  enterprise: { en: 'Enterprise', ar: 'مؤسسات' },
+};
+
+const BILLING_INTERVAL_LABEL: Record<string, BilingualLabel> = {
+  monthly: { en: 'Monthly', ar: 'شهري' },
+  annual: { en: 'Annual', ar: 'سنوي' },
+};
+
+function labelOrRaw(map: Record<string, BilingualLabel>, value: string, lang: EmailLang): string {
+  const label = map[value];
+  if (label) return lang === 'en' ? label.en : label.ar;
+  return value;
+}
+
+// Small two-column summary table shared by all three billing templates below
+// — same table-based layout reasoning as emailShell() itself (Outlook-safe).
+function billingSummaryTable(rows: Array<[string, string]>, lang: EmailLang): string {
+  const align = lang === 'en' ? 'right' : 'left';
+  const cells = rows
+    .map(
+      ([label, value], i) => `
+        <tr>
+          <td style="padding: 6px 0; color: #78716c;${i > 0 ? ' border-top: 1px solid #f5f5f4;' : ''}">${escapeHtml(label)}</td>
+          <td style="padding: 6px 0; text-align: ${align}; font-weight: 600;${i > 0 ? ' border-top: 1px solid #f5f5f4;' : ''}">${escapeHtml(value)}</td>
+        </tr>`
+    )
+    .join('');
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin: 16px 0; font-size: 13px; color: #44403c;">${cells}</table>`;
+}
+
+export interface TrialStartedEmailParams {
+  lang: EmailLang;
+  // The company's own registered name — free text, always escaped below.
+  companyName: string;
+  trialStartDate: Date | string;
+  trialEndDate: Date | string;
+  // companies.plan at trial creation (always 'trial' today — kept dynamic
+  // rather than hardcoded, since this reads the real committed row rather
+  // than assuming its default).
+  plan: string;
+  link: string;
+}
+
+// Sent once, strictly post-commit from auth.controller.ts::register() (Chat
+// 4B, Stage B4A's reviewed design — never from inside register()'s own
+// transaction), right after the real company+admin+trial row commits. Safe
+// content only: company name, trial start/end dates, current plan, and the
+// account link (locked rule — no claim that registration/verification/
+// payment happened beyond what the company row itself proves).
+export function trialStartedEmailHtml(params: TrialStartedEmailParams): { subject: string; html: string } {
+  const { lang, companyName, trialStartDate, trialEndDate, plan, link } = params;
+  const safeCompany = escapeHtml(companyName);
+  const planText = labelOrRaw(PLAN_LABEL, plan, lang);
+  const startText = formatDateForEmail(trialStartDate, lang);
+  const endText = formatDateForEmail(trialEndDate, lang);
+
+  if (lang === 'en') {
+    const html = emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Welcome to macrocore 🎉</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;"><strong>${safeCompany}</strong>'s free trial has started.</p>
+        ${billingSummaryTable(
+          [
+            ['Plan', planText],
+            ['Trial start', startText],
+            ['Trial ends', endText],
+          ],
+          lang
+        )}
+        ${ctaButton(link, 'Go to your account', lang)}
+      `,
+      lang
+    );
+    return { subject: 'Your macrocore trial has started', html };
+  }
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">أهلاً بك في macrocore 🎉</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">بدأت الفترة التجريبية المجانية لـ<strong>${safeCompany}</strong>.</p>
+      ${billingSummaryTable(
+        [
+          ['الباقة', planText],
+          ['بداية الفترة التجريبية', startText],
+          ['نهاية الفترة التجريبية', endText],
+        ],
+        lang
+      )}
+      ${ctaButton(link, 'الذهاب إلى حسابك', lang)}
+    `,
+    lang
+  );
+  return { subject: 'بدأت فترتك التجريبية في macrocore', html };
+}
+
+export interface SubscriptionActivatedEmailParams {
+  lang: EmailLang;
+  plan: string;
+  billingInterval: string;
+  // subscriptions.period_amount — the exact agreed period charge, already a
+  // parsed number (see db/pool.ts's NUMERIC type-parser fix), never a string.
+  periodAmount: number;
+  currency: string;
+  currentPeriodStart: Date | string;
+  currentPeriodEnd: Date | string;
+  link: string;
+}
+
+// Sent once from admin.controller.ts::activateSubscription(), strictly after
+// the real `subscriptions` row commits. Never calls
+// this a successful payment anywhere in its copy — an administrative
+// activation is not payment evidence (locked rule). A repeated activation
+// conflict (409, subscriptions_one_live_per_company) never reaches this
+// function at all — the controller only calls it on the real INSERT path.
+export function subscriptionActivatedEmailHtml(params: SubscriptionActivatedEmailParams): { subject: string; html: string } {
+  const { lang, plan, billingInterval, periodAmount, currency, currentPeriodStart, currentPeriodEnd, link } = params;
+  const planText = labelOrRaw(PLAN_LABEL, plan, lang);
+  const intervalText = labelOrRaw(BILLING_INTERVAL_LABEL, billingInterval, lang);
+  const amountText = formatMoneyForEmail(periodAmount, currency);
+  const startText = formatDateForEmail(currentPeriodStart, lang);
+  const endText = formatDateForEmail(currentPeriodEnd, lang);
+
+  if (lang === 'en') {
+    const html = emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Subscription activated ✅</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">Your macrocore subscription has been activated.</p>
+        ${billingSummaryTable(
+          [
+            ['Plan', planText],
+            ['Billing interval', intervalText],
+            ['Period amount', amountText],
+            ['Current period', `${startText} → ${endText}`],
+          ],
+          lang
+        )}
+        ${ctaButton(link, 'View billing', lang)}
+      `,
+      lang
+    );
+    return { subject: 'Your macrocore subscription is now active', html };
+  }
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">تم تفعيل الاشتراك ✅</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم تفعيل اشتراكك في macrocore.</p>
+      ${billingSummaryTable(
+        [
+          ['الباقة', planText],
+          ['دورة الفوترة', intervalText],
+          ['المبلغ لكل دورة', amountText],
+          ['الدورة الحالية', `${startText} → ${endText}`],
+        ],
+        lang
+      )}
+      ${ctaButton(link, 'عرض الفوترة', lang)}
+    `,
+    lang
+  );
+  return { subject: 'تم تفعيل اشتراكك في macrocore', html };
+}
+
+export interface SubscriptionInvoiceIssuedEmailParams {
+  lang: EmailLang;
+  // Server-generated formatted code (e.g. MC-SUB-000123, MIGRATION_083's
+  // sequence-backed column DEFAULT). It is still escaped in HTML like every
+  // other dynamic field.
+  invoiceNumber: string;
+  plan: string;
+  billingInterval: string;
+  amount: number;
+  currency: string;
+  periodStart: Date | string;
+  periodEnd: Date | string;
+  issueDate: Date | string;
+  dueDate: Date | string;
+  link: string;
+}
+
+// Sent once from admin.controller.ts::createSubscriptionInvoice(), strictly
+// after the real `invoices` row commits. No gateway
+// reference/payment token/card field/provider payload parameter exists on
+// this function — structurally nothing to leak. A duplicate invoice-issuance
+// conflict (409, invoices_one_invoice_per_period) never reaches this
+// function — the controller only calls it on the real INSERT path.
+export function subscriptionInvoiceIssuedEmailHtml(params: SubscriptionInvoiceIssuedEmailParams): { subject: string; html: string } {
+  const { lang, invoiceNumber, plan, billingInterval, amount, currency, periodStart, periodEnd, issueDate, dueDate, link } = params;
+  const safeInvoiceNumber = escapeHtml(invoiceNumber);
+  const planText = labelOrRaw(PLAN_LABEL, plan, lang);
+  const intervalText = labelOrRaw(BILLING_INTERVAL_LABEL, billingInterval, lang);
+  const amountText = formatMoneyForEmail(amount, currency);
+  const periodText = `${formatDateForEmail(periodStart, lang)} → ${formatDateForEmail(periodEnd, lang)}`;
+  const issueText = formatDateForEmail(issueDate, lang);
+  const dueText = formatDateForEmail(dueDate, lang);
+
+  if (lang === 'en') {
+    const html = emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">New invoice 🧾</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">A new macrocore subscription invoice has been issued: <strong>#${safeInvoiceNumber}</strong>.</p>
+        ${billingSummaryTable(
+          [
+            ['Invoice number', `#${invoiceNumber}`],
+            ['Plan', planText],
+            ['Billing interval', intervalText],
+            ['Amount', amountText],
+            ['Billing period', periodText],
+            ['Issue date', issueText],
+            ['Due date', dueText],
+          ],
+          lang
+        )}
+        ${ctaButton(link, 'View billing', lang)}
+      `,
+      lang
+    );
+    return { subject: `New invoice issued — #${invoiceNumber}`, html };
+  }
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">فاتورة جديدة 🧾</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">تم إصدار فاتورة اشتراك جديدة في macrocore: <strong>#${safeInvoiceNumber}</strong>.</p>
+      ${billingSummaryTable(
+        [
+          ['رقم الفاتورة', `#${invoiceNumber}`],
+          ['الباقة', planText],
+          ['دورة الفوترة', intervalText],
+          ['المبلغ', amountText],
+          ['فترة الفوترة', periodText],
+          ['تاريخ الإصدار', issueText],
+          ['تاريخ الاستحقاق', dueText],
+        ],
+        lang
+      )}
+      ${ctaButton(link, 'عرض الفوترة', lang)}
+    `,
+    lang
+  );
+  return { subject: `تم إصدار فاتورة جديدة — #${invoiceNumber}`, html };
 }

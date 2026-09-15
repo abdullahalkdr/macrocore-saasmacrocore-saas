@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   poolQuery: vi.fn(),
   clientQuery: vi.fn(),
   clientRelease: vi.fn(),
+  resolveBillingRecipients: vi.fn(),
 }));
 
 vi.mock('../../db/pool', () => ({
@@ -24,6 +25,13 @@ vi.mock('../../db/pool', () => ({
   },
 }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+// Chat 4B / Stage B4A added a post-commit billing-email block to
+// activateSubscription() that is out of scope for this file (its own
+// dedicated coverage lives in adminActivateSubscriptionBillingEmail.test.ts)
+// — mocked out here to a no-recipients no-op so it never touches the same
+// mocked `pool.query` this test uses to simulate the audit_logs INSERT
+// failure, keeping this file's "one pool.query call" assertion meaningful.
+vi.mock('../../utils/billingRecipients', () => ({ resolveBillingRecipients: mocks.resolveBillingRecipients }));
 // utils/whatsapp untouched (real module) — harmless, since
 // 'admin_subscription_activated' is not in SENSITIVE_ACTIONS, so
 // sendWhatsAppAlert() is never reached.
@@ -55,6 +63,7 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.clearAllMocks();
   consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mocks.resolveBillingRecipients.mockResolvedValue([]);
 });
 afterEach(() => consoleErrorSpy.mockRestore());
 

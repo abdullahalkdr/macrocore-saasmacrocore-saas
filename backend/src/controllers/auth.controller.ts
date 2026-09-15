@@ -17,7 +17,23 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { AppError } from '../middleware/errorHandler';
 import { logAudit } from '../utils/audit';
 import { env } from '../config/env';
-import { enqueueEmail, verificationEmailHtml, passwordResetEmailHtml, passwordChangedEmailHtml, minuteBucket, EmailLang } from '../utils/email';
+import {
+  enqueueEmail,
+  verificationEmailHtml,
+  passwordResetEmailHtml,
+  passwordChangedEmailHtml,
+  trialStartedEmailHtml,
+  minuteBucket,
+  EmailLang,
+} from '../utils/email';
+// Chat 4B, Stage B4A — trial-started billing email. See
+// claude/chat4b-b4a-immediate-subscription-invoice-emails-2026-09-15.md
+// (project doc). Reviewed design (baseline fa379ff): resolved and enqueued
+// strictly post-commit via the plain enqueueEmail() above — same pattern the
+// verification email a few lines down already uses — never inside the open
+// registration transaction. Reuses the existing durable email_jobs queue, no
+// second queue/worker/scheduler.
+import { resolveBillingRecipients } from '../utils/billingRecipients';
 import { getHrScope, canAccessUsersList } from '../utils/hrScope';
 import {
   acquireEmailLock,
@@ -229,6 +245,59 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     throw err;
   } finally {
     client.release();
+  }
+
+  // Billing email — Chat 4B, Stage B4A (trial started). Reviewed design
+  // (baseline fa379ff): strictly post-commit, never inside the registration
+  // transaction above — same non-transactional pattern the verification
+  // email a few lines down already uses. Started immediately after COMMIT,
+  // ahead of logAudit/the verification email/the invites loop (the reviewed
+  // brief: begin post-commit notification work promptly, not behind
+  // unrelated post-commit work). The whole block, and each recipient inside
+  // it, is independently try/caught: a lookup, template, or enqueue failure
+  // for one recipient can never affect another recipient or this
+  // already-committed registration. Only the real committed company/admin/
+  // trial rows are ever read here (resolveBillingRecipients(company.id) runs
+  // on the plain pool, which by now durably sees them) — never claims
+  // registration/verification/payment happened beyond what those rows
+  // themselves prove (locked rule). A registration that rolled back (e.g. the
+  // pre-check 409 above, or any error inside the transaction) never reaches
+  // this line, so it can never enqueue a trial-started email.
+  try {
+    const billingRecipients = await resolveBillingRecipients(company.id);
+    const billingLink = `${env.FRONTEND_URL}/account?section=billing`;
+    for (const recipient of billingRecipients) {
+      try {
+        const { subject, html } = trialStartedEmailHtml({
+          lang: recipient.preferredLanguage,
+          companyName: company.name,
+          trialStartDate: company.trial_start_date,
+          trialEndDate: company.trial_end_date,
+          plan: company.plan,
+          link: billingLink,
+        });
+        await enqueueEmail({
+          to: recipient.email,
+          subject,
+          html,
+          category: 'billing',
+          lang: recipient.preferredLanguage,
+          // Brief's exact dedup-key format for this event: event type +
+          // company ID + trial lifecycle timestamp + recipient user ID —
+          // the committed company.trial_start_date (RETURNING'd from the
+          // successful, now-committed INSERT above), not a freshly-taken
+          // timestamp.
+          dedupKey: `billing:trial_started:${company.id}:${new Date(company.trial_start_date).toISOString()}:${recipient.userId}`,
+          companyId: company.id,
+          relatedEntityType: 'companies',
+          relatedEntityId: company.id,
+        });
+      } catch {
+        console.error('[billing email] trial-started enqueue failed for one recipient — the registration itself is unaffected');
+      }
+    }
+  } catch {
+    console.error('[billing email] trial-started recipient resolution failed — the registration itself is unaffected');
   }
 
   await logAudit({ companyId: company.id, userId: user.id, action: 'user_registered', entityType: 'users', entityId: user.id, req });
