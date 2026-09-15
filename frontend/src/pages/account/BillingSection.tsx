@@ -25,10 +25,23 @@ export default function BillingSection() {
   if (error) return <div className="error-banner">{error}</div>;
   if (!data) return <div className="muted">{t.common.loading}</div>;
 
-  const trialDaysLeft = data.trial_end_date
-    ? Math.max(0, Math.ceil((new Date(data.trial_end_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-    : null;
-  const isTrial = data.subscription_status === 'trial';
+  let statusLabel = t.account.billing.unknownStatus;
+  switch (data.subscription_status) {
+    case 'trial': {
+      const endTime = data.trial_end_date ? new Date(data.trial_end_date).getTime() : NaN;
+      const remainingMs = endTime - Date.now();
+      statusLabel = !Number.isFinite(endTime)
+        ? t.account.billing.trialWithoutEndStatus
+        : remainingMs <= 0
+          ? t.account.billing.trialExpiredStatus
+          : t.account.billing.trialStatus(Math.ceil(remainingMs / (1000 * 60 * 60 * 24)));
+      break;
+    }
+    case 'active': statusLabel = t.account.billing.activeStatus; break;
+    case 'past_due': statusLabel = t.account.billing.pastDueStatus; break;
+    case 'suspended': statusLabel = t.account.billing.suspendedStatus; break;
+    case 'cancelled': statusLabel = t.account.billing.cancelledStatus; break;
+  }
 
   function ComingSoonBtn() {
     return (
@@ -55,7 +68,7 @@ export default function BillingSection() {
             <div className="stat-card">
               <div className="stat-label">{t.account.billing.status}</div>
               <div className="stat-value" style={{ fontSize: 14 }}>
-                {isTrial && trialDaysLeft !== null ? t.account.billing.trialStatus(trialDaysLeft) : t.account.billing.activeStatus}
+                {statusLabel}
               </div>
             </div>
             <div className="stat-card">

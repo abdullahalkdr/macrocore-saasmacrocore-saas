@@ -162,6 +162,11 @@ export default function PricingPage() {
                     <div className="muted" style={{ fontSize: 12 }}>
                       {t.pricing.approx} {kdPrice?.toFixed(3)} KD
                     </div>
+                    {annual && plan.annualMonthlyUsd !== null && (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {t.pricing.annualBilledTotal(plan.annualMonthlyUsd * 12)}
+                      </div>
+                    )}
                   </div>
                 )}
 

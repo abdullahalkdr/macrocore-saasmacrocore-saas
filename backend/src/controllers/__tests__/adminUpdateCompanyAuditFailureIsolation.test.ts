@@ -12,19 +12,24 @@ import type { Request, Response } from 'express';
 // keeps a real audit_logs INSERT failure from reaching updateCompany's caller,
 // not an assumption about it.
 //
-// Correcting my own earlier wording: the companies UPDATE and the audit_logs
-// INSERT are two SEPARATE statements, not one atomic unit — only the CTE
-// inside the UPDATE itself (previous-values read + write) is atomic. The
-// UPDATE has already committed by the time logAudit() runs, so a failure here
+// The company lock/read/update is one transaction. The audit_logs INSERT is a
+// separate best-effort statement after commit, so a failure here
 // cannot undo it — but the request DOES wait for logAudit()'s promise to
 // settle (success or caught failure) before responding; "isolated" here means
 // isolated in OUTCOME (never changes the response or rolls back the UPDATE),
 // not that it adds zero latency.
 // ---------------------------------------------------------------------------
 
-const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  poolQuery: vi.fn(),
+  clientQuery: vi.fn(),
+  clientRelease: vi.fn(),
+  connect: vi.fn(),
+}));
 
-vi.mock('../../db/pool', () => ({ pool: { query: mocks.query } }));
+vi.mock('../../db/pool', () => ({
+  pool: { query: mocks.poolQuery, connect: mocks.connect },
+}));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 // utils/whatsapp is untouched (real module) — harmless, since this action is
 // not in SENSITIVE_ACTIONS so sendWhatsAppAlert() is never reached; it also
@@ -60,6 +65,7 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.clientRelease });
   consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -69,8 +75,9 @@ afterEach(() => {
 
 describe('updateCompany() + real logAudit() — audit_logs INSERT failure is fully isolated', () => {
   it('the companies UPDATE succeeds and the HTTP response is unaffected even though the subsequent audit INSERT throws', async () => {
-    mocks.query.mockImplementation(async (sql: string) => {
-      if (sql.includes('WITH previous AS')) {
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return {};
+      if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) {
         return {
           rows: [
             {
@@ -79,18 +86,15 @@ describe('updateCompany() + real logAudit() — audit_logs INSERT failure is ful
               plan: 'gold',
               subscription_status: 'active',
               trial_end_date: null,
-              previous_plan: 'trial',
-              previous_subscription_status: 'trial',
-              previous_trial_end_date: null,
             },
           ],
         };
       }
-      if (sql.includes('INSERT INTO audit_logs')) {
-        throw new Error('simulated audit_logs INSERT failure');
-      }
+      if (sql.includes('SELECT EXISTS')) return { rows: [{ is_managed: false }] };
+      if (sql.includes('UPDATE companies SET')) return { rows: [{ id: 'company-1', name: 'Acme Kiosk', plan: 'gold', subscription_status: 'active', trial_end_date: null }] };
       throw new Error(`unexpected query in test: ${sql}`);
     });
+    mocks.poolQuery.mockRejectedValue(new Error('simulated audit_logs INSERT failure'));
 
     const req = makeReq({ id: 'company-1' }, { plan: 'gold', subscription_status: 'active' });
     const res = makeRes();
@@ -107,12 +111,10 @@ describe('updateCompany() + real logAudit() — audit_logs INSERT failure is ful
 
     // Both statements were actually attempted, in this order — the UPDATE's
     // result was already read before the audit INSERT was ever issued.
-    const sqlCalls = mocks.query.mock.calls.map((c) => c[0] as string);
-    expect(sqlCalls.some((s) => s.includes('WITH previous AS'))).toBe(true);
-    expect(sqlCalls.some((s) => s.includes('INSERT INTO audit_logs'))).toBe(true);
-    expect(sqlCalls.findIndex((s) => s.includes('WITH previous AS'))).toBeLessThan(
-      sqlCalls.findIndex((s) => s.includes('INSERT INTO audit_logs'))
-    );
+    const sqlCalls = mocks.clientQuery.mock.calls.map((c) => c[0] as string);
+    expect(sqlCalls[sqlCalls.length - 1]).toBe('COMMIT');
+    expect(mocks.poolQuery).toHaveBeenCalledOnce();
+    expect(mocks.clientRelease).toHaveBeenCalledOnce();
 
     // logAudit()'s own catch block logged the failure server-side instead of
     // silently discarding it or letting it propagate.

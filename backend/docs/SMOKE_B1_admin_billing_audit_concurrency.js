@@ -3,6 +3,13 @@
  * updateCompany() — atomic before/after audit snapshot for
  * PATCH /api/admin/companies/:id).
  *
+ * HISTORICAL NOTE: this proves the single-statement implementation released
+ * in B1 commit cbd52b8. Stage B2 later changed updateCompany() to an explicit
+ * transaction so its managed-subscription check sees state committed by an
+ * activation it waited behind. Use SMOKE_B2_subscription_activation_concurrency.js
+ * for the current controller's concurrency proof. This script remains useful
+ * only as reproducible evidence for the accepted B1 implementation.
+ *
  * Round 3 correction: the previous version of this script inferred commit
  * order from Date.now() timestamps taken after each client call resolved.
  * That is NOT proof of database lock contention — client-side response
@@ -23,9 +30,8 @@
  *   5. Asserts A's and B's exact previous/current snapshots and the final row.
  *
  * This is a TEST HARNESS technique only (an explicit BEGIN held open by the
- * test to force contention) — it does not change, and must never be used to
- * justify changing, the production controller, which correctly uses a single
- * implicit-transaction statement with no explicit BEGIN/COMMIT of its own.
+ * test to force contention). It describes the historical B1 controller at
+ * cbd52b8, not the Stage B2 implementation currently in the working tree.
  *
  * Further correction (this pass) — ChatGPT inspected the actual delivered
  * files and found the round-3-so-far version of this script still had four

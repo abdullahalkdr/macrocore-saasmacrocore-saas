@@ -1,182 +1,144 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-// ---------------------------------------------------------------------------
-// Chat 4A / Stage B1 — follow-up review round 2.
-//
-// adminUpdateCompanyAudit.test.ts (pure buildBillingAuditSnapshot() unit
-// tests + source-inspection tests) stays as-is and still matters — this file
-// adds what that one couldn't: actually EXECUTING updateCompany() end to end
-// with a mocked pool/logAudit boundary (following the same real-vi.mock
-// convention as supportTickets.helpdeskEmail.test.ts and
-// utils/__tests__/helpdeskRecipients.test.ts), so the assertions are against
-// real runtime behavior — the actual response JSON, the actual args passed to
-// logAudit(), the actual error thrown — not just text that looks right.
-//
-// logAudit() itself is mocked in THIS file (its own real behavior, including
-// what happens when its internal pool.query fails, is covered separately in
-// adminUpdateCompanyAuditFailureIsolation.test.ts, which does NOT mock
-// utils/audit so the real try/catch runs). Splitting into two files instead
-// of toggling one mock mid-file matches this codebase's existing convention
-// of one mock configuration per file (see supportTickets.accessControl vs
-// supportTickets.helpdeskEmail).
-// ---------------------------------------------------------------------------
-
 const mocks = vi.hoisted(() => ({
-  query: vi.fn(),
-  logAudit: vi.fn(),
+  clientQuery: vi.fn(), clientRelease: vi.fn(), connect: vi.fn(), logAudit: vi.fn(),
 }));
 
-vi.mock('../../db/pool', () => ({ pool: { query: mocks.query } }));
+vi.mock('../../db/pool', () => ({ pool: { query: vi.fn(), connect: mocks.connect } }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('../../utils/audit', () => ({ logAudit: mocks.logAudit }));
 
 import { updateCompany } from '../admin.controller';
 
 const NOOP_NEXT = (() => {}) as any;
-
 function makeRes(): Response & { statusCode?: number; body?: any } {
   const res: any = {};
-  res.status = vi.fn((code: number) => {
-    res.statusCode = code;
-    return res;
-  });
-  res.json = vi.fn((body: any) => {
-    res.body = body;
-    return res;
-  });
+  res.status = vi.fn((code: number) => { res.statusCode = code; return res; });
+  res.json = vi.fn((body: any) => { res.body = body; return res; });
   return res;
 }
-
-function makeReq(params: Record<string, string>, body: Record<string, unknown>): Request {
-  return {
-    params,
-    body,
-    ip: '10.0.0.1',
-    headers: { 'user-agent': 'vitest' },
-  } as unknown as Request;
+function makeReq(body: Record<string, unknown>, id = 'company-1'): Request {
+  return { params: { id }, body, ip: '10.0.0.1', headers: { 'user-agent': 'vitest' } } as unknown as Request;
 }
 
-// The exact RETURNING row shape updateCompany's CTE query produces.
-function updateRow(over: Record<string, unknown> = {}) {
-  return {
-    id: 'company-1',
-    name: 'Acme Kiosk',
-    plan: 'gold',
-    subscription_status: 'active',
-    trial_end_date: null,
-    previous_plan: 'trial',
-    previous_subscription_status: 'trial',
-    previous_trial_end_date: '2026-09-01T00:00:00.000Z',
-    ...over,
-  };
+const BEFORE = {
+  id: 'company-1', name: 'Acme Kiosk', plan: 'trial', subscription_status: 'trial',
+  trial_end_date: '2026-09-01T00:00:00.000Z',
+};
+
+function mockFlow(options: {
+  before?: Record<string, unknown> | null;
+  managed?: boolean;
+  after?: Record<string, unknown>;
+  updateError?: Error;
+} = {}) {
+  const before = options.before === undefined ? BEFORE : options.before;
+  const after = options.after ?? { ...BEFORE, plan: 'gold', subscription_status: 'active', trial_end_date: null };
+  mocks.clientQuery.mockImplementation(async (sql: string) => {
+    if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+    if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) return { rows: before ? [before] : [] };
+    if (sql.includes('SELECT EXISTS')) return { rows: [{ is_managed: options.managed ?? false }] };
+    if (sql.includes('UPDATE companies SET')) {
+      if (options.updateError) throw options.updateError;
+      return { rows: [after] };
+    }
+    throw new Error(`unexpected client query: ${sql}`);
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.clientRelease });
   mocks.logAudit.mockResolvedValue(undefined);
 });
 
-describe('updateCompany() — successful update', () => {
-  it('updates the company and logs a full, correctly-shaped audit call', async () => {
-    mocks.query.mockResolvedValue({ rows: [updateRow()] });
-
-    const req = makeReq({ id: 'company-1' }, { plan: 'gold', subscription_status: 'active' });
+describe('updateCompany()', () => {
+  it('updates and logs the same narrow before/after snapshot B1 established', async () => {
+    mockFlow();
     const res = makeRes();
-    await updateCompany(req, res, NOOP_NEXT);
-
+    await updateCompany(makeReq({ plan: 'gold', subscription_status: 'active' }), res, NOOP_NEXT);
     expect(res.statusCode).toBe(200);
-    expect(mocks.logAudit).toHaveBeenCalledTimes(1);
-    const call = mocks.logAudit.mock.calls[0][0];
-    expect(call.companyId).toBe('company-1');
-    expect(call.userId).toBeNull();
-    expect(call.action).toBe('admin_company_billing_updated');
-    expect(call.entityType).toBe('companies');
-    expect(call.entityId).toBe('company-1');
-    expect(call.oldValues).toEqual({ plan: 'trial', subscription_status: 'trial', trial_end_date: '2026-09-01T00:00:00.000Z' });
-    expect(call.newValues).toEqual({ plan: 'gold', subscription_status: 'active', trial_end_date: null });
+    expect(res.body).toEqual({ success: true, company: { id: 'company-1', name: 'Acme Kiosk', plan: 'gold', subscription_status: 'active', trial_end_date: null } });
+    expect(mocks.logAudit).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: 'company-1', userId: null, action: 'admin_company_billing_updated',
+      entityType: 'companies', entityId: 'company-1',
+      oldValues: { plan: 'trial', subscription_status: 'trial', trial_end_date: '2026-09-01T00:00:00.000Z' },
+      newValues: { plan: 'gold', subscription_status: 'active', trial_end_date: null },
+    }));
+    expect(mocks.clientRelease).toHaveBeenCalledOnce();
   });
 
-  it('response body exposes only the public company fields — no previous_* leakage, no secrets', async () => {
-    mocks.query.mockResolvedValue({ rows: [updateRow()] });
-
-    const req = makeReq({ id: 'company-1' }, { plan: 'gold' });
-    const res = makeRes();
-    await updateCompany(req, res, NOOP_NEXT);
-
-    expect(res.body).toEqual({
-      success: true,
-      company: { id: 'company-1', name: 'Acme Kiosk', plan: 'gold', subscription_status: 'active', trial_end_date: null },
-    });
-    expect(Object.keys(res.body.company).sort()).toEqual(['id', 'name', 'plan', 'subscription_status', 'trial_end_date']);
+  it('logs an allowed no-op with identical snapshots', async () => {
+    const unchanged = { ...BEFORE, plan: 'gold', subscription_status: 'active', trial_end_date: null };
+    mockFlow({ before: unchanged, after: unchanged });
+    await updateCompany(makeReq({ plan: 'gold' }), makeRes(), NOOP_NEXT);
+    const audit = mocks.logAudit.mock.calls[0][0];
+    expect(audit.oldValues).toEqual(audit.newValues);
   });
 
-  it('logs a genuine no-op PATCH (same value sent twice) rather than skipping it — with identical old/new snapshots', async () => {
-    mocks.query.mockResolvedValue({
-      rows: [
-        updateRow({
-          plan: 'gold',
-          previous_plan: 'gold',
-          subscription_status: 'active',
-          previous_subscription_status: 'active',
-          trial_end_date: null,
-          previous_trial_end_date: null,
-        }),
-      ],
-    });
+  it.each([
+    [{ plan: 'not-a-real-plan' }, /plan/],
+    [{ subscription_status: 'not-a-real-status' }, /subscription_status/],
+    [{}, /Nothing to update/],
+  ])('rejects invalid input before checking out a database client', async (body, message) => {
+    await expect(updateCompany(makeReq(body), makeRes(), NOOP_NEXT)).rejects.toThrow(message);
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
 
-    const req = makeReq({ id: 'company-1' }, { plan: 'gold' });
+  it('rolls back and returns 404 when the company does not exist', async () => {
+    mockFlow({ before: null });
+    await expect(updateCompany(makeReq({ plan: 'gold' }, 'missing'), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
+    expect(mocks.clientQuery).toHaveBeenCalledWith('ROLLBACK');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a database failure and never writes an audit row', async () => {
+    const error = new Error('connection terminated unexpectedly');
+    mockFlow({ updateError: error });
+    await expect(updateCompany(makeReq({ plan: 'gold' }), makeRes(), NOOP_NEXT)).rejects.toBe(error);
+    expect(mocks.clientQuery).toHaveBeenCalledWith('ROLLBACK');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('blocks a real plan change after the fresh managed check', async () => {
+    mockFlow({ before: { ...BEFORE, plan: 'gold', subscription_status: 'active' }, managed: true });
+    await expect(updateCompany(makeReq({ plan: 'bronze' }), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.clientQuery).toHaveBeenCalledWith('ROLLBACK');
+    expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE companies SET'))).toBe(false);
+  });
+
+  it('allows the existing admin UI payload to change status when plan is unchanged', async () => {
+    const before = { ...BEFORE, plan: 'gold', subscription_status: 'active', trial_end_date: null };
+    mockFlow({ before, managed: true, after: { ...before, subscription_status: 'suspended' } });
     const res = makeRes();
-    await updateCompany(req, res, NOOP_NEXT);
-
+    await updateCompany(makeReq({ plan: 'gold', subscription_status: 'suspended', trial_end_date: null }), res, NOOP_NEXT);
     expect(res.statusCode).toBe(200);
-    expect(mocks.logAudit).toHaveBeenCalledTimes(1);
-    const { oldValues, newValues } = mocks.logAudit.mock.calls[0][0];
-    expect(oldValues).toEqual(newValues);
-  });
-});
-
-describe('updateCompany() — validation is rejected before any database write', () => {
-  it('an invalid plan value throws 400 without ever calling pool.query', async () => {
-    const req = makeReq({ id: 'company-1' }, { plan: 'not-a-real-plan' });
-    const res = makeRes();
-    await expect(updateCompany(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 400 });
-    expect(mocks.query).not.toHaveBeenCalled();
-    expect(mocks.logAudit).not.toHaveBeenCalled();
   });
 
-  it('an invalid subscription_status value throws 400 without ever calling pool.query', async () => {
-    const req = makeReq({ id: 'company-1' }, { subscription_status: 'not-a-real-status' });
+  it("blocks trial but allows cancelled on a managed company", async () => {
+    const before = { ...BEFORE, plan: 'gold', subscription_status: 'active' };
+    mockFlow({ before, managed: true });
+    await expect(updateCompany(makeReq({ subscription_status: 'trial' }), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 409 });
+
+    vi.clearAllMocks();
+    mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.clientRelease });
+    mocks.logAudit.mockResolvedValue(undefined);
+    mockFlow({ before, managed: true, after: { ...before, subscription_status: 'cancelled' } });
     const res = makeRes();
-    await expect(updateCompany(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 400 });
-    expect(mocks.query).not.toHaveBeenCalled();
+    await updateCompany(makeReq({ subscription_status: 'cancelled' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
   });
 
-  it('an empty PATCH body throws 400 ("Nothing to update") without ever calling pool.query', async () => {
-    const req = makeReq({ id: 'company-1' }, {});
-    const res = makeRes();
-    await expect(updateCompany(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 400 });
-    expect(mocks.query).not.toHaveBeenCalled();
-  });
-});
-
-describe('updateCompany() — failure paths never produce a spurious audit row', () => {
-  it('a missing company (empty RETURNING) throws 404 and never calls logAudit', async () => {
-    mocks.query.mockResolvedValue({ rows: [] });
-
-    const req = makeReq({ id: 'does-not-exist' }, { plan: 'gold' });
-    const res = makeRes();
-    await expect(updateCompany(req, res, NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
-    expect(mocks.logAudit).not.toHaveBeenCalled();
-  });
-
-  it('a database error on the UPDATE propagates as-is and never calls logAudit', async () => {
-    mocks.query.mockRejectedValue(new Error('connection terminated unexpectedly'));
-
-    const req = makeReq({ id: 'company-1' }, { plan: 'gold' });
-    const res = makeRes();
-    await expect(updateCompany(req, res, NOOP_NEXT)).rejects.toThrow('connection terminated unexpectedly');
-    expect(mocks.logAudit).not.toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
+  it('locks first, refreshes managed state second, then updates and commits', async () => {
+    mockFlow();
+    await updateCompany(makeReq({ plan: 'gold' }), makeRes(), NOOP_NEXT);
+    const sql = mocks.clientQuery.mock.calls.map(([statement]) => String(statement));
+    expect(sql[0]).toBe('BEGIN');
+    expect(sql[1]).toContain('FOR UPDATE');
+    expect(sql[2]).toContain('SELECT EXISTS');
+    expect(sql[3]).toContain('UPDATE companies SET');
+    expect(sql[4]).toBe('COMMIT');
   });
 });

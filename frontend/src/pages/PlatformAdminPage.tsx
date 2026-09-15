@@ -39,6 +39,16 @@ interface Subscription {
   company_name: string;
   plan: string;
   status: string;
+  // Stage B2: a subscription row now records its own currency/period_amount/
+  // billing_interval — see claude/chat4a-b2-subscription-billing-foundation-
+  // proposal-2026-09-15.md. `monthly_price` remains a rounded MRR-reporting
+  // derivative only — never render it as "the price" without the row's own
+  // `currency`, and never as the exact agreed charge; `period_amount` is
+  // that. These stay optional so a nullable compatibility migration remains
+  // readable if a different environment contains legacy rows.
+  currency?: string;
+  period_amount?: number;
+  billing_interval?: string;
   monthly_price: number | null;
   auto_renew: boolean;
   next_billing_date: string | null;
@@ -57,7 +67,9 @@ interface Invoice {
 interface Stats {
   total_companies: number;
   by_plan_and_status: { plan: string; subscription_status: string; n: number }[];
-  mrr: number;
+  // Stage B2: MRR is reported per currency and never summed across them — a
+  // mixed-currency sum is not a meaningful number.
+  mrr_by_currency: { currency: string | null; mrr: number }[];
 }
 
 async function adminFetch<T>(path: string, key: string, options: RequestInit = {}): Promise<T> {
@@ -149,6 +161,15 @@ export default function PlatformAdminPage() {
       });
       load(key);
     } catch (err) {
+      // Stage B2: a managed company (one with a live subscriptions row) now
+      // rejects a real plan change through this endpoint with a 409 — see
+      // admin.controller.ts's updateCompany() guard. adminFetch() already
+      // surfaces the server's error message as-is, so this existing catch
+      // block needs no special-casing: the admin sees the same explanatory
+      // message this endpoint returns ("This company has an active managed
+      // subscription; its plan cannot be changed through this endpoint.").
+      // Changing subscription_status alone (suspend/cancel/reactivate) is
+      // never blocked by this guard and keeps working exactly as before.
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSavingId(null);
@@ -223,10 +244,23 @@ export default function PlatformAdminPage() {
             <div className="stat-label">Total companies</div>
             <div className="stat-value">{stats.total_companies}</div>
           </div>
-          <div className="stat-card green">
-            <div className="stat-label">MRR</div>
-            <div className="stat-value">{stats.mrr.toFixed(3)} KD</div>
-          </div>
+          {/* Stage B2: one card per currency that actually has an active
+              subscription — never summed across currencies (a mixed-currency
+              total is not a meaningful number). */}
+          {stats.mrr_by_currency.length === 0 && (
+            <div className="stat-card green">
+              <div className="stat-label">MRR</div>
+              <div className="stat-value" style={{ fontSize: 14 }}>
+                No active subscriptions yet
+              </div>
+            </div>
+          )}
+          {stats.mrr_by_currency.map((row) => (
+            <div className="stat-card green" key={row.currency || 'unknown-currency'}>
+              <div className="stat-label">MRR ({row.currency || 'unknown currency'})</div>
+              <div className="stat-value">{row.mrr.toFixed(3)}</div>
+            </div>
+          ))}
           {stats.by_plan_and_status.map((row, i) => (
             <div className="stat-card" key={i}>
               <div className="stat-label">
@@ -346,7 +380,8 @@ export default function PlatformAdminPage() {
                 <th>Company</th>
                 <th>Plan</th>
                 <th>Status</th>
-                <th className="num">Monthly price</th>
+                <th className="num">Price / cycle</th>
+                <th>Interval</th>
                 <th>Auto-renew</th>
                 <th>Next billing</th>
               </tr>
@@ -357,15 +392,29 @@ export default function PlatformAdminPage() {
                   <td style={{ fontWeight: 700 }}>{s.company_name}</td>
                   <td>{s.plan}</td>
                   <td>{s.status}</td>
-                  <td className="num">{s.monthly_price !== null ? `${Number(s.monthly_price).toFixed(3)} KD` : '—'}</td>
+                  {/* Stage B2: shows the row's OWN currency and its actual
+                      period_amount (the real agreed charge) — never a
+                      hardcoded "KD" label, and never monthly_price presented
+                      as the charge (it's a rounded MRR-reporting derivative
+                      only — see B2 proposal §3.4). Falls back to the older
+                      monthly_price shape for any row that predates these
+                      fields (kept defensive for legacy rows). */}
+                  <td className="num">
+                    {s.period_amount !== undefined && s.currency
+                      ? `${Number(s.period_amount).toFixed(3)} ${s.currency}`
+                      : s.monthly_price !== null
+                      ? `${Number(s.monthly_price).toFixed(3)} (currency unknown)`
+                      : '—'}
+                  </td>
+                  <td>{s.billing_interval || '—'}</td>
                   <td>{s.auto_renew ? 'Yes' : 'No'}</td>
                   <td>{s.next_billing_date ? new Date(s.next_billing_date).toLocaleDateString('en-GB') : '—'}</td>
                 </tr>
               ))}
               {subscriptions.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
-                    <div className="empty-state">No subscriptions yet — no payment gateway wired up.</div>
+                  <td colSpan={7}>
+                    <div className="empty-state">No subscriptions yet.</div>
                   </td>
                 </tr>
               )}
