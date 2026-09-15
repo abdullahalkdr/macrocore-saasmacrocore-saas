@@ -221,9 +221,15 @@ export const listSubscriptions = asyncHandler(async (_req: Request, res: Respons
   res.status(200).json({ success: true, subscriptions: result.rows });
 });
 
+// Stage B3 — SELECT extended with the invoice's own immutable snapshot columns
+// (invoice_number, plan, billing_interval, currency, period_start, period_end)
+// so Platform Admin can render the real agreed charge and its real currency
+// instead of assuming a hardcoded "KD" — see PlatformAdminPage.tsx.
 export const listInvoices = asyncHandler(async (_req: Request, res: Response) => {
   const result = await pool.query(
-    `SELECT i.id, i.company_id, c.name AS company_name, i.amount, i.status, i.issue_date, i.due_date, i.payment_date
+    `SELECT i.id, i.invoice_number, i.company_id, c.name AS company_name, i.subscription_id,
+            i.plan, i.billing_interval, i.currency, i.amount, i.status,
+            i.period_start, i.period_end, i.issue_date, i.due_date, i.payment_date, i.created_at
      FROM invoices i JOIN companies c ON c.id = i.company_id
      ORDER BY i.created_at DESC`
   );
@@ -283,6 +289,31 @@ function shapeSubscription(row: Record<string, unknown> | undefined): unknown {
     current_period_start: toIsoOrNull(row.current_period_start),
     current_period_end: toIsoOrNull(row.current_period_end),
     auto_renew: row.auto_renew,
+    created_at: toIsoOrNull(row.created_at),
+  };
+}
+
+// Stage B3 — shapes an `invoices` row for API responses (createSubscriptionInvoice's
+// 201/409 bodies and, in spirit, listInvoices' raw rows — listInvoices intentionally
+// keeps returning raw SQL rows unshaped, matching its own pre-B3 convention, so this
+// helper is used only where a single invoice needs the same ISO-date normalization
+// shapeSubscription already gives subscriptions).
+function shapeInvoice(row: Record<string, unknown> | undefined): unknown {
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    invoice_number: row.invoice_number,
+    company_id: row.company_id,
+    subscription_id: row.subscription_id,
+    plan: row.plan,
+    billing_interval: row.billing_interval,
+    currency: row.currency,
+    amount: row.amount,
+    period_start: toIsoOrNull(row.period_start),
+    period_end: toIsoOrNull(row.period_end),
+    status: row.status,
+    issue_date: toIsoOrNull(row.issue_date),
+    due_date: toIsoOrNull(row.due_date),
     created_at: toIsoOrNull(row.created_at),
   };
 }
@@ -439,4 +470,172 @@ export const getCompanySubscription = asyncHandler(async (req: Request, res: Res
     throw new AppError(404, 'Company not found');
   }
   res.status(200).json({ success: true, subscription: shapeSubscription(result.rows[0]) });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B3 — Macrocore subscription invoice foundation. See
+// claude/chat4a-b3-subscription-invoice-foundation-proposal-2026-09-15.md
+// (Revision 2 + the Implementation section) for the full design. This is the
+// only lifecycle step this stage implements: an already-active commercial
+// subscription -> exactly one 'issued' invoice per subscription period. It
+// creates an administrative billing record only — not evidence a payment was
+// attempted or collected (locked rule #10) — and never updates `companies`
+// or `subscriptions` (a narrower footprint than even B2's activateSubscription,
+// which does update `companies`).
+// ---------------------------------------------------------------------------
+
+export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  // Empty request body by design (locked rule #11) — every commercial value
+  // (plan, billing interval, currency, amount, period) is read from the
+  // company's own live subscription inside the transaction below, never
+  // accepted from the caller. This endpoint introduces no new pricing/catalog
+  // validation path; those values are already validated and locked in at
+  // activateSubscription time.
+  const client = await pool.connect();
+  let invoiceRow: Record<string, unknown> | undefined;
+
+  try {
+    await client.query('BEGIN');
+
+    // Same lock, same order, as activateSubscription/updateCompany above —
+    // this endpoint and company.controller.ts's deleteMe() (refactored
+    // alongside this stage) both lock the company row FIRST, so invoice
+    // creation and company deletion can never deadlock against each other
+    // and whichever commits first is the one the other observes.
+    const companyResult = await client.query('SELECT id FROM companies WHERE id = $1 FOR UPDATE', [id]);
+    if (!companyResult.rows[0]) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Company not found');
+    }
+
+    // Eligibility is based on the commercial subscription row, never
+    // `companies.subscription_status` (locked rules #1/#3) — only
+    // `subscriptions.status = 'active'` may receive an invoice. `past_due`
+    // is deliberately NOT eligible yet (locked rule #2: no real workflow
+    // currently produces that state, so accepting it now would be
+    // speculative). A company stays invoice-eligible while tenant access is
+    // `suspended`/`cancelled`, provided its commercial subscription is still
+    // `active` (locked rule #4) — entitlement state and billing eligibility
+    // are deliberately uncoupled, which is exactly why this query never
+    // looks at `companies.subscription_status` at all.
+    // Locked FOR UPDATE (not just read) so a concurrent activation/plan
+    // change for the same company can't be interleaved mid-transaction —
+    // fresh statement after the company lock, per the same READ COMMITTED
+    // lesson B2's updateCompany review already established (never fold a
+    // dependent check into the same statement as the lock it depends on).
+    const subResult = await client.query(
+      `SELECT * FROM subscriptions WHERE company_id = $1 AND status = 'active' FOR UPDATE`,
+      [id]
+    );
+    const subscription = subResult.rows[0];
+    if (!subscription) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        error: 'Company has no active commercial subscription to invoice',
+      });
+    }
+
+    // due_date equals issue_date exactly (locked rule #5) — generated from
+    // the SAME captured instant, never two separate now()/new Date() calls
+    // that could theoretically diverge. Passed as the same bound parameter
+    // twice below, not recomputed.
+    const issuedAt = new Date();
+
+    try {
+      const insertResult = await client.query(
+        `INSERT INTO invoices
+           (company_id, subscription_id, plan, billing_interval, currency, amount,
+            period_start, period_end, status, issue_date, due_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'issued', $9, $9)
+         RETURNING *`,
+        // -- invoice_number is NOT in this column list — the column DEFAULT
+        // (MIGRATION_083) generates it via the dedicated global sequence.
+        // amount is subscription.period_amount — the exact agreed period
+        // charge — never reconstructed from monthly_price (which is a
+        // rounded MRR-reporting derivative only; see subscriptionLifecycle.ts).
+        [
+          id,
+          subscription.id,
+          subscription.plan,
+          subscription.billing_interval,
+          subscription.currency,
+          subscription.period_amount,
+          subscription.current_period_start,
+          subscription.current_period_end,
+          issuedAt,
+        ]
+      );
+      invoiceRow = insertResult.rows[0];
+    } catch (err: unknown) {
+      const pgErr = err as { code?: string; constraint?: string };
+      // Only the specific B3 period-uniqueness constraint means "already
+      // invoiced this period" — any other unique violation (e.g. an
+      // astronomically unlikely invoice_number collision on the sequence)
+      // is a real error and must not be mis-reported as this business
+      // conflict; it is left to propagate and surface as a real 500.
+      if (pgErr.code === '23505' && pgErr.constraint === 'invoices_one_invoice_per_period') {
+        // Roll back BEFORE the recovery lookup, exactly as
+        // activateSubscription already does for its own conflict path —
+        // Postgres refuses any further statement on an aborted transaction,
+        // and the recovery read below deliberately uses `pool.query`, never
+        // the just-rolled-back `client`.
+        await client.query('ROLLBACK');
+        const existing = await pool.query(
+          `SELECT * FROM invoices WHERE subscription_id = $1 AND period_start = $2 AND period_end = $3`,
+          [subscription.id, subscription.current_period_start, subscription.current_period_end]
+        );
+        return res.status(409).json({
+          success: false,
+          error: 'An invoice already exists for this subscription period',
+          existing_invoice: shapeInvoice(existing.rows[0]),
+        });
+      }
+      throw err;
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const invoice = shapeInvoice(invoiceRow) as { id: string };
+
+  // Best-effort, after COMMIT — same non-transactional pattern as B2's
+  // activateSubscription/updateCompany. logAudit() catches its own errors
+  // internally (utils/audit.ts); an audit-write failure here can never undo
+  // the invoice or change this already-decided 201 response. Not added to
+  // SENSITIVE_ACTIONS, matching every other B1/B2 billing action.
+  try {
+    await logAudit({
+      companyId: id,
+      userId: null,
+      action: 'admin_subscription_invoice_issued',
+      entityType: 'invoices',
+      entityId: invoice.id,
+      req,
+      oldValues: null,
+      newValues: {
+        invoice_number: invoiceRow?.invoice_number,
+        subscription_id: invoiceRow?.subscription_id,
+        plan: invoiceRow?.plan,
+        billing_interval: invoiceRow?.billing_interval,
+        currency: invoiceRow?.currency,
+        amount: invoiceRow?.amount,
+        period_start: toIsoOrNull(invoiceRow?.period_start),
+        period_end: toIsoOrNull(invoiceRow?.period_end),
+      },
+    });
+  } catch (err) {
+    // logAudit currently catches its own failures, but keep the controller's
+    // post-commit boundary safe if that implementation ever changes.
+    console.error('invoice audit failed:', (err as Error).message);
+  }
+
+  res.status(201).json({ success: true, invoice });
 });

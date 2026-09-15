@@ -233,23 +233,104 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
 
 // Settings > Company > "حذف بيانات المنشأة". Requires typing the exact company
 // name as confirmation (not just a boolean flag) so a stray/scripted request
-// can't nuke a company by accident. FK constraints across the schema are
-// ON DELETE CASCADE from companies, so this one DELETE clears everything —
-// sales, employees, users, locations, and the company row itself.
+// can't nuke a company by accident. FK constraints across most of the schema
+// are ON DELETE CASCADE from companies, so this one DELETE clears nearly
+// everything — sales, employees, users, locations, and the company row
+// itself. The one deliberate exception, added in Stage B3, is
+// `invoices.company_id`, which is now ON DELETE RESTRICT (see
+// MIGRATION_083_subscription_invoice_foundation.sql): a Macrocore-issued
+// subscription invoice is Macrocore's own billing record, not tenant data,
+// and must never disappear as a side effect of a tenant deleting their own
+// account.
+//
+// Stage B3 — refactored from two bare pool.query() calls into one reserved
+// client and one explicit transaction, matching the exact pattern already
+// established by admin.controller.ts's updateCompany/activateSubscription/
+// createSubscriptionInvoice. This is required, not cosmetic: this endpoint
+// and createSubscriptionInvoice must serialize against each other so neither
+// can observe a half-finished view of the other (an invoice appearing after
+// a delete decision was already made, or a delete succeeding while an
+// invoice-issuance transaction is still in flight). Both endpoints now lock
+// the company row FIRST, in the same order (`SELECT ... FOR UPDATE`), so they
+// can never deadlock against each other and whichever transaction commits
+// first is the one the other observes once it proceeds — see the paired
+// regression tests in company.controller's own test file proving both lock
+// orders leave no orphan invoice and no silent invoice deletion.
+//
+// Transaction order (locked): BEGIN -> lock the company row -> 404 if
+// missing -> validate confirm_name (400 if it doesn't match) -> check
+// whether any Macrocore subscription invoice exists for this company (409 if
+// so) -> otherwise DELETE -> COMMIT. This precheck exists to give a clear,
+// intentional 409 instead of a raw Postgres FK-violation error surfacing as
+// an unhandled 500 — the actual, concurrency-safe protection is the
+// database's own ON DELETE RESTRICT foreign key, not this precheck alone
+// (a precheck-only guard has a race window: another transaction could issue
+// an invoice for this company between the precheck and the DELETE — the
+// shared company-row lock above is what actually closes that window, and the
+// FK is the final backstop even if it weren't).
+//
+// The previous 'company_deleted' logAudit() call has been REMOVED from this
+// path entirely, not merely relocated to run after COMMIT. Two independent,
+// confirmed reasons:
+//   1. Deadlock risk: logAudit() (utils/audit.ts) issues its own pool.query()
+//      on a SEPARATE connection from the one holding this transaction's
+//      FOR UPDATE lock. Calling it BEFORE commit, while this client still
+//      holds that lock, risks contention through audit_logs' own foreign key
+//      back to the very company row this transaction has locked.
+//   2. Structural futility, confirmed directly against
+//      backend/docs/DATABASE_SCHEMA.sql: both `audit_logs.company_id` and
+//      `audit_logs_archive.company_id` use ON DELETE CASCADE. Any
+//      'company_deleted' audit row this call could write is itself a child
+//      of the company row that DELETE FROM companies removes — it would be
+//      cascade-deleted in the very same statement, in the very same
+//      transaction, before COMMIT. Calling logAudit() AFTER commit would not
+//      fix this either: by then the company row is already gone, so a new
+//      audit_logs row still carrying that company_id would either violate
+//      the (NOT NULL + FK) constraint against a company that no longer
+//      exists, or — if the FK were relaxed — become orphaned data
+//      referencing nothing. There is no ordering of this call, inside this
+//      transaction or after it, that produces a RETAINED deletion record
+//      under the current schema. A real fix (a separate, non-cascading
+//      deletion-audit trail — a new archive table or a global log outside
+//      the companies FK graph) would need new audit-archive infrastructure,
+//      which is explicitly out of scope for B3. This is flagged here, and in
+//      the B3 handoff report, as a genuine open gap for a future stage — not
+//      a bug silently worked around by pretending the old call still had
+//      value.
 export const deleteMe = asyncHandler(async (req: Request, res: Response) => {
   const companyId = req.auth!.companyId;
   const { confirm_name } = req.body ?? {};
 
-  const current = await pool.query('SELECT name FROM companies WHERE id = $1', [companyId]);
-  const company = current.rows[0];
-  if (!company) throw new AppError(404, 'Company not found');
+  const client = await pool.connect();
 
-  if (typeof confirm_name !== 'string' || confirm_name.trim() !== company.name) {
-    throw new AppError(400, 'confirm_name must exactly match the company name');
+  try {
+    await client.query('BEGIN');
+
+    const current = await client.query('SELECT name FROM companies WHERE id = $1 FOR UPDATE', [companyId]);
+    const company = current.rows[0];
+    if (!company) throw new AppError(404, 'Company not found');
+
+    if (typeof confirm_name !== 'string' || confirm_name.trim() !== company.name) {
+      throw new AppError(400, 'confirm_name must exactly match the company name');
+    }
+
+    const invoiceCheck = await client.query('SELECT 1 FROM invoices WHERE company_id = $1 LIMIT 1', [companyId]);
+    if (invoiceCheck.rows.length > 0) {
+      throw new AppError(409, 'Cannot delete a company with issued Macrocore invoices');
+    }
+
+    await client.query('DELETE FROM companies WHERE id = $1', [companyId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    const pgErr = err as { code?: string; constraint?: string };
+    if (pgErr.code === '23503' && pgErr.constraint === 'invoices_company_id_fkey') {
+      throw new AppError(409, 'Cannot delete a company with issued Macrocore invoices');
+    }
+    throw err;
+  } finally {
+    client.release();
   }
-
-  await logAudit({ companyId, userId: req.auth!.userId, action: 'company_deleted', entityType: 'companies', entityId: companyId, req });
-  await pool.query('DELETE FROM companies WHERE id = $1', [companyId]);
 
   res.status(200).json({ success: true, message: 'Company and all its data deleted' });
 });

@@ -56,10 +56,22 @@ interface Subscription {
 }
 interface Invoice {
   id: string;
+  // Stage B3: every issued invoice now carries its own immutable commercial
+  // snapshot — see claude/chat4a-b3-subscription-invoice-foundation-
+  // proposal-2026-09-15.md. `currency` here is that invoice's OWN recorded
+  // currency (copied from its subscription at issue time), never assumed —
+  // this is what replaces the previous hardcoded "KD" render below.
+  invoice_number: string;
   company_id: string;
   company_name: string;
+  subscription_id: string;
+  plan: string;
+  billing_interval: string;
+  currency: string;
   amount: number;
   status: string;
+  period_start: string;
+  period_end: string;
   issue_date: string;
   due_date: string | null;
   payment_date: string | null;
@@ -99,6 +111,7 @@ export default function PlatformAdminPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [edits, setEdits] = useState<Record<string, { plan: string; subscription_status: string; trial_end_date: string }>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [issuingCompanyId, setIssuingCompanyId] = useState<string | null>(null);
 
   function load(activeKey: string) {
     setLoading(true);
@@ -173,6 +186,26 @@ export default function PlatformAdminPage() {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSavingId(null);
+    }
+  }
+
+  // Stage B3 — triggers POST /admin/companies/:id/subscription/invoices with
+  // an empty body (the endpoint accepts no commercial values from the
+  // caller; everything is copied from the company's own active subscription
+  // — see admin.controller.ts's createSubscriptionInvoice). A 409 here means
+  // either "no active commercial subscription" or "already invoiced this
+  // period" — both surfaced via adminFetch()'s existing error message
+  // passthrough, same as saveCompany's own error handling above.
+  async function issueInvoice(companyId: string) {
+    setIssuingCompanyId(companyId);
+    setError(null);
+    try {
+      await adminFetch(`/admin/companies/${companyId}/subscription/invoices`, key, { method: 'POST' });
+      load(key);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to issue invoice');
+    } finally {
+      setIssuingCompanyId(null);
     }
   }
 
@@ -384,6 +417,7 @@ export default function PlatformAdminPage() {
                 <th>Interval</th>
                 <th>Auto-renew</th>
                 <th>Next billing</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -409,11 +443,31 @@ export default function PlatformAdminPage() {
                   <td>{s.billing_interval || '—'}</td>
                   <td>{s.auto_renew ? 'Yes' : 'No'}</td>
                   <td>{s.next_billing_date ? new Date(s.next_billing_date).toLocaleDateString('en-GB') : '—'}</td>
+                  <td>
+                    {/* Stage B3 — only a commercially `active` subscription is
+                        eligible for invoicing (see admin.controller.ts's
+                        createSubscriptionInvoice); tenant access status is
+                        irrelevant here and deliberately not checked. No
+                        fields are submitted — the endpoint copies everything
+                        from this subscription's own row server-side. */}
+                    {s.status === 'active' ? (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        type="button"
+                        onClick={() => issueInvoice(s.company_id)}
+                        disabled={issuingCompanyId === s.company_id}
+                      >
+                        {issuingCompanyId === s.company_id ? '…' : 'Issue invoice'}
+                      </button>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {subscriptions.length === 0 && (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <div className="empty-state">No subscriptions yet.</div>
                   </td>
                 </tr>
@@ -431,28 +485,43 @@ export default function PlatformAdminPage() {
           <table className="data-table">
             <thead>
               <tr>
+                <th>Invoice #</th>
                 <th>Company</th>
+                <th>Plan</th>
+                <th>Interval</th>
                 <th className="num">Amount</th>
                 <th>Status</th>
+                <th>Period</th>
                 <th>Issued</th>
                 <th>Due</th>
-                <th>Paid</th>
               </tr>
             </thead>
             <tbody>
               {invoices.map((inv) => (
                 <tr key={inv.id}>
-                  <td style={{ fontWeight: 700 }}>{inv.company_name}</td>
-                  <td className="num">{Number(inv.amount).toFixed(3)} KD</td>
+                  <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{inv.invoice_number}</td>
+                  <td>{inv.company_name}</td>
+                  <td>{inv.plan}</td>
+                  <td>{inv.billing_interval}</td>
+                  {/* Stage B3: shows this invoice's OWN recorded currency —
+                      never a hardcoded "KD" — mirroring the exact pattern
+                      already proven correct in the Subscriptions table above. */}
+                  <td className="num">
+                    {inv.amount !== undefined && inv.currency ? `${Number(inv.amount).toFixed(3)} ${inv.currency}` : '—'}
+                  </td>
                   <td>{inv.status}</td>
-                  <td>{new Date(inv.issue_date).toLocaleDateString('en-GB')}</td>
+                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>
+                    {inv.period_start ? new Date(inv.period_start).toLocaleDateString('en-GB') : '—'}
+                    {' → '}
+                    {inv.period_end ? new Date(inv.period_end).toLocaleDateString('en-GB') : '—'}
+                  </td>
+                  <td>{inv.issue_date ? new Date(inv.issue_date).toLocaleDateString('en-GB') : '—'}</td>
                   <td>{inv.due_date ? new Date(inv.due_date).toLocaleDateString('en-GB') : '—'}</td>
-                  <td>{inv.payment_date ? new Date(inv.payment_date).toLocaleDateString('en-GB') : '—'}</td>
                 </tr>
               ))}
               {invoices.length === 0 && (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={9}>
                     <div className="empty-state">No invoices yet.</div>
                   </td>
                 </tr>

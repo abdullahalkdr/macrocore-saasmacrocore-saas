@@ -2,6 +2,8 @@
 -- Regenerated: 2026-09-15
 -- Run again after any migration: node scripts/dump-schema.js
 
+CREATE SEQUENCE macrocore_invoice_number_seq START WITH 1 INCREMENT BY 1;
+
 CREATE TABLE api_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -480,16 +482,23 @@ CREATE TABLE feedback_requests (
 
 CREATE TABLE invoices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  subscription_id UUID REFERENCES subscriptions(id),
-  amount DECIMAL(10, 3),
-  status VARCHAR(20) DEFAULT 'pending'::character varying,
-  issue_date TIMESTAMP,
-  due_date TIMESTAMP,
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+  subscription_id UUID NOT NULL REFERENCES subscriptions(id),
+  amount DECIMAL(10, 3) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'issued'::character varying,
+  issue_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+  due_date TIMESTAMPTZ NOT NULL,
   payment_date TIMESTAMP,
   telr_transaction_id VARCHAR(255),
   pdf_url VARCHAR(500),
-  created_at TIMESTAMP DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  plan VARCHAR(20) NOT NULL,
+  billing_interval VARCHAR(10) NOT NULL,
+  currency VARCHAR(3) NOT NULL,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  invoice_number VARCHAR(20) NOT NULL DEFAULT ('MC-SUB-'::text || lpad((nextval('macrocore_invoice_number_seq'::regclass))::text, 6, '0'::text)) UNIQUE,
+  UNIQUE (subscription_id, period_start, period_end)
 );
 
 CREATE TABLE job_role_permissions (
