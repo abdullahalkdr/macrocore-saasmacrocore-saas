@@ -3,6 +3,7 @@ import { env } from './config/env';
 import { sweepEmailQueue } from './utils/email';
 import { sweepApprovalSla } from './utils/approvalSla';
 import { sweepTicketSla } from './utils/ticketSla';
+import { sweepTrialLifecycleEmails } from './utils/trialLifecycleEmails';
 
 app.listen(env.PORT, () => {
   console.log(`macrocore backend listening on port ${env.PORT} [${env.NODE_ENV}]`);
@@ -38,6 +39,13 @@ app.listen(env.PORT, () => {
     // Chat 3D Stage 5 — Helpdesk SLA sweep, same isolated-catch shape as the
     // two above: a failure here never affects or delays either other sweep.
     void sweepTicketSla().catch((err) => console.error('[ticketSla] sweep failed', err));
+    // Chat 4C Stage B4B — trial lifecycle emails sweep (trial_ending /
+    // trial_expired), same isolated-catch shape as the three above. Self-
+    // guards on env.ENABLE_BACKGROUND_SWEEPS internally (see its own header,
+    // utils/trialLifecycleEmails.ts) — this call always fires, same as every
+    // other sweep; the guard is what makes a disabled instance a no-op. No
+    // new setInterval, no new timer, no new worker, no new queue.
+    void sweepTrialLifecycleEmails().catch((err) => console.error('[trialLifecycleEmails] sweep failed', err));
   };
   runSweeps(); // once right away — picks up anything left over from before a restart
   setInterval(runSweeps, 60_000);

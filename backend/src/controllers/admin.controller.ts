@@ -446,6 +446,26 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
       [plan, id]
     );
 
+    // Chat 4C, Stage B4B — Layer A trial-lifecycle cancellation (design v8
+    // §4.6). An activation makes any still-pending trial_ending/trial_expired
+    // notice for this company obsolete immediately. Exact-prefix match only
+    // (starts_with(), never LIKE — 'trial_ending'/'trial_expired' both
+    // contain a literal '_', an unescaped LIKE wildcard):
+    // related_entity_type = 'companies' alone is NOT a sufficient
+    // discriminator here, since B4A's trial_started email (auth.controller.ts)
+    // shares that same related_entity_type value. Same lock, same order as
+    // the `companies FOR UPDATE` above — this UPDATE only ever runs after
+    // that lock is already held, so it can never race a concurrent
+    // deliverTrialLifecycleJob() guard on the same company (§4.8).
+    await client.query(
+      `UPDATE email_jobs
+       SET status = 'cancelled', updated_at = now()
+       WHERE company_id = $1 AND category = 'billing' AND related_entity_type = 'companies' AND related_entity_id = $1
+         AND status IN ('queued', 'temp_failed')
+         AND (starts_with(dedup_key, 'billing:trial_ending:') OR starts_with(dedup_key, 'billing:trial_expired:'))`,
+      [id]
+    );
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

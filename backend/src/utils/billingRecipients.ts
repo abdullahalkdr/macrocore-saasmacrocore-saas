@@ -1,5 +1,5 @@
 import { pool } from '../db/pool';
-import type { EmailLang } from './email';
+import type { EmailLang, Queryable } from './email';
 
 // ============================================================================
 // Billing recipient resolution — Chat 4B, Stage B4A. See
@@ -71,9 +71,17 @@ function resolveLang(raw: string | null): EmailLang {
  * normalized email (the first row encountered) for the caller's dedup_key.
  * Never returns a recipient from a different company: the query itself is
  * scoped by company_id, so there is nothing here to bypass.
+ *
+ * Chat 4C, Stage B4B — additive `queryable` parameter, defaulting to the
+ * plain `pool` (byte-identical behavior for every existing call site above,
+ * which are all still strictly post-commit). trialLifecycleEmails.ts's own
+ * per-company transaction (design v8 §2.2) is the only caller that ever
+ * passes its own open transaction's client instead — so it resolves
+ * recipients using the SAME client that holds its `companies FOR UPDATE`
+ * lock, rather than a second, separate `pool` connection.
  */
-export async function resolveBillingRecipients(companyId: string): Promise<ResolvedBillingRecipient[]> {
-  const result = await pool.query<BillingCandidateRow>(
+export async function resolveBillingRecipients(companyId: string, queryable: Queryable = pool): Promise<ResolvedBillingRecipient[]> {
+  const result = await queryable.query<BillingCandidateRow>(
     `SELECT u.id, u.email, u.preferred_language, c.timezone AS company_timezone
      FROM users u
      JOIN companies c ON c.id = u.company_id

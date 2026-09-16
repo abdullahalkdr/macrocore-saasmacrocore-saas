@@ -1,6 +1,23 @@
 import crypto from 'crypto';
+import type { Pool, PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { env } from '../config/env';
+
+// Chat 4C, Stage B4B — shared "either the plain pool or an already-open
+// transaction's client" type, so insertEmailJob() (and, in trialLifecycleEmails.ts,
+// resolveBillingRecipients()) can be called either post-commit (the existing
+// pattern, every category before B4B) or from inside an open transaction (B4B's
+// own per-company transaction, §2.2) without two copies of the same query.
+export type Queryable = Pick<Pool, 'query'> | PoolClient;
+
+// Chat 4C, Stage B4B — the two trial-lifecycle dedup_key prefixes, defined once
+// here (not in trialLifecycleEmails.ts) so isTrialLifecycleJob()/
+// deliverTrialLifecycleJob() below can use them without importing back from
+// trialLifecycleEmails.ts (that file imports FROM this one — insertEmailJob(),
+// the two templates below, these prefixes — never the other way around, so
+// there is no circular import between the two files).
+export const TRIAL_ENDING_DEDUP_PREFIX = 'billing:trial_ending:';
+export const TRIAL_EXPIRED_DEDUP_PREFIX = 'billing:trial_expired:';
 
 export type EmailLang = 'ar' | 'en';
 
@@ -335,7 +352,7 @@ export function verifyResendWebhookSignature(params: {
   return false;
 }
 
-interface EnqueueEmailInput {
+export interface EnqueueEmailInput {
   to: string;
   subject: string;
   html: string;
@@ -403,37 +420,80 @@ async function claimBatch(limit: number): Promise<EmailJobRow[]> {
 // uses, so a concurrent webhook and a concurrent finalize on the same row
 // simply serialize on the row lock -- never a lost update, never a deadlock
 // (only ever one row locked at a time, no cross-lock ordering).
-async function finalizeJob(
+// Chat 4C, Stage B4B refactor (design v8 §4.10) — the guarded status-write
+// logic itself, factored out so it can run EITHER inside its own short-lived
+// transaction (finalizeJob(), below — unchanged external behavior for every
+// pre-existing category) OR inside an already-open, longer-lived transaction
+// that also holds a `companies` row lock (deliverTrialLifecycleJob(), further
+// down — the guard needs finalize's write to land in the SAME transaction
+// as the lock, so the lock is only ever released once, at that transaction's
+// own COMMIT). This function itself never calls BEGIN/COMMIT/ROLLBACK — that
+// stays entirely the caller's responsibility, exactly like every other
+// client-scoped helper in this codebase (applyJobStatusFromEvent, etc.).
+async function finalizeJobWithClient(
+  client: Pick<PoolClient, 'query'>,
   jobId: string,
-  patch: { status: EmailJobStatus; resendMessageId?: string | null; error?: string | null; nextAttemptAt?: Date | null; sentAt?: Date | null }
+  patch: {
+    status: EmailJobStatus;
+    resendMessageId?: string | null;
+    error?: string | null;
+    nextAttemptAt?: Date | null;
+    sentAt?: Date | null;
+    // Additive (§4.3) — attempt-budget-neutral deferral only. `claimJobById`/
+    // `claimBatch` already increment attempt_count at claim time, BEFORE any
+    // guard ever runs (see their own comments above) — so a losing NOWAIT
+    // attempt on the trial-lifecycle company lock (a scheduling collision,
+    // never an actual Resend call) must not silently consume a real
+    // max_attempts slot. Set true ONLY by deliverTrialLifecycleJob()'s
+    // isLockNotAvailable() branch below; every other caller omits it
+    // (defaults to false — a pure no-op on attempt_count).
+    decrementAttemptCount?: boolean;
+  }
 ): Promise<EmailJobStatus> {
+  const current = await client.query<{ status: EmailJobStatus }>('SELECT status FROM email_jobs WHERE id = $1 FOR UPDATE', [jobId]);
+  const currentStatus = current.rows[0]?.status;
+  if (!currentStatus || !isWorkerFinalizeAllowed(currentStatus, patch.status)) {
+    if (currentStatus) {
+      console.log(
+        `[email] finalizeJob: blocked ${currentStatus} -> ${patch.status} for job ${jobId} (already advanced further, e.g. by a webhook that beat this worker to it)`
+      );
+    }
+    // Callers (deliverClaimedJob) count/report outcomes off this return
+    // value — when the write is blocked, what actually persisted is
+    // whatever was already there, NOT the status this call attempted, so
+    // metrics must reflect the former, never the latter.
+    return currentStatus ?? patch.status;
+  }
+  await client.query(
+    `UPDATE email_jobs
+     SET status = $2, resend_message_id = COALESCE($3, resend_message_id), last_error = $4,
+         next_attempt_at = COALESCE($5, next_attempt_at), sent_at = COALESCE($6, sent_at),
+         attempt_count = CASE WHEN $7 THEN GREATEST(attempt_count - 1, 0) ELSE attempt_count END,
+         updated_at = now()
+     WHERE id = $1`,
+    [jobId, patch.status, patch.resendMessageId ?? null, patch.error ?? null, patch.nextAttemptAt ?? null, patch.sentAt ?? null, patch.decrementAttemptCount ?? false]
+  );
+  return patch.status;
+}
+
+// Thin wrapper reproducing the ORIGINAL finalizeJob()'s exact external
+// contract (own connect/BEGIN/COMMIT/ROLLBACK/release) for every pre-existing
+// caller — enqueueEmail()'s callers, requeueJobForRetry(), and the ordinary
+// (non-trial-lifecycle) delivery path via deliverViaResend() below. The
+// original's "blocked transition" early return issued an explicit ROLLBACK
+// before returning; this version COMMITs unconditionally instead — behaviorally
+// identical (zero rows are ever written on that path either way, so there is
+// nothing for a ROLLBACK to undo that a COMMIT doesn't equally leave alone),
+// and it is what lets finalizeJobWithClient() above stay free of transaction
+// control so deliverTrialLifecycleJob() can reuse it inside a longer-lived,
+// already-open transaction.
+async function finalizeJob(jobId: string, patch: Parameters<typeof finalizeJobWithClient>[2]): Promise<EmailJobStatus> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const current = await client.query<{ status: EmailJobStatus }>('SELECT status FROM email_jobs WHERE id = $1 FOR UPDATE', [jobId]);
-    const currentStatus = current.rows[0]?.status;
-    if (!currentStatus || !isWorkerFinalizeAllowed(currentStatus, patch.status)) {
-      if (currentStatus) {
-        console.log(
-          `[email] finalizeJob: blocked ${currentStatus} -> ${patch.status} for job ${jobId} (already advanced further, e.g. by a webhook that beat this worker to it)`
-        );
-      }
-      await client.query('ROLLBACK');
-      // Callers (deliverClaimedJob) count/report outcomes off this return
-      // value — when the write is blocked, what actually persisted is
-      // whatever was already there, NOT the status this call attempted, so
-      // metrics must reflect the former, never the latter.
-      return currentStatus ?? patch.status;
-    }
-    await client.query(
-      `UPDATE email_jobs
-       SET status = $2, resend_message_id = COALESCE($3, resend_message_id), last_error = $4,
-           next_attempt_at = COALESCE($5, next_attempt_at), sent_at = COALESCE($6, sent_at), updated_at = now()
-       WHERE id = $1`,
-      [jobId, patch.status, patch.resendMessageId ?? null, patch.error ?? null, patch.nextAttemptAt ?? null, patch.sentAt ?? null]
-    );
+    const result = await finalizeJobWithClient(client, jobId, patch);
     await client.query('COMMIT');
-    return patch.status;
+    return result;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -452,10 +512,29 @@ const RESEND_REQUEST_TIMEOUT_MS = 15_000;
 
 // Does the actual Resend call for an already-claimed (status='processing') job
 // and resolves it to a terminal-for-this-attempt state. Never throws — every
-// branch, including the dev-mode and network-error paths, ends in a
-// finalizeJob() call so a job can never be stuck silently in 'processing'
-// because of an uncaught exception here.
-async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
+// branch, including the dev-mode and network-error paths, ends in a `finalize`
+// call so a job can never be stuck silently in 'processing' because of an
+// uncaught exception here.
+//
+// Chat 4C, Stage B4B refactor (design v8 §4.10) — `finalize` is now an
+// injected callback instead of a direct `finalizeJob(job.id, ...)` call,
+// SOLELY so `deliverTrialLifecycleJob()` below can pass one backed by its own
+// already-open, lock-holding client (`finalizeJobWithClient`) instead of
+// finalizeJob()'s own short-lived transaction. The pre-existing call site
+// (`deliverClaimedJob`, immediately below) passes `(patch) =>
+// finalizeJob(job.id, patch)` — byte-identical behavior to the original
+// unrefactored function for every category that existed before B4B. Nothing
+// else in this function's body changed.
+async function deliverViaResend(
+  job: EmailJobRow,
+  finalize: (patch: {
+    status: EmailJobStatus;
+    resendMessageId?: string | null;
+    error?: string | null;
+    nextAttemptAt?: Date | null;
+    sentAt?: Date | null;
+  }) => Promise<EmailJobStatus>
+): Promise<EmailJobStatus> {
   if (!env.RESEND_API_KEY) {
     if (env.NODE_ENV === 'production') {
       // Missing config in production is NOT the same as local dev without a
@@ -467,15 +546,15 @@ async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
       console.error(
         `[email:CONFIG ERROR] RESEND_API_KEY is not set in production — job ${job.id} (category=${job.category}, to=${job.recipient_email}) cannot be sent. Set RESEND_API_KEY in Railway.`
       );
-      // Return what finalizeJob actually persisted, not the attempted status
+      // Return what finalize() actually persisted, not the attempted status
       // — a webhook could in principle have already resolved this job (e.g.
       // it was reclaimed and a stray late webhook landed first), in which
       // case the real outcome is that status, not 'permanently_failed'.
-      return await finalizeJob(job.id, { status: 'permanently_failed', error: 'CONFIG ERROR: RESEND_API_KEY is not set in production.' });
+      return await finalize({ status: 'permanently_failed', error: 'CONFIG ERROR: RESEND_API_KEY is not set in production.' });
     }
     // Harmless local-dev / pre-verification fallback, unchanged.
     console.log(`[email:dev] category=${job.category} to=${job.recipient_email} subject="${job.subject}"\n${job.html}\n`);
-    return await finalizeJob(job.id, { status: 'dev_skipped' });
+    return await finalize({ status: 'dev_skipped' });
   }
 
   let httpStatus: number | null = null;
@@ -510,16 +589,16 @@ async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
 
     if (res.ok) {
       const json = (await res.json().catch(() => null)) as { id?: string } | null;
-      return await finalizeJob(job.id, { status: 'sent', resendMessageId: json?.id ?? null, sentAt: new Date() });
+      return await finalize({ status: 'sent', resendMessageId: json?.id ?? null, sentAt: new Date() });
     }
 
     const bodyText = await res.text().catch(() => '');
     const classification = classifyResendFailure(httpStatus);
     if (classification === 'permanent' || job.attempt_count >= job.max_attempts) {
-      return await finalizeJob(job.id, { status: 'permanently_failed', error: `HTTP ${httpStatus}: ${bodyText.slice(0, 500)}` });
+      return await finalize({ status: 'permanently_failed', error: `HTTP ${httpStatus}: ${bodyText.slice(0, 500)}` });
     }
     const backoffMs = computeBackoffMs(job.attempt_count);
-    return await finalizeJob(job.id, {
+    return await finalize({
       status: 'temp_failed',
       error: `HTTP ${httpStatus}: ${bodyText.slice(0, 500)}`,
       nextAttemptAt: new Date(Date.now() + backoffMs),
@@ -536,13 +615,184 @@ async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
           : err.message
         : String(err);
     if (job.attempt_count >= job.max_attempts) {
-      return await finalizeJob(job.id, { status: 'permanently_failed', error: message });
+      return await finalize({ status: 'permanently_failed', error: message });
     }
     const backoffMs = computeBackoffMs(job.attempt_count);
-    return await finalizeJob(job.id, { status: 'temp_failed', error: message, nextAttemptAt: new Date(Date.now() + backoffMs) });
+    return await finalize({ status: 'temp_failed', error: message, nextAttemptAt: new Date(Date.now() + backoffMs) });
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+// Chat 4C, Stage B4B (design v8 §4.10) — true both for a job inserted by
+// sweepTrialLifecycleEmails() and, structurally, for nothing else: category
+// must be 'billing', related_entity_type must be the same 'companies' value
+// B4A's trial_started email also uses (§0 — NOT a sufficient discriminator by
+// itself), AND the dedup_key must carry one of the two prefixes only
+// trialLifecycleEmails.ts's insertEmailJob() calls ever use.
+export function isTrialLifecycleJob(job: EmailJobRow): boolean {
+  return (
+    job.category === 'billing' &&
+    job.related_entity_type === 'companies' &&
+    (job.dedup_key.startsWith(TRIAL_ENDING_DEDUP_PREFIX) || job.dedup_key.startsWith(TRIAL_EXPIRED_DEDUP_PREFIX))
+  );
+}
+
+function getTrialLifecycleEventType(job: EmailJobRow): 'trial_ending' | 'trial_expired' | null {
+  if (job.dedup_key.startsWith(TRIAL_ENDING_DEDUP_PREFIX)) return 'trial_ending';
+  if (job.dedup_key.startsWith(TRIAL_EXPIRED_DEDUP_PREFIX)) return 'trial_expired';
+  return null;
+}
+
+// §7's fixed-width dedup_key layout (`<prefix><companyUUID>:<marker(27)>:<recipientUUID>`)
+// makes the embedded marker a safe plain substring slice — never dependent on
+// the marker's own internal ':' characters as a delimiter (the marker format,
+// `YYYY-MM-DDTHH24:MI:SS.USZ`, itself contains ':' — this is exactly why a
+// split-on-':' approach would be wrong here).
+const LIFECYCLE_MARKER_LENGTH = 27;
+function extractMarkerFromDedupKey(job: EmailJobRow): string | null {
+  const eventType = getTrialLifecycleEventType(job);
+  if (!eventType || !job.company_id) return null;
+  const prefix = eventType === 'trial_ending' ? TRIAL_ENDING_DEDUP_PREFIX : TRIAL_EXPIRED_DEDUP_PREFIX;
+  const afterCompanyId = job.dedup_key.slice(prefix.length + job.company_id.length + 1); // +1 for the ':' after the company id
+  return afterCompanyId.slice(0, LIFECYCLE_MARKER_LENGTH);
+}
+
+// Chat 4C, Stage B4B (design v8 §4.3) — true only for Postgres error 55P03
+// ("could not obtain lock on row ... NOWAIT specified"), i.e. exactly the
+// company-row lock contention deliverTrialLifecycleJob()'s NOWAIT guard is
+// meant to catch — never any other kind of failure.
+export function isLockNotAvailable(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '55P03';
+}
+
+// Chat 4C, Stage B4B (design v8 §4) — the delivery-time guard for trial
+// lifecycle jobs. Acquires `companies FOR UPDATE OF c NOWAIT` (never a
+// blocking FOR UPDATE — §4.3) and, ONLY if that succeeds, re-derives
+// eligibility from the live companies/subscriptions rows at this exact
+// instant — never from anything decided at insertion time (§4.1) — entirely
+// in SQL (§4.2): `still_trial_eligible`, the recomputed `marker` string, and
+// `trial_end_passed` (a boolean comparison against ONE clock_timestamp() read,
+// captured via the `gn` cross-joined subquery so both the returned value and
+// the comparison use the identical instant). Never a raw trial_end_date
+// crosses into this function — only these SQL-computed strings/booleans do.
+//
+// The row lock, once acquired, is held through the Resend call itself
+// (deliverViaResend, above) by passing `finalizeJobWithClient(client, ...)` as
+// the finalize callback — so the eligible/committed/serialized-after guarantee
+// (§4.7, both Order A and Order B) is a property of the one open transaction,
+// not of two separately-committed ones. Exported for the disposable-Postgres
+// guard smoke test (trialLifecycleGuard.smoke.test.ts) — it is a fully
+// legitimate standalone unit of this feature, not merely an internal
+// dispatch detail.
+export async function deliverTrialLifecycleJob(job: EmailJobRow): Promise<EmailJobStatus> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let recheck:
+      | {
+          still_trial_eligible: boolean;
+          marker: string;
+          trial_end_passed: boolean;
+          has_live_subscription: boolean;
+        }
+      | undefined;
+    try {
+      const r = await client.query<{
+        still_trial_eligible: boolean;
+        marker: string;
+        trial_end_passed: boolean;
+        has_live_subscription: boolean;
+      }>(
+        `SELECT (c.plan = 'trial' AND c.subscription_status = 'trial') AS still_trial_eligible,
+                to_char((c.trial_end_date AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS marker,
+                ((c.trial_end_date AT TIME ZONE 'UTC') <= gn.guard_now) AS trial_end_passed,
+                EXISTS (SELECT 1 FROM subscriptions s WHERE s.company_id = c.id AND s.status IN ('active', 'past_due')) AS has_live_subscription
+         FROM companies c, (SELECT clock_timestamp() AS guard_now) gn
+         WHERE c.id = $1
+         FOR UPDATE OF c NOWAIT`,
+        [job.company_id]
+      );
+      recheck = r.rows[0];
+    } catch (err) {
+      if (isLockNotAvailable(err)) {
+        // Postgres aborts the current transaction on a failed statement —
+        // must ROLLBACK before this connection can run anything else (same
+        // pattern admin.controller.ts's activateSubscription() already uses
+        // for its own recoverable constraint-violation branch).
+        await client.query('ROLLBACK');
+        // Attempt-budget-neutral: undo exactly the increment the claim
+        // already made (claimJobById/claimBatch, §0), via the ALREADY-allowed
+        // processing -> temp_failed transition (isWorkerFinalizeAllowed
+        // already permits it — zero new status-machine rules) plus the one
+        // additive decrementAttemptCount patch flag. Eligible again in 2-5s;
+        // actually picked up whenever sweepEmailQueue()'s existing ~60s tick
+        // next runs claimBatch() — no new timer is introduced (§4.4).
+        return await finalizeJob(job.id, {
+          status: 'temp_failed',
+          error: 'Trial lifecycle guard: company row busy — deferred, not a delivery attempt.',
+          nextAttemptAt: new Date(Date.now() + 2000 + Math.floor(Math.random() * 3000)),
+          decrementAttemptCount: true,
+        });
+      }
+      throw err;
+    }
+
+    if (!recheck) {
+      // The company row no longer exists (hard delete) — nothing left to be
+      // eligible for. Cancel rather than leave it stuck retrying forever.
+      const outcome = await finalizeJobWithClient(client, job.id, {
+        status: 'cancelled',
+        error: 'Trial lifecycle guard: company no longer exists.',
+      });
+      await client.query('COMMIT');
+      return outcome;
+    }
+
+    const eventType = getTrialLifecycleEventType(job);
+    const embeddedMarker = extractMarkerFromDedupKey(job);
+    // §4.2 — event-specific temporal eligibility, both branches SQL-computed:
+    // trial_ending is stale once the trial has actually lapsed;
+    // trial_expired is stale if it turns out NOT to have lapsed yet (can only
+    // happen via a marker mismatch in practice, kept explicit for clarity/
+    // defense-in-depth). Marker mismatch (activation OR extension, §4.7) and
+    // loss of plan/subscription_status/live-subscription eligibility are
+    // checked identically for both event types.
+    const temporalStale = eventType === 'trial_ending' ? recheck.trial_end_passed : !recheck.trial_end_passed;
+    const stale = !recheck.still_trial_eligible || recheck.has_live_subscription || recheck.marker !== embeddedMarker || temporalStale;
+
+    if (stale) {
+      const outcome = await finalizeJobWithClient(client, job.id, {
+        status: 'cancelled',
+        error: 'Trial lifecycle guard: no longer eligible at delivery time (activated, extended, or already elapsed).',
+      });
+      await client.query('COMMIT');
+      return outcome;
+    }
+
+    // Eligible — the row lock is still held, and stays held through the
+    // Resend call itself (§4.7, §4.9): this call may legitimately reach
+    // Resend, because the company genuinely was still trial-eligible at this
+    // exact, just-read, committed instant.
+    const outcome = await deliverViaResend(job, (patch) => finalizeJobWithClient(client, job.id, patch));
+    await client.query('COMMIT');
+    return outcome;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Chat 4C, Stage B4B (design v8 §4.10) — the one-line dispatch. Every
+// pre-existing category is completely unaffected (isTrialLifecycleJob()
+// returns false for all of them, so deliverViaResend() is called exactly as
+// deliverClaimedJob()'s body always called it, with finalizeJob() as the
+// finalize callback — byte-identical to the pre-refactor behavior).
+async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
+  if (isTrialLifecycleJob(job)) return await deliverTrialLifecycleJob(job);
+  return await deliverViaResend(job, (patch) => finalizeJob(job.id, patch));
 }
 
 // Creates a durable job row and returns immediately — this is the "durable
@@ -562,29 +812,48 @@ async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
 // Never throws: if email_jobs itself can't be written to (migration not run
 // yet, DB unreachable), the business action that called this must still
 // succeed — same contract the pre-existing sendEmail() always had.
+// Chat 4C, Stage B4B (design v8 §5) — the shared durable-insert primitive,
+// extracted out of enqueueEmail() below. Takes a `Queryable` (either the
+// plain `pool`, for every pre-existing post-commit call site, or an
+// already-open transaction's `client` — trialLifecycleEmails.ts's own
+// per-company transaction, §2.2, is the only caller that passes a client).
+// Deliberately NEVER triggers delivery on its own (no attemptDeliverNow()
+// call anywhere in this function) — that is exactly what keeps B4B's
+// insertion path durable-insert-only (§2.2, §11 item 3): trialLifecycleEmails.ts
+// calls this function directly, never enqueueEmail(), so a newly-inserted
+// trial-lifecycle job is picked up exclusively by the existing
+// sweepEmailQueue() on its normal cadence, never by an immediate fan-out.
+// Same INSERT statement, same ON CONFLICT (dedup_key) DO NOTHING semantics,
+// same "throws on a real DB error, never swallows it" contract as the
+// original inline code this was extracted from — enqueueEmail() below is the
+// one that adds the try/catch-and-swallow best-effort contract on top.
+export async function insertEmailJob(queryable: Queryable, input: EnqueueEmailInput): Promise<{ jobId: string | null; inserted: boolean }> {
+  const result = await queryable.query<{ id: string }>(
+    `INSERT INTO email_jobs (company_id, category, dedup_key, recipient_email, lang, subject, html, reply_to, related_entity_type, related_entity_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (dedup_key) DO NOTHING
+     RETURNING id`,
+    [
+      input.companyId ?? null,
+      input.category,
+      input.dedupKey,
+      input.to,
+      input.lang,
+      input.subject,
+      input.html,
+      resolveReplyTo(input.category) ?? null,
+      input.relatedEntityType ?? null,
+      input.relatedEntityId ?? null,
+    ]
+  );
+  return { jobId: result.rows[0]?.id ?? null, inserted: Boolean(result.rows[0]) };
+}
+
 export async function enqueueEmail(input: EnqueueEmailInput): Promise<{ jobId: string | null; deduped: boolean }> {
   try {
-    const insertResult = await pool.query<{ id: string }>(
-      `INSERT INTO email_jobs (company_id, category, dedup_key, recipient_email, lang, subject, html, reply_to, related_entity_type, related_entity_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (dedup_key) DO NOTHING
-       RETURNING id`,
-      [
-        input.companyId ?? null,
-        input.category,
-        input.dedupKey,
-        input.to,
-        input.lang,
-        input.subject,
-        input.html,
-        resolveReplyTo(input.category) ?? null,
-        input.relatedEntityType ?? null,
-        input.relatedEntityId ?? null,
-      ]
-    );
+    const { jobId, inserted } = await insertEmailJob(pool, input);
 
-    if (insertResult.rows[0]) {
-      const jobId = insertResult.rows[0].id;
+    if (inserted && jobId) {
       void attemptDeliverNow(jobId).catch((err) => console.error('[email] immediate delivery attempt failed', jobId, err));
       return { jobId, deduped: false };
     }
@@ -1885,6 +2154,110 @@ export function trialStartedEmailHtml(params: TrialStartedEmailParams): { subjec
     lang
   );
   return { subject: 'بدأت فترتك التجريبية في macrocore', html };
+}
+
+// ============================================================================
+// Chat 4C, Stage B4B — trial lifecycle notices (trial_ending / trial_expired).
+// Same reused primitives as trialStartedEmailHtml() immediately above
+// (emailShell, billingSummaryTable, ctaButton, formatDateForEmail,
+// escapeHtml) — no new layout primitive introduced. companyName is escaped
+// exactly like every other free-text field this file interpolates. Neither
+// template's copy contains "paid"/"payment received"/"charged" (or the
+// Arabic equivalent) anywhere — these are trial-lifecycle notices, not
+// payment confirmations, matching subscriptionActivatedEmailHtml's own
+// locked rule above. Both are sent under EmailCategory 'billing' (existing
+// sender/Reply-To identity, resolved at delivery time from job.category —
+// exactly like every other billing template, neither function here calls
+// resolveSenderFrom()/resolveReplyTo() itself). The account link is always
+// the caller's own `${env.FRONTEND_URL}/account?section=billing` — this file
+// never reads env.FRONTEND_URL, same convention as every template above.
+// ============================================================================
+
+export interface TrialEndingEmailParams {
+  lang: EmailLang;
+  timeZone: string;
+  companyName: string;
+  trialEndDate: Date | string;
+  link: string;
+}
+
+// Sent from trialLifecycleEmails.ts's per-company transaction (§2.2) once a
+// company's trial is within its ending window (§6/§11 boundary fixtures) and
+// still durably re-verified eligible at actual delivery time by
+// deliverTrialLifecycleJob() (§4) — never earlier than that.
+export function trialEndingEmailHtml(params: TrialEndingEmailParams): { subject: string; html: string } {
+  const { lang, timeZone, companyName, trialEndDate, link } = params;
+  const safeCompany = escapeHtml(companyName);
+  const endText = formatDateForEmail(trialEndDate, lang, timeZone);
+
+  if (lang === 'en') {
+    const html = emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Your trial is ending soon ⏳</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;"><strong>${safeCompany}</strong>'s free trial on macrocore is ending soon.</p>
+        ${billingSummaryTable([['Trial ends', endText]], lang)}
+        <p style="font-size: 13px; line-height: 1.8; color: #44403c;">To keep using macrocore without interruption, activate a subscription before your trial ends.</p>
+        ${ctaButton(link, 'Go to billing', lang)}
+      `,
+      lang
+    );
+    return { subject: 'Your macrocore trial is ending soon', html };
+  }
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">فترتك التجريبية تنتهي قريباً ⏳</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">الفترة التجريبية المجانية لـ<strong>${safeCompany}</strong> في macrocore تنتهي قريباً.</p>
+      ${billingSummaryTable([['نهاية الفترة التجريبية', endText]], lang)}
+      <p style="font-size: 13px; line-height: 1.8; color: #44403c;">لمواصلة استخدام macrocore بدون انقطاع، فعّل اشتراكك قبل انتهاء فترتك التجريبية.</p>
+      ${ctaButton(link, 'الذهاب إلى الفوترة', lang)}
+    `,
+    lang
+  );
+  return { subject: 'فترتك التجريبية في macrocore تنتهي قريباً', html };
+}
+
+export interface TrialExpiredEmailParams {
+  lang: EmailLang;
+  timeZone: string;
+  companyName: string;
+  trialEndDate: Date | string;
+  link: string;
+}
+
+// Sent once a company's trial has actually elapsed (§6/§11 boundary fixtures)
+// and is still durably re-verified past-due, plan/status-eligible, and
+// subscription-free at actual delivery time (§4) — never earlier than that.
+export function trialExpiredEmailHtml(params: TrialExpiredEmailParams): { subject: string; html: string } {
+  const { lang, timeZone, companyName, trialEndDate, link } = params;
+  const safeCompany = escapeHtml(companyName);
+  const endText = formatDateForEmail(trialEndDate, lang, timeZone);
+
+  if (lang === 'en') {
+    const html = emailShell(
+      `
+        <p style="font-size: 15px; margin: 0 0 4px;">Your trial has ended</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;"><strong>${safeCompany}</strong>'s free trial on macrocore has ended.</p>
+        ${billingSummaryTable([['Trial ended', endText]], lang)}
+        <p style="font-size: 13px; line-height: 1.8; color: #44403c;">Activate a subscription to keep using macrocore.</p>
+        ${ctaButton(link, 'Go to billing', lang)}
+      `,
+      lang
+    );
+    return { subject: 'Your macrocore trial has ended', html };
+  }
+
+  const html = emailShell(
+    `
+      <p style="font-size: 15px; margin: 0 0 4px;">انتهت فترتك التجريبية</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">انتهت الفترة التجريبية المجانية لـ<strong>${safeCompany}</strong> في macrocore.</p>
+      ${billingSummaryTable([['تاريخ الانتهاء', endText]], lang)}
+      <p style="font-size: 13px; line-height: 1.8; color: #44403c;">فعّل اشتراكك لمواصلة استخدام macrocore.</p>
+      ${ctaButton(link, 'الذهاب إلى الفوترة', lang)}
+    `,
+    lang
+  );
+  return { subject: 'انتهت فترتك التجريبية في macrocore', html };
 }
 
 export interface SubscriptionActivatedEmailParams {

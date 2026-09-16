@@ -80,6 +80,12 @@ function mockSuccessPool() {
     if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
     if (sql.includes('INSERT INTO subscriptions')) return { rows: [SUBSCRIPTION_ROW] };
     if (sql.includes('UPDATE companies')) return { rows: [] };
+    // Chat 4C, Stage B4B — Layer A trial-lifecycle cancellation, now part of
+    // activateSubscription()'s own transaction (design v8 §4.6). Distinct
+    // from the billing-email enqueue below, which still only ever happens
+    // strictly post-commit via enqueueEmail() — see the updated assertion in
+    // 'resolves recipients and enqueues the activation email AFTER COMMIT'.
+    if (sql.includes('UPDATE email_jobs')) return { rows: [] };
     throw new Error(`unexpected client query: ${sql}`);
   });
 }
@@ -114,7 +120,14 @@ describe('activateSubscription() — subscription-activated billing email, post-
 
     const clientSqlCalls = mocks.clientQuery.mock.calls.map((c) => c[0] as string);
     expect(clientSqlCalls).toContain('COMMIT');
-    expect(clientSqlCalls.some((s) => s.includes('email_jobs'))).toBe(false);
+    // Chat 4C, Stage B4B — the transaction now legitimately touches
+    // email_jobs once, for Layer A's trial-lifecycle cancellation UPDATE
+    // (design v8 §4.6). What this test actually guards against is unchanged:
+    // the subscription-activated billing EMAIL is never inserted inside the
+    // transaction (that still only ever happens strictly post-commit, via
+    // enqueueEmail() — proven by the separate call-order test below).
+    expect(clientSqlCalls.some((s) => s.includes('INSERT INTO email_jobs'))).toBe(false);
+    expect(clientSqlCalls.filter((s) => s.includes('UPDATE email_jobs'))).toHaveLength(1);
 
     expect(mocks.enqueueEmail).toHaveBeenCalledTimes(1);
     const enqueueArgs = mocks.enqueueEmail.mock.calls[0][0];
@@ -137,6 +150,7 @@ describe('activateSubscription() — subscription-activated billing email, post-
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) return { rows: [SUBSCRIPTION_ROW] };
       if (sql.includes('UPDATE companies')) return { rows: [] };
+      if (sql.includes('UPDATE email_jobs')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
     mocks.enqueueEmail.mockImplementation(async () => {

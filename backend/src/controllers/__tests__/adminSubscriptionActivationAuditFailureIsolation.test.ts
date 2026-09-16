@@ -74,6 +74,9 @@ describe('activateSubscription() + real logAudit() — audit_logs INSERT failure
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) return { rows: [SUBSCRIPTION_ROW] };
       if (sql.includes('UPDATE companies')) return { rows: [] };
+      // Chat 4C, Stage B4B — Layer A trial-lifecycle cancellation, now part
+      // of this same transaction (design v8 §4.6).
+      if (sql.includes('UPDATE email_jobs')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
     // The real logAudit()'s own internal pool.query (the audit_logs INSERT)
