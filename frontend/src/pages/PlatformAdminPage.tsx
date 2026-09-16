@@ -4,6 +4,7 @@ import {
   ACTIVATABLE_PLAN_VALUES,
   adminFetch,
   allowedLegacyPlanOptions,
+  canActivateSubscription,
   defaultActivationForm,
   nextActivationForm,
   submitActivation,
@@ -364,6 +365,7 @@ export default function PlatformAdminPage() {
             <tbody>
               {companies.map((c) => {
                 const edit = edits[c.id] || { plan: c.plan, subscription_status: c.subscription_status, trial_end_date: '' };
+                const activationAllowed = canActivateSubscription(c.id, subscriptions);
                 return (
                   <Fragment key={c.id}>
                   <tr>
@@ -432,14 +434,16 @@ export default function PlatformAdminPage() {
                         <button
                           className="btn btn-secondary btn-sm"
                           type="button"
+                          disabled={!activationAllowed}
+                          title={activationAllowed ? undefined : 'Plan changes are not available here; this company already has a live subscription.'}
                           onClick={() => (activatingId === c.id ? setActivatingId(null) : openActivation(c))}
                         >
-                          {activatingId === c.id ? 'Cancel' : 'Activate Subscription…'}
+                          {!activationAllowed ? 'Subscription active' : activatingId === c.id ? 'Cancel' : 'Activate Subscription…'}
                         </button>
                       </div>
                     </td>
                   </tr>
-                  {activatingId === c.id && (
+                  {activationAllowed && activatingId === c.id && (
                   <tr>
                     <td colSpan={9}>
                       {/* Stage B2's real activation form — creates the subscriptions

@@ -52,6 +52,17 @@ export function allowedLegacyPlanOptions(currentPlan: string): string[] {
   return Array.from(new Set([currentPlan, 'trial']));
 }
 
+export function canActivateSubscription(
+  companyId: string,
+  subscriptions: readonly { company_id: string; status: string }[]
+): boolean {
+  return !subscriptions.some(
+    (subscription) =>
+      subscription.company_id === companyId &&
+      (subscription.status === 'active' || subscription.status === 'past_due')
+  );
+}
+
 // The Activate Subscription form's field-change reducer. For bronze/silver/
 // gold the period amount MUST exactly match the server's approved catalog
 // (activateSubscription rejects anything else — see

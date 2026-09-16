@@ -3,6 +3,7 @@ import {
   STANDARD_PLAN_CATALOG,
   allowedLegacyPlanOptions,
   buildActivationRequestBody,
+  canActivateSubscription,
   defaultActivationForm,
   nextActivationForm,
   submitActivation,
@@ -25,6 +26,24 @@ describe('allowedLegacyPlanOptions() — paid-plan blocking on the legacy Save s
 
   it('does not duplicate the option when the company is already on trial', () => {
     expect(allowedLegacyPlanOptions('trial')).toEqual(['trial']);
+  });
+});
+
+describe('canActivateSubscription() — activation is not a plan-change workflow', () => {
+  const subscriptions = [
+    { company_id: 'active-company', status: 'active' },
+    { company_id: 'past-due-company', status: 'past_due' },
+    { company_id: 'cancelled-company', status: 'cancelled' },
+  ];
+
+  it('blocks the activation form for companies that already have a live subscription', () => {
+    expect(canActivateSubscription('active-company', subscriptions)).toBe(false);
+    expect(canActivateSubscription('past-due-company', subscriptions)).toBe(false);
+  });
+
+  it('allows initial activation, including after an old subscription was cancelled', () => {
+    expect(canActivateSubscription('new-company', subscriptions)).toBe(true);
+    expect(canActivateSubscription('cancelled-company', subscriptions)).toBe(true);
   });
 });
 
