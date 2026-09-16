@@ -9,16 +9,17 @@ import { resolveSenderFrom, resolveReplyTo, trialEndingEmailHtml, trialExpiredEm
 // ---------------------------------------------------------------------------
 
 const LANGS: EmailLang[] = ['ar', 'en'];
-const LINK = 'https://app.macrocore.io/account?section=billing';
+const ENDING_LINK = 'https://app.macrocore.io/account?section=billing';
+const EXPIRED_LINK = 'https://app.macrocore.io/subscription-expired';
 
 const endingBase = {
   timeZone: 'Asia/Kuwait',
   companyName: 'Al Salam Trading Co.',
   trialEndDate: new Date('2026-09-29T08:00:00.000Z'),
-  link: LINK,
+  link: ENDING_LINK,
 };
 
-const expiredBase = { ...endingBase };
+const expiredBase = { ...endingBase, link: EXPIRED_LINK };
 
 describe('trialEndingEmailHtml — item 23/24 (Arabic/English rendering)', () => {
   it('renders RTL Arabic and LTR English with distinct subject/body and the exact CTA link', () => {
@@ -28,8 +29,8 @@ describe('trialEndingEmailHtml — item 23/24 (Arabic/English rendering)', () =>
     expect(en.html).toContain('dir="ltr"');
     expect(ar.html).not.toBe(en.html);
     expect(ar.subject).not.toBe(en.subject);
-    expect(ar.html).toContain(`href="${LINK}"`);
-    expect(en.html).toContain(`href="${LINK}"`);
+    expect(ar.html).toContain(`href="${ENDING_LINK}"`);
+    expect(en.html).toContain(`href="${ENDING_LINK}"`);
   });
 
   it('shows the company name and mentions the trial ending', () => {
@@ -69,8 +70,10 @@ describe('trialExpiredEmailHtml — item 25/26 (Arabic/English rendering)', () =
     expect(en.html).toContain('dir="ltr"');
     expect(ar.html).not.toBe(en.html);
     expect(ar.subject).not.toBe(en.subject);
-    expect(ar.html).toContain(`href="${LINK}"`);
-    expect(en.html).toContain(`href="${LINK}"`);
+    expect(ar.html).toContain(`href="${EXPIRED_LINK}"`);
+    expect(en.html).toContain(`href="${EXPIRED_LINK}"`);
+    expect(ar.html).toContain('عرض حالة الحساب');
+    expect(en.html).toContain('View account status');
   });
 
   it('shows the company name and mentions the trial having ended', () => {
@@ -121,13 +124,12 @@ describe('HTML escaping (item 27)', () => {
   });
 });
 
-// Item 29 — the account link, exactly matching the established convention.
+// Item 29 — one real account/status link appropriate to each lifecycle state.
 describe('account link (item 29)', () => {
-  it('renders exactly the caller-supplied link — the same convention as trial_started/subscription_activated/invoice_issued, never a different or ad-hoc path', () => {
-    const link = `${'https://app.macrocore.io'}/account?section=billing`;
+  it('keeps trial_ending on Billing and sends trial_expired to the accessible expired-account status page', () => {
     for (const lang of LANGS) {
-      expect(trialEndingEmailHtml({ ...endingBase, lang, link }).html).toContain(`href="${link}"`);
-      expect(trialExpiredEmailHtml({ ...expiredBase, lang, link }).html).toContain(`href="${link}"`);
+      expect(trialEndingEmailHtml({ ...endingBase, lang }).html).toContain(`href="${ENDING_LINK}"`);
+      expect(trialExpiredEmailHtml({ ...expiredBase, lang }).html).toContain(`href="${EXPIRED_LINK}"`);
     }
   });
 });

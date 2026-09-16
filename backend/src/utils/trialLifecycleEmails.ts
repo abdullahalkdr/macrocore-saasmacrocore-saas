@@ -152,7 +152,14 @@ async function processCandidate(eventType: TrialLifecycleEventType, companyId: s
     }
 
     const dedupPrefix = DEDUP_PREFIX[eventType];
-    const billingLink = `${env.FRONTEND_URL}/account?section=billing`;
+    // An expired tenant is redirected away from protected account routes as
+    // soon as any gated request returns SUBSCRIPTION_INACTIVE. Keep the
+    // ending notice pointed at Billing while access still works, but send an
+    // expired tenant to the real status/recovery page they can open.
+    const accountLink =
+      eventType === 'trial_ending'
+        ? `${env.FRONTEND_URL}/account?section=billing`
+        : `${env.FRONTEND_URL}/subscription-expired`;
     const buildTemplate = eventType === 'trial_ending' ? trialEndingEmailHtml : trialExpiredEmailHtml;
 
     let inserted = 0;
@@ -165,7 +172,7 @@ async function processCandidate(eventType: TrialLifecycleEventType, companyId: s
         // TIMESTAMP WITHOUT TIME ZONE column. Passing that string avoids
         // node-postgres interpreting the raw column in the process timezone.
         trialEndDate: company.marker,
-        link: billingLink,
+        link: accountLink,
       });
       const result = await insertEmailJob(client, {
         to: recipient.email,

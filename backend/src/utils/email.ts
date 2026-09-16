@@ -2168,9 +2168,10 @@ export function trialStartedEmailHtml(params: TrialStartedEmailParams): { subjec
 // locked rule above. Both are sent under EmailCategory 'billing' (existing
 // sender/Reply-To identity, resolved at delivery time from job.category —
 // exactly like every other billing template, neither function here calls
-// resolveSenderFrom()/resolveReplyTo() itself). The account link is always
-// the caller's own `${env.FRONTEND_URL}/account?section=billing` — this file
-// never reads env.FRONTEND_URL, same convention as every template above.
+// resolveSenderFrom()/resolveReplyTo() itself). The caller supplies the real
+// route appropriate to the event: Billing while the trial is still active,
+// or the subscription-expired status/recovery page once account routes are
+// gated. This file never reads env.FRONTEND_URL itself.
 // ============================================================================
 
 export interface TrialEndingEmailParams {
@@ -2240,7 +2241,7 @@ export function trialExpiredEmailHtml(params: TrialExpiredEmailParams): { subjec
         <p style="font-size: 14px; line-height: 1.8; color: #44403c;"><strong>${safeCompany}</strong>'s free trial on macrocore has ended.</p>
         ${billingSummaryTable([['Trial ended', endText]], lang)}
         <p style="font-size: 13px; line-height: 1.8; color: #44403c;">Activate a subscription to keep using macrocore.</p>
-        ${ctaButton(link, 'Go to billing', lang)}
+        ${ctaButton(link, 'View account status', lang)}
       `,
       lang
     );
@@ -2253,7 +2254,7 @@ export function trialExpiredEmailHtml(params: TrialExpiredEmailParams): { subjec
       <p style="font-size: 14px; line-height: 1.8; color: #44403c;">انتهت الفترة التجريبية المجانية لـ<strong>${safeCompany}</strong> في macrocore.</p>
       ${billingSummaryTable([['تاريخ الانتهاء', endText]], lang)}
       <p style="font-size: 13px; line-height: 1.8; color: #44403c;">فعّل اشتراكك لمواصلة استخدام macrocore.</p>
-      ${ctaButton(link, 'الذهاب إلى الفوترة', lang)}
+      ${ctaButton(link, 'عرض حالة الحساب', lang)}
     `,
     lang
   );
