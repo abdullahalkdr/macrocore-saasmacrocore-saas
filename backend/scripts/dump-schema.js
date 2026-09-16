@@ -94,15 +94,47 @@ async function run() {
       const pkCols = pkResult.rows.map((r) => r.attname);
 
       const fkResult = await pool.query(
-        `SELECT kcu.column_name, ccu.table_name AS foreign_table, ccu.column_name AS foreign_column, rc.delete_rule
-         FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-         JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-         JOIN information_schema.referential_constraints rc ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
-         WHERE tc.table_schema = 'public' AND tc.table_name = $1 AND tc.constraint_type = 'FOREIGN KEY'`,
+        `SELECT con.conname AS constraint_name, source_col.attname AS column_name,
+                target.relname AS foreign_table, target_col.attname AS foreign_column,
+                CASE con.confdeltype
+                  WHEN 'c' THEN 'CASCADE' WHEN 'r' THEN 'RESTRICT'
+                  WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                  ELSE 'NO ACTION'
+                END AS delete_rule,
+                source_key.ordinality AS ordinal_position
+         FROM pg_constraint con
+         JOIN pg_class source ON source.oid = con.conrelid
+         JOIN pg_namespace source_ns ON source_ns.oid = source.relnamespace
+         JOIN pg_class target ON target.oid = con.confrelid
+         CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS source_key(attnum, ordinality)
+         JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS target_key(attnum, ordinality)
+           ON target_key.ordinality = source_key.ordinality
+         JOIN pg_attribute source_col ON source_col.attrelid = source.oid AND source_col.attnum = source_key.attnum
+         JOIN pg_attribute target_col ON target_col.attrelid = target.oid AND target_col.attnum = target_key.attnum
+         WHERE source_ns.nspname = 'public' AND source.relname = $1 AND con.contype = 'f'
+         ORDER BY con.conname, source_key.ordinality`,
         [table]
       );
-      const fkByColumn = new Map(fkResult.rows.map((r) => [r.column_name, r]));
+      const foreignKeys = [];
+      for (const row of fkResult.rows) {
+        let fk = foreignKeys.find((candidate) => candidate.name === row.constraint_name);
+        if (!fk) {
+          fk = {
+            name: row.constraint_name,
+            columns: [],
+            foreignTable: row.foreign_table,
+            foreignColumns: [],
+            deleteRule: row.delete_rule,
+          };
+          foreignKeys.push(fk);
+        }
+        fk.columns.push(row.column_name);
+        fk.foreignColumns.push(row.foreign_column);
+      }
+      const fkByColumn = new Map(
+        foreignKeys.filter((fk) => fk.columns.length === 1).map((fk) => [fk.columns[0], fk])
+      );
+      const compositeForeignKeys = foreignKeys.filter((fk) => fk.columns.length > 1);
 
       const uniqueResult = await pool.query(
         // ::text cast matters: column_name is information_schema's "sql_identifier" domain
@@ -132,14 +164,19 @@ async function run() {
         if (col.column_default != null) parts.push(`DEFAULT ${col.column_default}`);
         const fk = fkByColumn.get(col.column_name);
         if (fk) {
-          let ref = `REFERENCES ${fk.foreign_table}(${fk.foreign_column})`;
-          if (fk.delete_rule && fk.delete_rule !== 'NO ACTION') ref += ` ON DELETE ${fk.delete_rule}`;
+          let ref = `REFERENCES ${fk.foreignTable}(${fk.foreignColumns[0]})`;
+          if (fk.deleteRule && fk.deleteRule !== 'NO ACTION') ref += ` ON DELETE ${fk.deleteRule}`;
           parts.push(ref);
         }
         if (singleColUnique.has(col.column_name)) parts.push('UNIQUE');
         return parts.join(' ');
       });
       if (pkCols.length > 1) colLines.push(`  PRIMARY KEY (${pkCols.join(', ')})`);
+      for (const fk of compositeForeignKeys) {
+        let definition = `  CONSTRAINT ${fk.name} FOREIGN KEY (${fk.columns.join(', ')}) REFERENCES ${fk.foreignTable}(${fk.foreignColumns.join(', ')})`;
+        if (fk.deleteRule && fk.deleteRule !== 'NO ACTION') definition += ` ON DELETE ${fk.deleteRule}`;
+        colLines.push(definition);
+      }
       for (const cols of compositeUnique) colLines.push(`  UNIQUE (${cols.join(', ')})`);
       lines.push(colLines.join(',\n'));
       lines.push(');');

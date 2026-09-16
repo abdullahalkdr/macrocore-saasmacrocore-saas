@@ -807,3 +807,266 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
 
   res.status(201).json({ success: true, invoice });
 });
+
+// ---------------------------------------------------------------------------
+// Stage B5 — Provider-Neutral Payment Attempt Engine. See
+// claude/chat5a-b5-payment-attempt-engine-design-pass-v4-2026-09-16.md
+// (approved for implementation, with the release-owner's numbered
+// clarifications) for the full design. A payment_attempts row is an
+// administrative record of an attempt to collect on an already-'issued'
+// invoice — creating or failing one is NEVER proof of payment, and this
+// stage issues zero UPDATE/DELETE against `invoices`, `subscriptions`, or
+// `companies`. requireAdminKey-gated only (see admin.routes.ts); there is no
+// tenant-facing visibility of payment attempts anywhere in this stage.
+// ---------------------------------------------------------------------------
+
+// Never includes idempotency_key (locked design rule) — every response and
+// every audit row built from this helper only ever exposes the fields a
+// payment_attempts row is meant to expose externally.
+function shapePaymentAttempt(row: Record<string, unknown> | undefined): unknown {
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    invoice_id: row.invoice_id,
+    company_id: row.company_id,
+    subscription_id: row.subscription_id,
+    amount: row.amount,
+    currency: row.currency,
+    plan: row.plan,
+    billing_interval: row.billing_interval,
+    period_start: toIsoOrNull(row.period_start),
+    period_end: toIsoOrNull(row.period_end),
+    status: row.status,
+    created_at: toIsoOrNull(row.created_at),
+    failed_at: toIsoOrNull(row.failed_at),
+  };
+}
+
+export const createPaymentAttempt = asyncHandler(async (req: Request, res: Response) => {
+  const { invoiceId } = req.params;
+  const rawKey = (req.body ?? {}).idempotency_key;
+  const trimmedKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+  if (!trimmedKey || trimmedKey.length > 100) {
+    throw new AppError(400, 'idempotency_key is required and must be 1-100 characters after trimming');
+  }
+
+  // Idempotent-replay check BEFORE opening a transaction, on the plain pool
+  // — a caller that retries the exact same request (e.g. after a network
+  // timeout) with the same key gets back the SAME attempt it already
+  // created, never a second row. This is a fast-path only; the real,
+  // concurrency-safe guarantee is the database's own global UNIQUE
+  // constraint (payment_attempts_idempotency_key_unique) plus the
+  // fixed-order 23505 recovery below — this check can never be relied on
+  // alone under concurrent requests.
+  const existing = await pool.query(
+    `SELECT *, invoice_id = $2::uuid AS same_invoice
+     FROM payment_attempts WHERE idempotency_key = $1`,
+    [trimmedKey, invoiceId]
+  );
+  if (existing.rows[0]) {
+    if (existing.rows[0].same_invoice) {
+      return res.status(200).json({ success: true, payment_attempt: shapePaymentAttempt(existing.rows[0]) });
+    }
+    return res.status(409).json({ success: false, error: 'This idempotency key was already used for a different invoice' });
+  }
+
+  // Single checked-out client for the whole transaction, same pattern as
+  // activateSubscription/createSubscriptionInvoice above. Always released in
+  // `finally`, whichever way the try block exits.
+  const client = await pool.connect();
+  let attemptRow: Record<string, unknown> | undefined;
+
+  try {
+    await client.query('BEGIN');
+
+    // Locks the invoice row first — the only lock this endpoint ever takes.
+    // No lock is taken on companies or subscriptions; a payment attempt
+    // never contends with activateSubscription/createSubscriptionInvoice's
+    // own company-row-first lock, and there is no company-deletion code
+    // path to deadlock against either (invoices themselves are RESTRICT-
+    // protected from deletion once any attempt exists on them — see
+    // MIGRATION_084 Part B).
+    const invoiceResult = await client.query(`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, [invoiceId]);
+    const invoice = invoiceResult.rows[0];
+    if (!invoice) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Invoice not found');
+    }
+    // Only an 'issued' invoice is eligible. invoices_status_valid's CHECK
+    // (status IN ('issued')) makes any other value structurally impossible
+    // in this database today — this check is deliberately kept anyway as
+    // forward-defensive code for whenever a future stage widens that CHECK
+    // (e.g. adding 'void'), exactly the same "grows only when a real
+    // transition exists" discipline B2/B3 already followed for their own
+    // status columns.
+    if (invoice.status !== 'issued') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Invoice is not eligible for a payment attempt' });
+    }
+
+    try {
+      // INSERT ... SELECT — every commercial/snapshot value is read straight
+      // from the invoice row inside this same statement, never accepted from
+      // the request body and never touched by JS arithmetic (locked design
+      // rule: no floating-point money math anywhere in this stage).
+      const insertResult = await client.query(
+        `INSERT INTO payment_attempts
+           (invoice_id, company_id, subscription_id, amount, currency, plan,
+            billing_interval, period_start, period_end, idempotency_key, status)
+         SELECT id, company_id, subscription_id, amount, currency, plan,
+                billing_interval, period_start, period_end, $2, 'initiated'
+         FROM invoices WHERE id = $1
+         RETURNING *`,
+        [invoiceId, trimmedKey]
+      );
+      attemptRow = insertResult.rows[0];
+    } catch (err: unknown) {
+      const pgErr = err as { code?: string; constraint?: string };
+      // Fixed-order recovery on ANY unique violation — never branch on which
+      // constraint name Postgres happens to report first (locked design
+      // rule). Roll back BEFORE the recovery lookups, exactly as
+      // activateSubscription/createSubscriptionInvoice already do for their
+      // own conflict paths; the recovery lookups below deliberately use
+      // `pool`, never the just-rolled-back `client`.
+      if (pgErr.code === '23505') {
+        await client.query('ROLLBACK');
+        const existing2 = await pool.query(
+          `SELECT *, invoice_id = $2::uuid AS same_invoice
+           FROM payment_attempts WHERE idempotency_key = $1`,
+          [trimmedKey, invoiceId]
+        );
+        if (existing2.rows[0]) {
+          if (existing2.rows[0].same_invoice) {
+            return res.status(200).json({ success: true, payment_attempt: shapePaymentAttempt(existing2.rows[0]) });
+          }
+          return res.status(409).json({ success: false, error: 'This idempotency key was already used for a different invoice' });
+        }
+        const activeExisting = await pool.query(
+          `SELECT * FROM payment_attempts WHERE invoice_id = $1 AND status = 'initiated'`,
+          [invoiceId]
+        );
+        if (activeExisting.rows[0]) {
+          return res.status(409).json({
+            success: false,
+            error: 'This invoice already has an active payment attempt',
+            existing_attempt: shapePaymentAttempt(activeExisting.rows[0]),
+          });
+        }
+        // Neither recovery lookup explains the violation — an astronomically
+        // unlikely id collision or similar genuine error. Left to propagate,
+        // never mis-reported as one of the two known business conflicts.
+        throw err;
+      }
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const attempt = shapePaymentAttempt(attemptRow) as { id: string };
+
+  // Best-effort, after COMMIT — same non-transactional pattern as every
+  // other billing action in this file (logAudit catches its own errors
+  // internally; a failure here can never undo the already-committed
+  // attempt or change this 201 response). Never includes idempotency_key
+  // (locked design rule) and is not added to SENSITIVE_ACTIONS, matching
+  // every other B1-B4 billing action.
+  try {
+    await logAudit({
+      companyId: attemptRow?.company_id as string,
+      userId: null,
+      action: 'admin_payment_attempt_initiated',
+      entityType: 'payment_attempts',
+      entityId: attempt.id,
+      req,
+      oldValues: null,
+      newValues: {
+        invoice_id: attemptRow?.invoice_id,
+        company_id: attemptRow?.company_id,
+        subscription_id: attemptRow?.subscription_id,
+        amount: attemptRow?.amount,
+        currency: attemptRow?.currency,
+        plan: attemptRow?.plan,
+        billing_interval: attemptRow?.billing_interval,
+        period_start: toIsoOrNull(attemptRow?.period_start),
+        period_end: toIsoOrNull(attemptRow?.period_end),
+        status: 'initiated',
+      },
+    });
+  } catch (err) {
+    // logAudit currently catches its own failures, but keep this
+    // controller's post-commit boundary safe if that implementation ever
+    // changes — same defensive pattern createSubscriptionInvoice already uses.
+    console.error('payment attempt audit failed:', (err as Error).message);
+  }
+
+  res.status(201).json({ success: true, payment_attempt: attempt });
+});
+
+// Read-only. 404s when the invoice itself doesn't exist; returns an empty
+// array (not 404) when the invoice exists but has no attempts yet.
+export const listPaymentAttempts = asyncHandler(async (req: Request, res: Response) => {
+  const { invoiceId } = req.params;
+  const invoiceExists = await pool.query(`SELECT 1 FROM invoices WHERE id = $1`, [invoiceId]);
+  if (!invoiceExists.rows[0]) {
+    throw new AppError(404, 'Invoice not found');
+  }
+  const result = await pool.query(
+    `SELECT * FROM payment_attempts WHERE invoice_id = $1 ORDER BY created_at DESC`,
+    [invoiceId]
+  );
+  res.status(200).json({ success: true, attempts: result.rows.map(shapePaymentAttempt) });
+});
+
+// The only transition this stage exposes: 'initiated' -> 'failed'. A single
+// guarded UPDATE, atomic on its own — no explicit transaction needed. Never
+// sets failed_at itself; payment_attempts_guard_mutation_trg (MIGRATION_084)
+// is the sole authority that stamps it with PostgreSQL transaction time.
+// A repeat call on an already-'failed'
+// attempt returns 409, never a replayed 200 — mark-failed is not an
+// idempotent-key operation like create is; there is nothing to replay.
+export const markPaymentAttemptFailed = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const result = await pool.query(
+    `UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *`,
+    [id]
+  );
+  const row = result.rows[0];
+  if (row) {
+    // Best-effort, after the UPDATE has committed (autocommit — this is a
+    // single statement, not inside an explicit BEGIN/COMMIT). Never includes
+    // idempotency_key; not added to SENSITIVE_ACTIONS, matching
+    // admin_payment_attempt_initiated above.
+    try {
+      await logAudit({
+        companyId: row.company_id,
+        userId: null,
+        action: 'admin_payment_attempt_failed',
+        entityType: 'payment_attempts',
+        entityId: row.id,
+        req,
+        oldValues: { status: 'initiated' },
+        newValues: { status: 'failed', failed_at: toIsoOrNull(row.failed_at) },
+      });
+    } catch (err) {
+      console.error('payment attempt failure audit failed:', (err as Error).message);
+    }
+    return res.status(200).json({ success: true, payment_attempt: shapePaymentAttempt(row) });
+  }
+
+  const existingResult = await pool.query(`SELECT id, status FROM payment_attempts WHERE id = $1`, [id]);
+  const existingRow = existingResult.rows[0];
+  if (!existingRow) {
+    throw new AppError(404, 'Payment attempt not found');
+  }
+  return res.status(409).json({
+    success: false,
+    error: `Payment attempt is already '${existingRow.status}'; no transition applied`,
+  });
+});
