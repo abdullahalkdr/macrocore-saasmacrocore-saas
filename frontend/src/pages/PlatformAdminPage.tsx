@@ -292,7 +292,7 @@ export default function PlatformAdminPage() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div className="platform-admin-page">
       <div className="section-title-row">
         <h1 style={{ margin: 0 }}>macrocore — platform admin</h1>
         <button
@@ -342,12 +342,12 @@ export default function PlatformAdminPage() {
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: 20 }}>
+      <div className="card platform-companies-card" style={{ marginBottom: 20 }}>
         <div className="card-head">
           <h2>Companies ({companies.length})</h2>
         </div>
         <div className="table-wrap">
-          <table className="data-table">
+          <table className="data-table platform-companies-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -368,10 +368,10 @@ export default function PlatformAdminPage() {
                   <Fragment key={c.id}>
                   <tr>
                     <td style={{ fontWeight: 700 }}>{c.name}</td>
-                    <td style={{ fontSize: 12, minWidth: 180 }}>
+                    <td className="platform-company-users">
                       {c.users.length === 0 && <span className="muted">—</span>}
                       {c.users.map((u, i) => (
-                        <div key={i} style={{ whiteSpace: 'nowrap' }}>
+                        <div key={i}>
                           {u.email}
                           <span className="muted"> ({u.role}{u.status !== 'active' ? `, ${u.status}` : ''})</span>
                         </div>
@@ -409,10 +409,10 @@ export default function PlatformAdminPage() {
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <input
+                        className="platform-trial-date"
                         type="date"
                         value={edit.trial_end_date}
                         onChange={(e) => setEdits((prev) => ({ ...prev, [c.id]: { ...edit, trial_end_date: e.target.value } }))}
-                        style={{ width: 130 }}
                       />
                       <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                         <button className="btn btn-secondary btn-sm" type="button" onClick={() => extendTrial(c.id, 7)}>
@@ -424,17 +424,19 @@ export default function PlatformAdminPage() {
                       </div>
                     </td>
                     <td>{new Date(c.created_at).toLocaleDateString('en-GB')}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-primary btn-sm" onClick={() => saveCompany(c.id)} disabled={savingId === c.id}>
-                        {savingId === c.id ? '…' : 'Save'}
-                      </button>{' '}
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        type="button"
-                        onClick={() => (activatingId === c.id ? setActivatingId(null) : openActivation(c))}
-                      >
-                        {activatingId === c.id ? 'Cancel' : 'Activate Subscription…'}
-                      </button>
+                    <td>
+                      <div className="platform-company-actions">
+                        <button className="btn btn-primary btn-sm" onClick={() => saveCompany(c.id)} disabled={savingId === c.id}>
+                          {savingId === c.id ? '…' : 'Save'}
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          type="button"
+                          onClick={() => (activatingId === c.id ? setActivatingId(null) : openActivation(c))}
+                        >
+                          {activatingId === c.id ? 'Cancel' : 'Activate Subscription…'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                   {activatingId === c.id && (
@@ -444,9 +446,9 @@ export default function PlatformAdminPage() {
                           row invoicing/MRR/billing-emails depend on. See
                           activateCompanySubscription() above and
                           admin.controller.ts's activateSubscription. */}
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: '8px 0' }}>
-                        <div>
-                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Plan</label>
+                      <div className="platform-activation-form">
+                        <div className="platform-activation-field">
+                          <label>Plan</label>
                           <select value={activationForm.plan} onChange={(e) => setActivationField({ plan: e.target.value })}>
                             {ACTIVATABLE_PLAN_VALUES.map((p) => (
                               <option key={p} value={p}>
@@ -455,8 +457,8 @@ export default function PlatformAdminPage() {
                             ))}
                           </select>
                         </div>
-                        <div>
-                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Billing interval</label>
+                        <div className="platform-activation-field">
+                          <label>Billing interval</label>
                           <select
                             value={activationForm.billing_interval}
                             disabled={activationForm.plan === 'enterprise'}
@@ -466,12 +468,12 @@ export default function PlatformAdminPage() {
                             <option value="annual">annual</option>
                           </select>
                         </div>
-                        <div>
-                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Currency</label>
-                          <input value="USD" disabled style={{ width: 70 }} />
+                        <div className="platform-activation-field">
+                          <label>Currency</label>
+                          <input value="USD" disabled />
                         </div>
-                        <div>
-                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>
+                        <div className="platform-activation-field">
+                          <label>
                             Period amount {activationForm.plan !== 'enterprise' && '(catalog price, fixed)'}
                           </label>
                           <input
@@ -481,7 +483,6 @@ export default function PlatformAdminPage() {
                             value={activationForm.period_amount}
                             disabled={activationForm.plan !== 'enterprise'}
                             onChange={(e) => setActivationForm((prev) => ({ ...prev, period_amount: e.target.value }))}
-                            style={{ width: 110 }}
                           />
                         </div>
                         <button
