@@ -1,17 +1,27 @@
-import { FormEvent, useEffect, useState } from 'react';
-import { API_URL } from '../api/client';
+import { Fragment, FormEvent, useEffect, useState } from 'react';
 import { IconBuilding } from '../components/Icon';
+import {
+  ACTIVATABLE_PLAN_VALUES,
+  adminFetch,
+  allowedLegacyPlanOptions,
+  defaultActivationForm,
+  nextActivationForm,
+  submitActivation,
+  type ActivationForm,
+} from './platformAdminHelpers';
 
 // macrocore's own cross-tenant dashboard — NOT part of any company's account. Auth
 // is a single shared secret (X-Admin-Key, see backend/.env ADMIN_API_KEY), matching
 // backend/src/middleware/requireAdminKey.ts. That file's own comment says it best:
 // swap for real platform-admin accounts once there's more than one person on the
-// macrocore side using this. Until a payment gateway is wired up, this is also the
-// only way to turn a trial signup into a paying, unblocked account — see
-// updateCompany in backend/src/controllers/admin.controller.ts.
+// macrocore side using this. Until a payment gateway is wired up, the "Activate
+// Subscription…" form below (POST .../subscription/activate,
+// admin.controller.ts's
+// activateSubscription) is the only way to turn a signup into a real, invoiceable
+// paying account — see the 2026-09-15 decision note on saveCompany()/updateCompany()
+// below for why the older plan <select> + Save can no longer do this by itself.
 const ADMIN_KEY_STORAGE = 'macrocore-admin-key';
 
-const PLAN_VALUES = ['trial', 'bronze', 'silver', 'gold', 'enterprise'];
 const STATUS_VALUES = ['trial', 'active', 'past_due', 'suspended', 'cancelled'];
 
 interface CompanyUser {
@@ -84,21 +94,6 @@ interface Stats {
   mrr_by_currency: { currency: string | null; mrr: number }[];
 }
 
-async function adminFetch<T>(path: string, key: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key, ...(options.headers || {}) },
-  });
-  let data: unknown = null;
-  try {
-    data = await res.json();
-  } catch {
-    // ignore
-  }
-  if (!res.ok) throw new Error((data as { error?: string } | null)?.error || `Request failed (${res.status})`);
-  return data as T;
-}
-
 export default function PlatformAdminPage() {
   const [key, setKey] = useState<string>(() => localStorage.getItem(ADMIN_KEY_STORAGE) || '');
   const [keyInput, setKeyInput] = useState('');
@@ -112,6 +107,9 @@ export default function PlatformAdminPage() {
   const [edits, setEdits] = useState<Record<string, { plan: string; subscription_status: string; trial_end_date: string }>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [issuingCompanyId, setIssuingCompanyId] = useState<string | null>(null);
+  const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [activationForm, setActivationForm] = useState<ActivationForm>(defaultActivationForm);
+  const [activationSubmitting, setActivationSubmitting] = useState(false);
 
   function load(activeKey: string) {
     setLoading(true);
@@ -174,18 +172,57 @@ export default function PlatformAdminPage() {
       });
       load(key);
     } catch (err) {
-      // Stage B2: a managed company (one with a live subscriptions row) now
-      // rejects a real plan change through this endpoint with a 409 — see
-      // admin.controller.ts's updateCompany() guard. adminFetch() already
-      // surfaces the server's error message as-is, so this existing catch
-      // block needs no special-casing: the admin sees the same explanatory
-      // message this endpoint returns ("This company has an active managed
-      // subscription; its plan cannot be changed through this endpoint.").
-      // Changing subscription_status alone (suspend/cancel/reactivate) is
-      // never blocked by this guard and keeps working exactly as before.
+      // A managed company (one with a live subscriptions row) rejects a real
+      // plan change through this endpoint with a 409 — see admin.controller.ts's
+      // updateCompany() guard. Since Abdullah's 2026-09-15 decision, this
+      // endpoint also rejects moving ANY company to a paid plan
+      // (bronze/silver/gold/enterprise) at all — a real paid grant must go
+      // through the "Activate Subscription…" form below, which creates the
+      // subscriptions row invoicing/MRR/billing-emails depend on. adminFetch()
+      // already surfaces the server's error message as-is, so this existing
+      // catch block needs no special-casing either way. Changing
+      // subscription_status alone (suspend/cancel/reactivate), moving a plan
+      // to 'trial', or re-saving the current plan unchanged are never blocked
+      // and keep working exactly as before.
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSavingId(null);
+    }
+  }
+
+  // Stage B2's real activation path — the only one that creates a
+  // subscriptions row (see admin.controller.ts's activateSubscription). Added
+  // 2026-09-15 alongside the updateCompany() paid-plan guard above, since this
+  // page previously had no UI for it at all — an admin had to call the API
+  // directly.
+  function openActivation(c: Company) {
+    setError(null);
+    setActivatingId(c.id);
+    setActivationForm(defaultActivationForm());
+  }
+
+  // For bronze/silver/gold the amount MUST exactly match the server's
+  // approved catalog (activateSubscription rejects anything else, see
+  // subscriptionLifecycle.ts's resolvePeriodAmount) — so it's kept read-only
+  // and auto-filled here rather than freely editable. Enterprise has no list
+  // price (manually quoted, annual-only — the same rule the backend enforces).
+  function setActivationField(patch: Partial<{ plan: string; billing_interval: 'monthly' | 'annual' }>) {
+    setActivationForm((prev) => nextActivationForm(prev, patch));
+  }
+
+  async function activateCompanySubscription(id: string) {
+    setActivationSubmitting(true);
+    setError(null);
+    try {
+      await submitActivation(id, key, activationForm, {
+        onSuccess: () => {
+          setActivatingId(null);
+          load(key);
+        },
+        onError: setError,
+      });
+    } finally {
+      setActivationSubmitting(false);
     }
   }
 
@@ -328,7 +365,8 @@ export default function PlatformAdminPage() {
               {companies.map((c) => {
                 const edit = edits[c.id] || { plan: c.plan, subscription_status: c.subscription_status, trial_end_date: '' };
                 return (
-                  <tr key={c.id}>
+                  <Fragment key={c.id}>
+                  <tr>
                     <td style={{ fontWeight: 700 }}>{c.name}</td>
                     <td style={{ fontSize: 12, minWidth: 180 }}>
                       {c.users.length === 0 && <span className="muted">—</span>}
@@ -342,11 +380,15 @@ export default function PlatformAdminPage() {
                     <td>{c.industry || '—'}</td>
                     <td>{c.country || '—'}</td>
                     <td>
+                      {/* Restricted to the company's current plan (re-save, no-op)
+                          plus 'trial' (a downgrade/reset) — a real paid plan can
+                          only be granted via "Activate Subscription…" below, which
+                          the server-side guard in updateCompany() also enforces. */}
                       <select
                         value={edit.plan}
                         onChange={(e) => setEdits((prev) => ({ ...prev, [c.id]: { ...edit, plan: e.target.value } }))}
                       >
-                        {PLAN_VALUES.map((p) => (
+                        {allowedLegacyPlanOptions(c.plan).map((p) => (
                           <option key={p} value={p}>
                             {p}
                           </option>
@@ -382,12 +424,83 @@ export default function PlatformAdminPage() {
                       </div>
                     </td>
                     <td>{new Date(c.created_at).toLocaleDateString('en-GB')}</td>
-                    <td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="btn btn-primary btn-sm" onClick={() => saveCompany(c.id)} disabled={savingId === c.id}>
                         {savingId === c.id ? '…' : 'Save'}
+                      </button>{' '}
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        type="button"
+                        onClick={() => (activatingId === c.id ? setActivatingId(null) : openActivation(c))}
+                      >
+                        {activatingId === c.id ? 'Cancel' : 'Activate Subscription…'}
                       </button>
                     </td>
                   </tr>
+                  {activatingId === c.id && (
+                  <tr>
+                    <td colSpan={9}>
+                      {/* Stage B2's real activation form — creates the subscriptions
+                          row invoicing/MRR/billing-emails depend on. See
+                          activateCompanySubscription() above and
+                          admin.controller.ts's activateSubscription. */}
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: '8px 0' }}>
+                        <div>
+                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Plan</label>
+                          <select value={activationForm.plan} onChange={(e) => setActivationField({ plan: e.target.value })}>
+                            {ACTIVATABLE_PLAN_VALUES.map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Billing interval</label>
+                          <select
+                            value={activationForm.billing_interval}
+                            disabled={activationForm.plan === 'enterprise'}
+                            onChange={(e) => setActivationField({ billing_interval: e.target.value as 'monthly' | 'annual' })}
+                          >
+                            <option value="monthly">monthly</option>
+                            <option value="annual">annual</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>Currency</label>
+                          <input value="USD" disabled style={{ width: 70 }} />
+                        </div>
+                        <div>
+                          <label className="muted" style={{ display: 'block', fontSize: 11 }}>
+                            Period amount {activationForm.plan !== 'enterprise' && '(catalog price, fixed)'}
+                          </label>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={activationForm.period_amount}
+                            disabled={activationForm.plan !== 'enterprise'}
+                            onChange={(e) => setActivationForm((prev) => ({ ...prev, period_amount: e.target.value }))}
+                            style={{ width: 110 }}
+                          />
+                        </div>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          type="button"
+                          onClick={() => activateCompanySubscription(c.id)}
+                          disabled={
+                            activationSubmitting ||
+                            !Number.isFinite(Number(activationForm.period_amount)) ||
+                            Number(activationForm.period_amount) <= 0
+                          }
+                        >
+                          {activationSubmitting ? '…' : 'Confirm activation'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  )}
+                  </Fragment>
                 );
               })}
               {companies.length === 0 && (

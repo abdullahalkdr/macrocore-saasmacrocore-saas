@@ -65,9 +65,11 @@ export function buildBillingAuditSnapshot(row: {
 }
 
 // Every tenant, for the platform-admin dashboard's companies table. No payment
-// gateway is wired up yet (see docs/MIGRATION_029_subscription_enforcement.sql), so
-// until one is chosen, this is also the only way to actually turn a signup into a
-// paying, unblocked account — updateCompany below does that manually.
+// gateway is wired up yet (see docs/MIGRATION_029_subscription_enforcement.sql).
+// Granting a real paid plan goes through activateSubscription below (it creates
+// the matching subscriptions row invoicing/MRR/billing-emails all depend on);
+// updateCompany below is the legacy path, now restricted to trial/status/
+// trial_end_date edits only — see its own guard comment for why.
 // Includes every user on each tenant (email/name/role/status) — without this, the
 // companies table is just anonymous rows ("cocolab", "My Kiosk") with no way to tell
 // who actually signed up or which login belongs to which row, which is exactly the
@@ -146,8 +148,31 @@ export const updateCompany = asyncHandler(async (req: Request, res: Response) =>
       [id]
     );
     const isManaged = managedResult.rows[0]?.is_managed === true;
-    if (isManaged && plan !== undefined && plan !== previous.plan) {
-      throw new AppError(409, 'This company has an active managed subscription; its plan cannot be changed through this endpoint.');
+
+    // Abdullah's decision (2026-09-15, following up on the B4A production-QA
+    // observation that this endpoint could set companies.plan to a paid tier
+    // with no matching subscriptions row — see
+    // claude/chat4b-b4a-post-commit-implementation-2026-09-15.md): a real
+    // paid plan (bronze/silver/gold/enterprise) may only be granted through
+    // activateSubscription, which creates the subscriptions row that
+    // invoicing (B3), MRR reporting, and the billing emails (B4A) all depend
+    // on. This endpoint may still move a company TO 'trial' (a downgrade/
+    // reset, not a new paid grant) and may still re-save its CURRENT plan
+    // value unchanged (the frontend always resends it) — only a real change
+    // to a non-trial value is blocked, regardless of whether the company is
+    // already "managed". This subsumes the narrower pre-existing managed-only
+    // block below for the non-trial case; the managed check still applies
+    // when the requested new value is 'trial' itself.
+    if (plan !== undefined && plan !== previous.plan) {
+      if (plan !== 'trial') {
+        throw new AppError(
+          409,
+          "Paid plans (bronze/silver/gold/enterprise) can only be granted via Activate Subscription — it creates the matching subscriptions row this company needs for invoicing and billing emails. This endpoint can only move a company to 'trial'."
+        );
+      }
+      if (isManaged) {
+        throw new AppError(409, 'This company has an active managed subscription; its plan cannot be changed through this endpoint.');
+      }
     }
     if (isManaged && subscription_status === 'trial') {
       throw new AppError(409, "subscription_status cannot be set to 'trial' while this company has an active managed subscription.");
