@@ -822,7 +822,9 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
 
 // Never includes idempotency_key (locked design rule) — every response and
 // every audit row built from this helper only ever exposes the fields a
-// payment_attempts row is meant to expose externally.
+// payment_attempts row is meant to expose externally. Every query feeding
+// this helper casts amount::text so the app-wide NUMERIC parser cannot turn
+// the immutable money snapshot into a JavaScript float.
 function shapePaymentAttempt(row: Record<string, unknown> | undefined): unknown {
   if (!row?.id) return null;
   return {
@@ -859,7 +861,7 @@ export const createPaymentAttempt = asyncHandler(async (req: Request, res: Respo
   // fixed-order 23505 recovery below — this check can never be relied on
   // alone under concurrent requests.
   const existing = await pool.query(
-    `SELECT *, invoice_id = $2::uuid AS same_invoice
+    `SELECT *, amount::text AS amount, invoice_id = $2::uuid AS same_invoice
      FROM payment_attempts WHERE idempotency_key = $1`,
     [trimmedKey, invoiceId]
   );
@@ -916,7 +918,7 @@ export const createPaymentAttempt = asyncHandler(async (req: Request, res: Respo
          SELECT id, company_id, subscription_id, amount, currency, plan,
                 billing_interval, period_start, period_end, $2, 'initiated'
          FROM invoices WHERE id = $1
-         RETURNING *`,
+         RETURNING *, amount::text AS amount`,
         [invoiceId, trimmedKey]
       );
       attemptRow = insertResult.rows[0];
@@ -931,7 +933,7 @@ export const createPaymentAttempt = asyncHandler(async (req: Request, res: Respo
       if (pgErr.code === '23505') {
         await client.query('ROLLBACK');
         const existing2 = await pool.query(
-          `SELECT *, invoice_id = $2::uuid AS same_invoice
+          `SELECT *, amount::text AS amount, invoice_id = $2::uuid AS same_invoice
            FROM payment_attempts WHERE idempotency_key = $1`,
           [trimmedKey, invoiceId]
         );
@@ -942,7 +944,8 @@ export const createPaymentAttempt = asyncHandler(async (req: Request, res: Respo
           return res.status(409).json({ success: false, error: 'This idempotency key was already used for a different invoice' });
         }
         const activeExisting = await pool.query(
-          `SELECT * FROM payment_attempts WHERE invoice_id = $1 AND status = 'initiated'`,
+          `SELECT *, amount::text AS amount
+           FROM payment_attempts WHERE invoice_id = $1 AND status = 'initiated'`,
           [invoiceId]
         );
         if (activeExisting.rows[0]) {
@@ -1018,7 +1021,8 @@ export const listPaymentAttempts = asyncHandler(async (req: Request, res: Respon
     throw new AppError(404, 'Invoice not found');
   }
   const result = await pool.query(
-    `SELECT * FROM payment_attempts WHERE invoice_id = $1 ORDER BY created_at DESC`,
+    `SELECT *, amount::text AS amount
+     FROM payment_attempts WHERE invoice_id = $1 ORDER BY created_at DESC`,
     [invoiceId]
   );
   res.status(200).json({ success: true, attempts: result.rows.map(shapePaymentAttempt) });
@@ -1034,7 +1038,9 @@ export const listPaymentAttempts = asyncHandler(async (req: Request, res: Respon
 export const markPaymentAttemptFailed = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const result = await pool.query(
-    `UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *`,
+    `UPDATE payment_attempts SET status = 'failed'
+     WHERE id = $1 AND status = 'initiated'
+     RETURNING *, amount::text AS amount`,
     [id]
   );
   const row = result.rows[0];

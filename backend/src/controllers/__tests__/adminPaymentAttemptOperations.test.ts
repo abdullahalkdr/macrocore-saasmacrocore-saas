@@ -38,7 +38,7 @@ const ATTEMPT_ROW = {
   invoice_id: 'inv-1',
   company_id: 'company-1',
   subscription_id: 'sub-1',
-  amount: 660,
+  amount: '660.000',
   currency: 'USD',
   plan: 'gold',
   billing_interval: 'annual',
@@ -79,9 +79,11 @@ describe('listPaymentAttempts()', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.attempts).toHaveLength(1);
     expect(res.body.attempts[0].id).toBe('attempt-1');
+    expect(res.body.attempts[0].amount).toBe('660.000');
     expect(res.body.attempts[0].idempotency_key).toBeUndefined();
     const sql = mocks.poolQuery.mock.calls[1][0] as string;
     expect(sql).toContain('ORDER BY created_at DESC');
+    expect(sql).toContain('amount::text AS amount');
   });
 });
 
@@ -104,9 +106,10 @@ describe('markPaymentAttemptFailed() — success', () => {
     const [sql, params] = mocks.poolQuery.mock.calls[0];
     const normalized = (sql as string).replace(/\s+/g, ' ').trim();
     expect(normalized).toBe(
-      "UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *"
+      "UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *, amount::text AS amount"
     );
     expect(normalized).not.toContain('failed_at');
+    expect(res.body.payment_attempt.amount).toBe('660.000');
     expect(params).toEqual(['attempt-1']);
 
     expect(mocks.logAudit).toHaveBeenCalledTimes(1);

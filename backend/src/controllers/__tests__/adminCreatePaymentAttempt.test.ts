@@ -51,7 +51,7 @@ const ATTEMPT_ROW = {
   invoice_id: 'inv-1',
   company_id: 'company-1',
   subscription_id: 'sub-1',
-  amount: 660,
+  amount: '660.000',
   currency: 'USD',
   plan: 'gold',
   billing_interval: 'annual',
@@ -115,9 +115,10 @@ describe('createPaymentAttempt() — idempotent replay before any transaction', 
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.payment_attempt.id).toBe('attempt-1');
+    expect(res.body.payment_attempt.amount).toBe('660.000');
     expect(res.body.payment_attempt.idempotency_key).toBeUndefined();
     expect(mocks.poolQuery).toHaveBeenCalledWith(
-      expect.stringContaining('invoice_id = $2::uuid AS same_invoice'),
+      expect.stringContaining('amount::text AS amount'),
       ['client-key-1', 'inv-1']
     );
     expect(mocks.clientQuery).not.toHaveBeenCalled();
@@ -153,6 +154,7 @@ describe('createPaymentAttempt() — success path', () => {
     expect(res.statusCode).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.payment_attempt.id).toBe('attempt-1');
+    expect(res.body.payment_attempt.amount).toBe('660.000');
     expect(res.body.payment_attempt.idempotency_key).toBeUndefined();
     expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
 
@@ -160,6 +162,7 @@ describe('createPaymentAttempt() — success path', () => {
     expect(sqlCalls[0]).toBe('BEGIN');
     expect(sqlCalls[sqlCalls.length - 1]).toBe('COMMIT');
     expect(sqlCalls.some((s) => s.includes('SELECT id, status FROM invoices') && s.includes('FOR UPDATE'))).toBe(true);
+    expect(sqlCalls.some((s) => s.includes('RETURNING *, amount::text AS amount'))).toBe(true);
     expect(sqlCalls.join('\n')).not.toMatch(/UPDATE\s+(companies|subscriptions|invoices)/i);
     expect(mocks.enqueueEmail).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -174,7 +177,7 @@ describe('createPaymentAttempt() — success path', () => {
       invoice_id: 'inv-1',
       company_id: 'company-1',
       subscription_id: 'sub-1',
-      amount: 660,
+      amount: '660.000',
       currency: 'USD',
       plan: 'gold',
       billing_interval: 'annual',

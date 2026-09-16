@@ -56,7 +56,7 @@ const ATTEMPT_ROW = {
   invoice_id: 'inv-1',
   company_id: 'company-1',
   subscription_id: 'sub-1',
-  amount: 660,
+  amount: '660.000',
   currency: 'USD',
   plan: 'gold',
   billing_interval: 'annual',
@@ -100,6 +100,7 @@ describe('createPaymentAttempt() + real logAudit() — audit_logs INSERT failure
     expect(res.statusCode).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.payment_attempt.id).toBe('attempt-1');
+    expect(res.body.payment_attempt.amount).toBe('660.000');
 
     // The transaction (client.query calls) fully committed before the audit
     // INSERT (pool.query, a separate connection) was ever attempted.
@@ -142,7 +143,7 @@ describe('markPaymentAttemptFailed() + real logAudit() — audit_logs INSERT fai
     // UPDATE — the audit failure is the LAST thing that happens.
     expect(mocks.poolQuery).toHaveBeenCalledTimes(2);
     const updateSql = (mocks.poolQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ').trim();
-    expect(updateSql).toBe("UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *");
+    expect(updateSql).toBe("UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *, amount::text AS amount");
 
     expect(consoleErrorSpy).toHaveBeenCalledWith('audit log failed:', 'simulated audit_logs INSERT failure');
   });
