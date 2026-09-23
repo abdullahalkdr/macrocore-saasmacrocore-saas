@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   createPaymentAttempt: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
   listPaymentAttempts: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
   markPaymentAttemptFailed: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
+  createCheckoutSession: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
+  getCheckoutSession: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
+  resolveCheckoutSession: vi.fn((_req: Request, res: ExpressResponse) => res.status(204).end()),
 }));
 
 vi.mock('../../controllers/admin.controller', () => ({
@@ -21,6 +24,9 @@ vi.mock('../../controllers/admin.controller', () => ({
   createPaymentAttempt: mocks.createPaymentAttempt,
   listPaymentAttempts: mocks.listPaymentAttempts,
   markPaymentAttemptFailed: mocks.markPaymentAttemptFailed,
+  createCheckoutSession: mocks.createCheckoutSession,
+  getCheckoutSession: mocks.getCheckoutSession,
+  resolveCheckoutSession: mocks.resolveCheckoutSession,
 }));
 
 import adminRoutes from '../admin.routes';
@@ -62,6 +68,9 @@ describe('B5 Platform Admin route authorization', () => {
     ['POST', '/api/admin/invoices/00000000-0000-0000-0000-000000000001/payment-attempts'],
     ['GET', '/api/admin/invoices/00000000-0000-0000-0000-000000000001/payment-attempts'],
     ['POST', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/mark-failed'],
+    ['POST', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/checkout-session'],
+    ['GET', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/checkout-session'],
+    ['POST', '/api/admin/payment-checkout-sessions/00000000-0000-0000-0000-000000000003/resolve'],
   ] as const)('rejects an unauthenticated %s %s request before its controller runs', async (method, path) => {
     const response = await request(path, method);
     expect(response.status).toBe(401);
@@ -69,12 +78,18 @@ describe('B5 Platform Admin route authorization', () => {
     expect(mocks.createPaymentAttempt).not.toHaveBeenCalled();
     expect(mocks.listPaymentAttempts).not.toHaveBeenCalled();
     expect(mocks.markPaymentAttemptFailed).not.toHaveBeenCalled();
+    expect(mocks.createCheckoutSession).not.toHaveBeenCalled();
+    expect(mocks.getCheckoutSession).not.toHaveBeenCalled();
+    expect(mocks.resolveCheckoutSession).not.toHaveBeenCalled();
   });
 
   it.each([
     ['POST', '/api/admin/invoices/00000000-0000-0000-0000-000000000001/payment-attempts', mocks.createPaymentAttempt],
     ['GET', '/api/admin/invoices/00000000-0000-0000-0000-000000000001/payment-attempts', mocks.listPaymentAttempts],
     ['POST', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/mark-failed', mocks.markPaymentAttemptFailed],
+    ['POST', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/checkout-session', mocks.createCheckoutSession],
+    ['GET', '/api/admin/payment-attempts/00000000-0000-0000-0000-000000000002/checkout-session', mocks.getCheckoutSession],
+    ['POST', '/api/admin/payment-checkout-sessions/00000000-0000-0000-0000-000000000003/resolve', mocks.resolveCheckoutSession],
   ] as const)('allows an authenticated %s %s request to reach its controller', async (method, path, handler) => {
     const response = await request(path, method, 'b5-test-admin-key');
     expect(response.status).toBe(204);

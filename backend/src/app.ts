@@ -57,6 +57,7 @@ import periodClosingRoutes from './routes/periodClosing.routes';
 import approvalsRoutes from './routes/approvals.routes';
 import emailWebhooksRoutes from './routes/emailWebhooks.routes';
 import emailAdminRoutes from './routes/emailAdmin.routes';
+import simulatedCheckoutRoutes from './routes/simulatedCheckout.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -227,6 +228,14 @@ app.use('/api/period-closing', ...silver('Period closing'), periodClosingRoutes)
 // requireRole('admin') on every route, same pattern as apiKeys.routes.ts) —
 // account-utility area, not tied to any plan tier.
 app.use('/api/email-admin', ...guarded, emailAdminRoutes);
+
+// Stage B6 — the hosted simulated-checkout page (see admin.controller.ts's
+// createCheckoutSession/simulatedCheckout.controller.ts). Deliberately NOT
+// under /api and NOT behind requireAuth/requireAdminKey/guarded — its own
+// access control is entirely the deterministic HMAC token in the URL
+// fragment, exactly mirroring how a real hosted payment page is never
+// behind the merchant's own tenant login either.
+app.use('/simulated-checkout', simulatedCheckoutRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

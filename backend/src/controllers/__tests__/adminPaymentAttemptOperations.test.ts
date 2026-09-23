@@ -2,18 +2,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 // ---------------------------------------------------------------------------
-// Chat 5A / Stage B5 — listPaymentAttempts() and markPaymentAttemptFailed().
-// Both are single pool.query()-only operations (no pool.connect() /
-// transaction) — no client mock needed here.
+// Chat 5A / Stage B5 — listPaymentAttempts() (a single pool.query()-only
+// operation). markPaymentAttemptFailed() was reconciled in Stage B6 (design
+// v5 §5.7) to lock invoice -> attempt -> session inside an explicit
+// transaction (pool.connect()) rather than one autocommit UPDATE — its
+// EXTERNAL contract for the zero-session case is unchanged bit-for-bit
+// (same 404/409/200, same failed_at stamping), so both are asserted here,
+// now against the new transactional mocking shape (same
+// pool.connect()/client.query()/client.release() convention
+// adminCreatePaymentAttempt.test.ts already establishes).
 // ---------------------------------------------------------------------------
 
 const mocks = vi.hoisted(() => ({
   poolQuery: vi.fn(),
+  clientQuery: vi.fn(),
+  clientRelease: vi.fn(),
   logAudit: vi.fn(),
 }));
 
 vi.mock('../../db/pool', () => ({
-  pool: { query: mocks.poolQuery },
+  pool: {
+    query: mocks.poolQuery,
+    connect: vi.fn(async () => ({ query: mocks.clientQuery, release: mocks.clientRelease })),
+  },
 }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('../../utils/audit', () => ({ logAudit: mocks.logAudit }));
@@ -81,16 +92,52 @@ describe('listPaymentAttempts()', () => {
     expect(res.body.attempts[0].id).toBe('attempt-1');
     expect(res.body.attempts[0].amount).toBe('660.000');
     expect(res.body.attempts[0].idempotency_key).toBeUndefined();
+    // checkout_provider/settlement_provider default to null when the LEFT
+    // JOINed payment_checkout_sessions row is absent (Stage B6, design v5 §5.5).
+    expect(res.body.attempts[0].checkout_provider).toBeNull();
+    expect(res.body.attempts[0].settlement_provider).toBeNull();
     const sql = mocks.poolQuery.mock.calls[1][0] as string;
-    expect(sql).toContain('ORDER BY created_at DESC');
+    expect(sql).toContain('ORDER BY pa.created_at DESC');
     expect(sql).toContain('amount::text AS amount');
+    expect(sql).toContain('LEFT JOIN payment_checkout_sessions pcs ON pcs.payment_attempt_id = pa.id');
   });
 });
 
+// Shared client.query() mock builder for markPaymentAttemptFailed's new
+// transaction (Stage B6, design v5 §5.7): BEGIN -> invoice lock -> attempt
+// lock -> [session lock -> settleOutcome's UPDATE(s) -> refresh SELECT] ->
+// COMMIT, or ROLLBACK on an ineligible attempt. `sessionRow` is the
+// already-locked payment_checkout_sessions row (or null for B5's original
+// zero-session case).
+function mockMarkFailedClientQueries(options: {
+  attemptRow: Record<string, unknown>;
+  sessionRow?: { id: string; status: string } | null;
+  refreshedRow?: Record<string, unknown>;
+}) {
+  const { attemptRow, sessionRow = null, refreshedRow } = options;
+  mocks.clientQuery.mockImplementation(async (sql: string) => {
+    if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+    if (sql.includes('SELECT id FROM invoices')) return { rows: [{ id: attemptRow.invoice_id }] };
+    if (sql.includes('FOR UPDATE') && sql.includes('FROM payment_attempts')) return { rows: [attemptRow] };
+    if (sql.includes('FROM payment_checkout_sessions')) return { rows: sessionRow ? [sessionRow] : [] };
+    if (sql.includes('UPDATE payment_attempts SET status = $2')) {
+      return { rows: [{ id: attemptRow.id, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' }] };
+    }
+    if (sql.includes('UPDATE payment_checkout_sessions SET status = $2')) {
+      return { rows: [{ id: sessionRow?.id, status: 'failed', resolved_at: '2026-09-16T13:00:00.000Z' }] };
+    }
+    if (sql.includes('SELECT *, amount::text AS amount FROM payment_attempts WHERE id = $1')) {
+      return { rows: [refreshedRow ?? { ...attemptRow, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' }] };
+    }
+    throw new Error(`unexpected client query: ${sql}`);
+  });
+}
+
 describe('markPaymentAttemptFailed() — success', () => {
-  it('issues exactly UPDATE ... SET status = \'failed\' WHERE id = $1 AND status = \'initiated\' with no failed_at in the SET clause, returns 200, and logs a best-effort audit row', async () => {
+  it('locks invoice -> attempt -> session, writes via settleOutcome, commits, releases, and logs a best-effort audit row (design v5 §5.7)', async () => {
     const failedRow = { ...ATTEMPT_ROW, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' };
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [failedRow] });
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ invoice_id: 'inv-1' }] }); // routing pre-check
+    mockMarkFailedClientQueries({ attemptRow: ATTEMPT_ROW, sessionRow: null, refreshedRow: failedRow });
 
     const req = makeReq({ id: 'attempt-1' });
     const res = makeRes();
@@ -102,15 +149,18 @@ describe('markPaymentAttemptFailed() — success', () => {
     // (mocked) trigger/DB layer returned — never computed or set by
     // controller code.
     expect(res.body.payment_attempt.failed_at).toBe('2026-09-16T13:00:00.000Z');
-
-    const [sql, params] = mocks.poolQuery.mock.calls[0];
-    const normalized = (sql as string).replace(/\s+/g, ' ').trim();
-    expect(normalized).toBe(
-      "UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *, amount::text AS amount"
-    );
-    expect(normalized).not.toContain('failed_at');
     expect(res.body.payment_attempt.amount).toBe('660.000');
-    expect(params).toEqual(['attempt-1']);
+    // No session existed — checkout_provider/settlement_provider are null.
+    expect(res.body.payment_attempt.checkout_provider).toBeNull();
+    expect(res.body.payment_attempt.settlement_provider).toBeNull();
+
+    const sqlCalls = mocks.clientQuery.mock.calls.map((c) => c[0] as string);
+    expect(sqlCalls[0]).toBe('BEGIN');
+    expect(sqlCalls[sqlCalls.length - 1]).toBe('COMMIT');
+    expect(sqlCalls.some((s) => s.includes('SELECT id FROM invoices') && s.includes('FOR UPDATE'))).toBe(true);
+    expect(sqlCalls.some((s) => s.includes('FROM payment_attempts') && s.includes('FOR UPDATE'))).toBe(true);
+    expect(sqlCalls.some((s) => s.includes('FROM payment_checkout_sessions') && s.includes('FOR UPDATE'))).toBe(true);
+    expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
 
     expect(mocks.logAudit).toHaveBeenCalledTimes(1);
     const call = mocks.logAudit.mock.calls[0][0];
@@ -120,32 +170,65 @@ describe('markPaymentAttemptFailed() — success', () => {
     expect(call.newValues).toEqual({ status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' });
     expect(JSON.stringify(call.newValues)).not.toContain('idempotency_key');
   });
+
+  it('cascades a pending session to failed in the SAME transaction and includes the cascade fields in the single audit row (design v5 §5.7/§8)', async () => {
+    const failedRow = { ...ATTEMPT_ROW, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' };
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ invoice_id: 'inv-1' }] });
+    mockMarkFailedClientQueries({
+      attemptRow: ATTEMPT_ROW,
+      sessionRow: { id: 'session-1', status: 'pending' },
+      refreshedRow: failedRow,
+    });
+
+    const res = makeRes();
+    await markPaymentAttemptFailed(makeReq({ id: 'attempt-1' }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.payment_attempt.checkout_provider).toBe('simulated');
+    expect(res.body.payment_attempt.settlement_provider).toBeNull();
+
+    const call = mocks.logAudit.mock.calls[0][0];
+    expect(call.newValues).toEqual({
+      status: 'failed',
+      failed_at: '2026-09-16T13:00:00.000Z',
+      checkout_session_id: 'session-1',
+      checkout_session_status: 'failed',
+      provider: 'simulated',
+    });
+  });
 });
 
 describe('markPaymentAttemptFailed() — not found / already resolved', () => {
-  it('returns 404 when no attempt with this id exists at all', async () => {
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE affects 0 rows
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [] }); // existence lookup: not found
+  it('returns 404 when no attempt with this id exists at all (pre-transaction routing lookup)', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [] }); // routing pre-check: not found
     await expect(markPaymentAttemptFailed(makeReq({ id: 'missing' }), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
+    expect(mocks.clientQuery).not.toHaveBeenCalled();
     expect(mocks.logAudit).not.toHaveBeenCalled();
   });
 
-  it('returns 409 (never a replayed 200) when the attempt is already \'failed\'', async () => {
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE affects 0 rows (status already 'failed')
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ id: 'attempt-1', status: 'failed' }] });
+  it('returns 409 (never a replayed 200) when the attempt is already \'failed\', rolling back without ever calling settleOutcome', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ invoice_id: 'inv-1' }] });
+    mockMarkFailedClientQueries({ attemptRow: { ...ATTEMPT_ROW, status: 'failed' } });
+
     const res = makeRes();
     await markPaymentAttemptFailed(makeReq({ id: 'attempt-1' }), res, NOOP_NEXT);
     expect(res.statusCode).toBe(409);
     expect(res.body.success).toBe(false);
     expect(res.body.error).toContain("already 'failed'");
     expect(mocks.logAudit).not.toHaveBeenCalled();
+
+    const sqlCalls = mocks.clientQuery.mock.calls.map((c) => c[0] as string);
+    expect(sqlCalls[sqlCalls.length - 1]).toBe('ROLLBACK');
+    expect(sqlCalls.some((s) => s.includes('UPDATE payment_attempts SET status'))).toBe(false);
+    expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('markPaymentAttemptFailed() — audit failure isolation (mocked logAudit)', () => {
   it('still returns 200 with the failed attempt even if the best-effort audit call rejects', async () => {
     const failedRow = { ...ATTEMPT_ROW, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' };
-    mocks.poolQuery.mockResolvedValueOnce({ rows: [failedRow] });
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ invoice_id: 'inv-1' }] });
+    mockMarkFailedClientQueries({ attemptRow: ATTEMPT_ROW, sessionRow: null, refreshedRow: failedRow });
     mocks.logAudit.mockRejectedValueOnce(new Error('audit write failed'));
 
     const res = makeRes();

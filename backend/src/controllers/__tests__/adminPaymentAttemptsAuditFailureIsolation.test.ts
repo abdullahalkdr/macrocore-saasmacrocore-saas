@@ -116,22 +116,35 @@ describe('createPaymentAttempt() + real logAudit() — audit_logs INSERT failure
 describe('markPaymentAttemptFailed() + real logAudit() — audit_logs INSERT failure is fully isolated', () => {
   it('the initiated -> failed transition already committed and the 200 result (with the real failed_at) is unaffected even though the subsequent audit INSERT throws, and the row is never reverted', async () => {
     const failedRow = { ...ATTEMPT_ROW, status: 'failed', failed_at: '2026-09-16T13:00:00.000Z' };
-    // First pool.query call: the guarded UPDATE itself (1 row affected).
-    // Second pool.query call: the REAL logAudit()'s own internal INSERT.
+    // First pool.query call: the pre-transaction routing lookup (Stage B6,
+    // design v5 §5.7 — markPaymentAttemptFailed is now transactional; its
+    // BEGIN/lock/settle/COMMIT sequence runs entirely on the mocked
+    // client.query, a separate connection from the plain pool.query calls
+    // asserted here). Second pool.query call: the REAL logAudit()'s own
+    // internal INSERT — this is the one that fails.
     mocks.poolQuery
-      .mockResolvedValueOnce({ rows: [failedRow] })
+      .mockResolvedValueOnce({ rows: [{ invoice_id: 'inv-1' }] })
       .mockRejectedValueOnce(new Error('simulated audit_logs INSERT failure'));
+
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (sql.includes('SELECT id FROM invoices')) return { rows: [{ id: 'inv-1' }] };
+      if (sql.includes('FOR UPDATE') && sql.includes('FROM payment_attempts')) return { rows: [ATTEMPT_ROW] };
+      if (sql.includes('FROM payment_checkout_sessions')) return { rows: [] };
+      if (sql.includes('UPDATE payment_attempts SET status = $2')) return { rows: [{ id: 'attempt-1', status: 'failed' }] };
+      if (sql.includes('SELECT *, amount::text AS amount FROM payment_attempts WHERE id = $1')) return { rows: [failedRow] };
+      throw new Error(`unexpected client query: ${sql}`);
+    });
 
     const req = makeReq({ id: 'attempt-1' });
     const res = makeRes();
 
     // markPaymentAttemptFailed's success branch uses an explicit `return
     // res.status(200).json(...)`, so the handler resolves to whatever
-    // res.json() returns (the mocked res object itself here), unlike
-    // createPaymentAttempt's success path above which has no trailing
-    // `return` and so resolves to undefined. The point of this test is that
-    // the call never rejects and the response below is unaffected — simply
-    // awaiting it (any rejection would fail the test on its own) is enough.
+    // res.json() returns (the mocked res object itself here). The point of
+    // this test is that the call never rejects and the response below is
+    // unaffected — simply awaiting it (any rejection would fail the test on
+    // its own) is enough.
     await markPaymentAttemptFailed(req, res, NOOP_NEXT);
 
     expect(res.statusCode).toBe(200);
@@ -139,11 +152,13 @@ describe('markPaymentAttemptFailed() + real logAudit() — audit_logs INSERT fai
     expect(res.body.payment_attempt.status).toBe('failed');
     expect(res.body.payment_attempt.failed_at).toBe('2026-09-16T13:00:00.000Z');
 
-    // No third pool.query call exists that could represent "reverting" the
-    // UPDATE — the audit failure is the LAST thing that happens.
+    // The transaction (client.query calls) fully committed before the audit
+    // INSERT (pool.query, a separate connection) was ever attempted — no
+    // third pool.query call exists that could represent "reverting" it.
+    const clientSqlCalls = mocks.clientQuery.mock.calls.map((c) => c[0] as string);
+    expect(clientSqlCalls[clientSqlCalls.length - 1]).toBe('COMMIT');
     expect(mocks.poolQuery).toHaveBeenCalledTimes(2);
-    const updateSql = (mocks.poolQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ').trim();
-    expect(updateSql).toBe("UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status = 'initiated' RETURNING *, amount::text AS amount");
+    expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
 
     expect(consoleErrorSpy).toHaveBeenCalledWith('audit log failed:', 'simulated audit_logs INSERT failure');
   });

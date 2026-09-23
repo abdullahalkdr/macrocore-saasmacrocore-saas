@@ -11,6 +11,9 @@ import {
   createPaymentAttempt,
   listPaymentAttempts,
   markPaymentAttemptFailed,
+  createCheckoutSession,
+  getCheckoutSession,
+  resolveCheckoutSession,
 } from '../controllers/admin.controller';
 import { requireAdminKey } from '../middleware/requireAdminKey';
 
@@ -34,5 +37,13 @@ router.post('/companies/:id/subscription/invoices', createSubscriptionInvoice);
 router.post('/invoices/:invoiceId/payment-attempts', createPaymentAttempt);
 router.get('/invoices/:invoiceId/payment-attempts', listPaymentAttempts);
 router.post('/payment-attempts/:id/mark-failed', markPaymentAttemptFailed);
+// Stage B6 — provider-neutral simulated payment flow (see admin.controller.ts).
+// Every route below ALSO re-checks PAYMENT_SIMULATOR_OPERATIONAL + the
+// attempt's own company_id against PAYMENT_SIMULATOR_COMPANY_IDS, live, on
+// every call — requireAdminKey alone (already applied above) is not
+// sufficient gating for this feature.
+router.post('/payment-attempts/:id/checkout-session', createCheckoutSession);
+router.get('/payment-attempts/:id/checkout-session', getCheckoutSession);
+router.post('/payment-checkout-sessions/:id/resolve', resolveCheckoutSession);
 
 export default router;

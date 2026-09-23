@@ -12,7 +12,22 @@ import {
   computePeriodBounds,
 } from '../utils/subscriptionLifecycle';
 import { APPROVED_PRICING_CATALOG } from '../config/pricingCatalog';
-import { env } from '../config/env';
+import { env, PAYMENT_SIMULATOR_OPERATIONAL, PAYMENT_SIMULATOR_BASE_URL } from '../config/env';
+// Stage B6 — Provider-Neutral Simulated Payment Flow (see
+// claude/chat6a-b6-payment-simulator-design-pass-v5-2026-09-17.md).
+// settleOutcome/resolveCheckoutSessionCore are the ONLY functions that ever
+// write status='succeeded'/'failed'/'cancelled' to payment_attempts, a
+// matching status to payment_checkout_sessions, or 'paid'/payment_date to
+// invoices — see services/paymentSettlement.ts for the full rationale.
+import {
+  settleOutcome,
+  resolveCheckoutSessionCore,
+  buildAuditPayloadForResolve,
+  buildAuditPayloadForMarkFailed,
+  SettlementOutcome,
+  SettleOutcomeResult,
+} from '../services/paymentSettlement';
+import { signSessionToken } from '../utils/paymentSimulatorToken';
 // Chat 4B, Stage B4A — billing emails for the two real B2/B3 events this
 // controller already implements (subscription activated, invoice issued).
 // See claude/chat4b-b4a-immediate-subscription-invoice-emails-2026-09-15.md
@@ -262,12 +277,31 @@ export const listSubscriptions = asyncHandler(async (_req: Request, res: Respons
 // (invoice_number, plan, billing_interval, currency, period_start, period_end)
 // so Platform Admin can render the real agreed charge and its real currency
 // instead of assuming a hardcoded "KD" — see PlatformAdminPage.tsx.
+// Stage B6 (design v5 §5.5): adds settlement_provider via a LIMIT-bounded
+// LATERAL join, filtered to status='succeeded' only. An invoice is
+// one-to-MANY with payment_attempts (retry history), so a plain join would
+// silently multiply every invoice with retries — the LATERAL's own LIMIT 1
+// is what guarantees at most one joined row per invoice, defensively, not
+// merely because a second 'succeeded' attempt on one invoice happens to be
+// structurally unreachable today. ORDER BY pcs.resolved_at DESC makes which
+// row wins deterministic rather than left to whatever Postgres feels like
+// returning first.
 export const listInvoices = asyncHandler(async (_req: Request, res: Response) => {
   const result = await pool.query(
     `SELECT i.id, i.invoice_number, i.company_id, c.name AS company_name, i.subscription_id,
             i.plan, i.billing_interval, i.currency, i.amount, i.status,
-            i.period_start, i.period_end, i.issue_date, i.due_date, i.payment_date, i.created_at
-     FROM invoices i JOIN companies c ON c.id = i.company_id
+            i.period_start, i.period_end, i.issue_date, i.due_date, i.payment_date, i.created_at,
+            settled.settlement_provider
+     FROM invoices i
+     JOIN companies c ON c.id = i.company_id
+     LEFT JOIN LATERAL (
+       SELECT pcs.provider AS settlement_provider
+       FROM payment_attempts pa
+       JOIN payment_checkout_sessions pcs ON pcs.payment_attempt_id = pa.id
+       WHERE pa.invoice_id = i.id AND pcs.status = 'succeeded'
+       ORDER BY pcs.resolved_at DESC
+       LIMIT 1
+     ) settled ON true
      ORDER BY i.created_at DESC`
   );
   res.status(200).json({ success: true, invoices: result.rows });
@@ -825,6 +859,14 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
 // payment_attempts row is meant to expose externally. Every query feeding
 // this helper casts amount::text so the app-wide NUMERIC parser cannot turn
 // the immutable money snapshot into a JavaScript float.
+// Stage B6 (design v5 §5.5): gains checkout_provider/settlement_provider.
+// checkout_provider is pcs.provider verbatim, present whenever ANY session
+// exists for this attempt, whatever its status. settlement_provider is
+// pcs.provider ONLY when pcs.status = 'succeeded', NULL otherwise — mirrors
+// the invoice-level field of the same name/meaning exactly (listInvoices,
+// below). A row with neither column selected (createPaymentAttempt's own
+// INSERT ... RETURNING, where no session can yet exist) naturally shapes
+// both to null via `?? null`, with no special-casing needed here.
 function shapePaymentAttempt(row: Record<string, unknown> | undefined): unknown {
   if (!row?.id) return null;
   return {
@@ -841,6 +883,10 @@ function shapePaymentAttempt(row: Record<string, unknown> | undefined): unknown 
     status: row.status,
     created_at: toIsoOrNull(row.created_at),
     failed_at: toIsoOrNull(row.failed_at),
+    succeeded_at: toIsoOrNull(row.succeeded_at),
+    cancelled_at: toIsoOrNull(row.cancelled_at),
+    checkout_provider: (row.checkout_provider as string | undefined) ?? null,
+    settlement_provider: (row.settlement_provider as string | undefined) ?? null,
   };
 }
 
@@ -1020,59 +1066,406 @@ export const listPaymentAttempts = asyncHandler(async (req: Request, res: Respon
   if (!invoiceExists.rows[0]) {
     throw new AppError(404, 'Invoice not found');
   }
+  // Stage B6 (design v5 §5.5): joins payment_checkout_sessions to surface
+  // checkout_provider (present whenever ANY session exists) and
+  // settlement_provider (present only when that session actually succeeded)
+  // on every attempt row — 1:1-safe (UNIQUE(payment_attempt_id)), no
+  // cardinality risk at the attempt level, unlike listInvoices below.
   const result = await pool.query(
-    `SELECT *, amount::text AS amount
-     FROM payment_attempts WHERE invoice_id = $1 ORDER BY created_at DESC`,
+    `SELECT pa.*, pa.amount::text AS amount,
+            pcs.provider AS checkout_provider,
+            CASE WHEN pcs.status = 'succeeded' THEN pcs.provider END AS settlement_provider
+     FROM payment_attempts pa
+     LEFT JOIN payment_checkout_sessions pcs ON pcs.payment_attempt_id = pa.id
+     WHERE pa.invoice_id = $1
+     ORDER BY pa.created_at DESC`,
     [invoiceId]
   );
   res.status(200).json({ success: true, attempts: result.rows.map(shapePaymentAttempt) });
 });
 
-// The only transition this stage exposes: 'initiated' -> 'failed'. A single
-// guarded UPDATE, atomic on its own — no explicit transaction needed. Never
-// sets failed_at itself; payment_attempts_guard_mutation_trg (MIGRATION_084)
-// is the sole authority that stamps it with PostgreSQL transaction time.
-// A repeat call on an already-'failed'
-// attempt returns 409, never a replayed 200 — mark-failed is not an
-// idempotent-key operation like create is; there is nothing to replay.
+// The only transition this stage exposes: 'initiated' -> 'failed'. A repeat
+// call on an already-terminal attempt returns 409, never a replayed 200 —
+// mark-failed is not an idempotent-key operation like create is; there is
+// nothing to replay.
+//
+// Stage B6 (design v5 §5.7, implementation clarifications #1/#3/#6):
+// reconciled to never leave a `pending` session orphaned on a `failed`
+// attempt, and to acquire the invoice lock FIRST — the uniform global order
+// (invoice -> attempt -> session) every B6 write operation now uses,
+// matching createPaymentAttempt's own order exactly (see
+// services/paymentSettlement.ts's module header for the full deadlock
+// rationale). This makes markPaymentAttemptFailed transactional going
+// forward — a real behavior change from B5's original single-autocommit
+// UPDATE, called out plainly rather than smuggled in as a side effect. Its
+// EXTERNAL contract for the zero-session case (the only case that has ever
+// run in production) is unchanged bit-for-bit: same 404/409/200 responses,
+// same failed_at stamping — only the previously-unreachable session-present
+// case gains defined, correct behavior.
 export const markPaymentAttemptFailed = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const result = await pool.query(
-    `UPDATE payment_attempts SET status = 'failed'
-     WHERE id = $1 AND status = 'initiated'
-     RETURNING *, amount::text AS amount`,
-    [id]
-  );
-  const row = result.rows[0];
-  if (row) {
-    // Best-effort, after the UPDATE has committed (autocommit — this is a
-    // single statement, not inside an explicit BEGIN/COMMIT). Never includes
-    // idempotency_key; not added to SENSITIVE_ACTIONS, matching
-    // admin_payment_attempt_initiated above.
-    try {
-      await logAudit({
-        companyId: row.company_id,
-        userId: null,
-        action: 'admin_payment_attempt_failed',
-        entityType: 'payment_attempts',
-        entityId: row.id,
-        req,
-        oldValues: { status: 'initiated' },
-        newValues: { status: 'failed', failed_at: toIsoOrNull(row.failed_at) },
-      });
-    } catch (err) {
-      console.error('payment attempt failure audit failed:', (err as Error).message);
-    }
-    return res.status(200).json({ success: true, payment_attempt: shapePaymentAttempt(row) });
-  }
 
-  const existingResult = await pool.query(`SELECT id, status FROM payment_attempts WHERE id = $1`, [id]);
-  const existingRow = existingResult.rows[0];
-  if (!existingRow) {
+  // UNLOCKED pre-transaction lookup — routing ID only.
+  const routing = await pool.query(`SELECT invoice_id FROM payment_attempts WHERE id = $1`, [id]);
+  const routingRow = routing.rows[0];
+  if (!routingRow) {
     throw new AppError(404, 'Payment attempt not found');
   }
-  return res.status(409).json({
-    success: false,
-    error: `Payment attempt is already '${existingRow.status}'; no transition applied`,
+
+  const client = await pool.connect();
+  let responseRow: Record<string, unknown> | undefined;
+  let auditResult: SettleOutcomeResult | undefined;
+  let conflictStatus: string | undefined;
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. INVOICE FIRST — mark-failed never writes to invoices, but locks it
+    // anyway, for the sole reason argued in the design doc: a uniform
+    // global order that never needs a per-operation exception.
+    const invoiceResult = await client.query(`SELECT id FROM invoices WHERE id = $1 FOR UPDATE`, [routingRow.invoice_id]);
+    if (!invoiceResult.rows[0]) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Payment attempt not found'); // defensive; FK guarantees existence
+    }
+
+    // 2. ATTEMPT SECOND.
+    const attemptResult = await client.query(
+      `SELECT *, amount::text AS amount FROM payment_attempts WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    const attemptRow = attemptResult.rows[0];
+    if (!attemptRow) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Payment attempt not found');
+    }
+    if (attemptRow.status !== 'initiated') {
+      await client.query('ROLLBACK');
+      conflictStatus = attemptRow.status as string;
+    } else {
+      // 3. SESSION THIRD — 0 or 1 row, looked up only now, under the
+      // attempt's lock, so this query sees a fully up-to-date answer.
+      const sessionResult = await client.query(
+        `SELECT id, status FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE`,
+        [id]
+      );
+      const sessionRow = sessionResult.rows[0] || null;
+
+      const result = await settleOutcome(client, {
+        attempt: { id: attemptRow.id },
+        session: sessionRow ? { id: sessionRow.id } : null,
+        invoice: null,
+        outcome: 'failed',
+      });
+      auditResult = result;
+
+      // Re-read the full row for the HTTP response (failed_at, etc.) — same
+      // transaction, so this sees this transaction's own just-written value.
+      const refreshed = await client.query(`SELECT *, amount::text AS amount FROM payment_attempts WHERE id = $1`, [id]);
+      responseRow = {
+        ...refreshed.rows[0],
+        // Reused directly from the in-memory session row rather than a
+        // second query with a join (design v5 §5.5) — provider is always
+        // 'simulated' (the CHECK constraint), and settlement_provider is
+        // always null here since the outcome is always 'failed', never
+        // 'succeeded'.
+        checkout_provider: sessionRow ? 'simulated' : null,
+        settlement_provider: null,
+      };
+
+      await client.query('COMMIT');
+    }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (conflictStatus !== undefined) {
+    return res.status(409).json({
+      success: false,
+      error: `Payment attempt is already '${conflictStatus}'; no transition applied`,
+    });
+  }
+
+  // Best-effort, strictly after COMMIT and connection release (design v5
+  // §4/§8) — a failed audit call can never undo, retry, or duplicate the
+  // already-committed settlement, and can never hold any lock open either,
+  // since the connection was already returned to the pool.
+  try {
+    await logAudit({
+      companyId: responseRow?.company_id as string,
+      userId: null,
+      req,
+      ...buildAuditPayloadForMarkFailed(auditResult as SettleOutcomeResult),
+    });
+  } catch (err) {
+    console.error('payment attempt failure audit failed:', (err as Error).message);
+  }
+
+  return res.status(200).json({ success: true, payment_attempt: shapePaymentAttempt(responseRow) });
+});
+
+// ============================================================================
+// Stage B6 — Provider-Neutral Simulated Payment Flow (design pass v5).
+// Simulates a hosted payment provider end-to-end for an already-created B5
+// payment_attempts row — no real MyFatoorah/other provider integration, no
+// real money, no email/receipt/refund logic, no subscription/company
+// mutation. Every route below is gated by requireAdminKey (admin.routes.ts)
+// AND, live on every call (never only at creation), by
+// PAYMENT_SIMULATOR_OPERATIONAL (config/env.ts) + the specific attempt's
+// company_id being in PAYMENT_SIMULATOR_COMPANY_IDS.
+// ============================================================================
+
+function shapeCheckoutSession(row: Record<string, unknown> | undefined, checkoutUrl: string): unknown {
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    payment_attempt_id: row.payment_attempt_id,
+    provider: row.provider,
+    checkout_url: checkoutUrl,
+    status: row.status,
+    created_at: toIsoOrNull(row.created_at),
+    resolved_at: toIsoOrNull(row.resolved_at),
+  };
+}
+
+// checkout_url is ALWAYS computed on the fly, deterministically, from the
+// session's own id + PAYMENT_SIMULATOR_TOKEN_SECRET — nothing about it is
+// ever persisted (no page_token/checkout_url column exists on
+// payment_checkout_sessions, see MIGRATION_085). Only ever called once the
+// caller has already confirmed PAYMENT_SIMULATOR_OPERATIONAL is true, so
+// PAYMENT_SIMULATOR_BASE_URL/PAYMENT_SIMULATOR_TOKEN_SECRET are both
+// known-valid at the point this runs.
+function buildCheckoutUrl(sessionId: string): string {
+  const token = signSessionToken(sessionId, env.PAYMENT_SIMULATOR_TOKEN_SECRET);
+  return `${PAYMENT_SIMULATOR_BASE_URL}/simulated-checkout#${sessionId}.${token}`;
+}
+
+function isCompanyAllowlisted(companyId: string): boolean {
+  return PAYMENT_SIMULATOR_OPERATIONAL && env.PAYMENT_SIMULATOR_COMPANY_IDS.includes(companyId);
+}
+
+// POST /api/admin/payment-attempts/:id/checkout-session — create (design v5
+// §6.1). Corrected lock order: invoice -> attempt -> session, matching every
+// other B6 write operation. The idempotent-replay check happens BEFORE the
+// eligibility check (correction #8): an already-existing session, whatever
+// its current status, is returned as-is — never re-subjected to the
+// eligibility check a fresh creation would need.
+export const createCheckoutSession = asyncHandler(async (req: Request, res: Response) => {
+  const { id: attemptId } = req.params;
+
+  // UNLOCKED pre-transaction lookup — routing ID only.
+  const routing = await pool.query(`SELECT invoice_id FROM payment_attempts WHERE id = $1`, [attemptId]);
+  const routingRow = routing.rows[0];
+  if (!routingRow) {
+    throw new AppError(404, 'Payment attempt not found');
+  }
+
+  const client = await pool.connect();
+  let sessionRow: Record<string, unknown> | undefined;
+  let isNewSession = false;
+  let companyIdForAudit: string | undefined;
+  let notAllowed = false;
+  let notEligible = false;
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. INVOICE FIRST, always.
+    const invoiceResult = await client.query(`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, [routingRow.invoice_id]);
+    const invoiceRow = invoiceResult.rows[0];
+    if (!invoiceRow) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Payment attempt not found'); // defensive; FK guarantees existence
+    }
+
+    // 2. ATTEMPT SECOND, re-locked under the invoice lock — the allowlist
+    // membership check below uses attempt.company_id as read HERE, never a
+    // pre-lock snapshot.
+    const attemptResult = await client.query(`SELECT * FROM payment_attempts WHERE id = $1 FOR UPDATE`, [attemptId]);
+    const attemptRow = attemptResult.rows[0];
+    if (!attemptRow || attemptRow.invoice_id !== routingRow.invoice_id) {
+      await client.query('ROLLBACK');
+      throw new AppError(404, 'Payment attempt not found');
+    }
+    companyIdForAudit = attemptRow.company_id as string;
+
+    if (!isCompanyAllowlisted(attemptRow.company_id as string)) {
+      await client.query('ROLLBACK');
+      notAllowed = true;
+    } else {
+      // 3. SESSION THIRD — idempotent-replay check BEFORE the eligibility
+      // check (correction #8).
+      const existingSession = await client.query(
+        `SELECT * FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE`,
+        [attemptId]
+      );
+      if (existingSession.rows[0]) {
+        // Return the EXISTING session exactly as stored, whatever its
+        // current status — never re-applies the eligibility check below.
+        sessionRow = existingSession.rows[0];
+        await client.query('COMMIT');
+      } else if (attemptRow.status !== 'initiated' || invoiceRow.status !== 'issued') {
+        await client.query('ROLLBACK');
+        notEligible = true;
+      } else {
+        const insertResult = await client.query(
+          `INSERT INTO payment_checkout_sessions (payment_attempt_id, status)
+           VALUES ($1, 'pending')
+           RETURNING *`,
+          [attemptId]
+        );
+        sessionRow = insertResult.rows[0];
+        isNewSession = true;
+        await client.query('COMMIT');
+      }
+    }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (notAllowed) {
+    return res.status(403).json({ success: false, error: 'Payment simulator is not enabled for this company' });
+  }
+  if (notEligible) {
+    return res.status(409).json({ success: false, error: 'Payment attempt is not eligible for a checkout session' });
+  }
+
+  const checkoutUrl = buildCheckoutUrl(sessionRow!.id as string);
+
+  if (isNewSession) {
+    // Best-effort, post-commit, self-catching — unaffected by, and never
+    // able to affect, the already-committed session row.
+    try {
+      await logAudit({
+        companyId: companyIdForAudit as string,
+        userId: null,
+        action: 'admin_payment_checkout_session_created',
+        entityType: 'payment_checkout_sessions',
+        entityId: sessionRow!.id as string,
+        req,
+        oldValues: null,
+        newValues: {
+          payment_attempt_id: sessionRow!.payment_attempt_id,
+          invoice_id: routingRow.invoice_id,
+          provider: sessionRow!.provider,
+        },
+      });
+    } catch (err) {
+      console.error('checkout session creation audit failed:', (err as Error).message);
+    }
+  }
+
+  return res.status(isNewSession ? 201 : 200).json({
+    success: true,
+    checkout_session: shapeCheckoutSession(sessionRow, checkoutUrl),
+  });
+});
+
+// GET /api/admin/payment-attempts/:id/checkout-session — read (design v5
+// §6.2, unchanged in shape from v3/v4). Re-checks PAYMENT_SIMULATOR_OPERATIONAL
+// + the company allowlist live, on every call (correction #5) — an admin
+// querying a session for a company later removed from the allowlist, or
+// while the simulator is globally off, gets 403 here too, even though the
+// session row itself still exists. Recomputes checkout_url deterministically
+// the same way creation does — never reads a stored value, since none exists.
+export const getCheckoutSession = asyncHandler(async (req: Request, res: Response) => {
+  const { id: attemptId } = req.params;
+  const attemptResult = await pool.query(`SELECT id, company_id FROM payment_attempts WHERE id = $1`, [attemptId]);
+  const attemptRow = attemptResult.rows[0];
+  if (!attemptRow) {
+    throw new AppError(404, 'Payment attempt not found');
+  }
+  if (!isCompanyAllowlisted(attemptRow.company_id)) {
+    return res.status(403).json({ success: false, error: 'Payment simulator is not enabled for this company' });
+  }
+  const sessionResult = await pool.query(`SELECT * FROM payment_checkout_sessions WHERE payment_attempt_id = $1`, [attemptId]);
+  const sessionRow = sessionResult.rows[0];
+  if (!sessionRow) {
+    return res.status(200).json({ success: true, checkout_session: null });
+  }
+  return res.status(200).json({
+    success: true,
+    checkout_session: shapeCheckoutSession(sessionRow, buildCheckoutUrl(sessionRow.id)),
+  });
+});
+
+const RESOLVABLE_OUTCOMES = new Set(['succeeded', 'failed', 'cancelled']);
+
+// POST /api/admin/payment-checkout-sessions/:id/resolve — programmatic
+// resolve (design v5 §5.6/§6.3). Exists for scripted/automated testing
+// without needing to drive the hosted HTML page. Delegates the actual
+// locked settlement transaction to resolveCheckoutSessionCore
+// (services/paymentSettlement.ts) — the SAME shared core the hosted
+// checkout page's own resolve endpoint uses (simulatedCheckout.controller.ts),
+// proving the boundary works with two real callers.
+export const resolveCheckoutSession = asyncHandler(async (req: Request, res: Response) => {
+  const { id: sessionId } = req.params;
+  const outcome = (req.body ?? {}).outcome;
+  if (typeof outcome !== 'string' || !RESOLVABLE_OUTCOMES.has(outcome)) {
+    throw new AppError(400, "outcome is required and must be one of 'succeeded', 'failed', 'cancelled'");
+  }
+
+  // Correction #5: re-check PAYMENT_SIMULATOR_OPERATIONAL + the per-company
+  // allowlist live, on every call — not only at creation.
+  const routing = await pool.query(
+    `SELECT pa.company_id AS company_id
+     FROM payment_checkout_sessions pcs
+     JOIN payment_attempts pa ON pa.id = pcs.payment_attempt_id
+     WHERE pcs.id = $1`,
+    [sessionId]
+  );
+  const routingRow = routing.rows[0];
+  if (!routingRow) {
+    throw new AppError(404, 'Checkout session not found');
+  }
+  if (!isCompanyAllowlisted(routingRow.company_id)) {
+    return res.status(403).json({ success: false, error: 'Payment simulator is not enabled for this company' });
+  }
+
+  const coreResult = await resolveCheckoutSessionCore(pool, sessionId, outcome as SettlementOutcome);
+
+  if (coreResult.kind === 'not_found') {
+    throw new AppError(404, 'Checkout session not found');
+  }
+  if (coreResult.kind === 'conflict') {
+    return res.status(409).json({ success: false, error: coreResult.message });
+  }
+
+  // Best-effort, strictly after COMMIT + connection release (§4/§8) —
+  // resolveCheckoutSessionCore itself never calls logAudit.
+  try {
+    await logAudit({
+      companyId: routingRow.company_id,
+      userId: null,
+      req,
+      ...buildAuditPayloadForResolve(coreResult.result, 'admin_api'),
+    });
+  } catch (err) {
+    console.error('checkout session resolve audit failed:', (err as Error).message);
+  }
+
+  return res.status(200).json({
+    success: true,
+    checkout_session: {
+      id: coreResult.session.id,
+      provider: 'simulated',
+      status: coreResult.session.status,
+      resolved_at: coreResult.session.resolved_at,
+    },
+    ...(coreResult.result.invoiceId
+      ? {
+          invoice: {
+            id: coreResult.result.invoiceId,
+            status: coreResult.result.invoiceNewStatus,
+            payment_date: coreResult.result.invoicePaymentDate,
+          },
+        }
+      : {}),
   });
 });
