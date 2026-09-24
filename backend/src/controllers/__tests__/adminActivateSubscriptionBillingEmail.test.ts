@@ -86,6 +86,8 @@ function mockSuccessPool() {
     // strictly post-commit via enqueueEmail() — see the updated assertion in
     // 'resolves recipients and enqueues the activation email AFTER COMMIT'.
     if (sql.includes('UPDATE email_jobs')) return { rows: [] };
+    // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+    if (sql.includes('FROM subscription_purchases')) return { rows: [] };
     throw new Error(`unexpected client query: ${sql}`);
   });
 }
@@ -151,6 +153,8 @@ describe('activateSubscription() — subscription-activated billing email, post-
       if (sql.includes('INSERT INTO subscriptions')) return { rows: [SUBSCRIPTION_ROW] };
       if (sql.includes('UPDATE companies')) return { rows: [] };
       if (sql.includes('UPDATE email_jobs')) return { rows: [] };
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
     mocks.enqueueEmail.mockImplementation(async () => {
@@ -231,6 +235,8 @@ describe('activateSubscription() — subscription-activated billing email, post-
       if (sql === 'BEGIN' || sql === 'ROLLBACK') return {};
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) throw conflictErr;
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
     mocks.poolQuery.mockResolvedValue({ rows: [SUBSCRIPTION_ROW] });
@@ -249,6 +255,8 @@ describe('activateSubscription() — subscription-activated billing email, post-
       if (sql === 'BEGIN' || sql === 'ROLLBACK') return {};
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) throw insertErr;
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
 

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   clientQuery: vi.fn(),
   clientRelease: vi.fn(),
   logAudit: vi.fn(),
+  resolveBillingRecipients: vi.fn(),
+  enqueueEmail: vi.fn(),
 }));
 
 vi.mock('../../db/pool', () => ({
@@ -25,6 +27,15 @@ vi.mock('../../db/pool', () => ({
 }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('../../utils/audit', () => ({ logAudit: mocks.logAudit }));
+// Stage B7 — the B4A email helpers are mocked here only so the new
+// post-commit ORDER test below can observe email vs. audit sequencing; every
+// pre-existing test in this file keeps its behaviour (no recipients -> no
+// email), exactly as before when recipient resolution silently failed.
+vi.mock('../../utils/billingRecipients', () => ({ resolveBillingRecipients: mocks.resolveBillingRecipients }));
+vi.mock('../../utils/email', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/email')>()),
+  enqueueEmail: mocks.enqueueEmail,
+}));
 
 import { activateSubscription, getCompanySubscription } from '../admin.controller';
 
@@ -59,6 +70,8 @@ const SUBSCRIPTION_ROW = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.logAudit.mockResolvedValue(undefined);
+  mocks.resolveBillingRecipients.mockResolvedValue([]);
+  mocks.enqueueEmail.mockResolvedValue({ jobId: 'job-1', deduped: false });
 });
 
 describe('activateSubscription() — validation before any DB work', () => {
@@ -115,6 +128,8 @@ describe('activateSubscription() — success path', () => {
       // Chat 4C, Stage B4B — Layer A trial-lifecycle cancellation, now part
       // of this same transaction (design v8 §4.6).
       if (sql.includes('UPDATE email_jobs')) return { rows: [] };
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
 
@@ -147,6 +162,8 @@ describe('activateSubscription() — company not found', () => {
     mocks.clientQuery.mockImplementation(async (sql: string) => {
       if (sql === 'BEGIN' || sql === 'ROLLBACK') return {};
       if (sql.includes('SELECT id FROM companies')) return { rows: [] };
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
 
@@ -171,6 +188,8 @@ describe('activateSubscription() — conflict (already managed)', () => {
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) throw conflictErr;
       if (sql === 'ROLLBACK') return {};
+      // Stage B7 — no open customer purchase for this company.
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query in conflict test: ${sql}`);
     });
     // The recovery lookup after rollback uses `pool.query`, not the
@@ -202,6 +221,8 @@ describe('activateSubscription() — conflict (already managed)', () => {
       if (sql === 'BEGIN' || sql === 'ROLLBACK') return {};
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) throw unrelatedErr;
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
 
@@ -223,6 +244,8 @@ describe('activateSubscription() — rollback on failure between INSERT and comp
       if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
       if (sql.includes('INSERT INTO subscriptions')) return { rows: [SUBSCRIPTION_ROW] };
       if (sql.includes('UPDATE companies')) throw updateErr;
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
 
@@ -270,5 +293,179 @@ describe('getCompanySubscription()', () => {
     await getCompanySubscription(req, res, NOOP_NEXT);
     expect(res.body.subscription.current_period_start).toBeNull();
     expect(res.body.subscription.current_period_end).toBeNull();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Stage B7 — open customer purchase handling (design v3 §9.7 / R2, and the
+// release-owner implementation clarification #1 on post-commit ordering).
+// ---------------------------------------------------------------------------
+
+const OPEN_PURCHASE_ROW = {
+  id: 'purchase-1',
+  company_id: 'company-1',
+  subscription_id: 'pending-sub-1',
+  invoice_id: 'pending-invoice-1',
+  expires_at: '2026-09-24T10:00:00.000Z',
+  target_plan: 'silver',
+  target_interval: 'monthly',
+};
+
+function b7ActivationFlow(opts: { unexpired: boolean; insertError?: any; events?: string[] }) {
+  const events = opts.events ?? [];
+  mocks.clientQuery.mockImplementation(async (sql: string) => {
+    const first = sql.trim().split('\n')[0].trim();
+    events.push(first);
+    if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+    if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
+    if (sql.includes('FROM subscription_purchases sp')) return { rows: [OPEN_PURCHASE_ROW] };
+    if (sql.includes('clock_timestamp() < expires_at AS unexpired')) return { rows: [{ unexpired: opts.unexpired }] };
+    if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
+      return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-invoice-1', status: 'open' }] };
+    }
+    if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
+    if (sql.includes('SELECT id, invoice_number, status FROM invoices')) {
+      return { rows: [{ id: 'pending-invoice-1', invoice_number: 'MC-SUB-000042', status: 'issued' }] };
+    }
+    if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [{ id: 'attempt-1', status: 'initiated' }] };
+    if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) return { rows: [{ id: 'session-1', status: 'pending' }] };
+    if (sql.includes('UPDATE payment_attempts SET status')) {
+      return { rows: [{ id: 'attempt-1', status: 'cancelled', failed_at: null, succeeded_at: null, cancelled_at: '2026-09-24T10:05:00.000Z' }] };
+    }
+    if (sql.includes('UPDATE payment_checkout_sessions SET status')) {
+      return { rows: [{ id: 'session-1', status: 'cancelled', resolved_at: '2026-09-24T10:05:00.000Z' }] };
+    }
+    if (sql.includes("UPDATE invoices SET status = 'void'")) return { rows: [{ id: 'pending-invoice-1' }] };
+    if (sql.includes("UPDATE subscriptions SET status = 'abandoned'")) return { rows: [{ id: 'pending-sub-1' }] };
+    if (sql.includes("UPDATE subscription_purchases SET status = 'void'")) return { rows: [{ id: 'purchase-1' }] };
+    if (sql.includes('INSERT INTO subscriptions')) {
+      if (opts.insertError) throw opts.insertError;
+      return { rows: [SUBSCRIPTION_ROW] };
+    }
+    if (sql.includes('UPDATE companies')) return { rows: [] };
+    if (sql.includes('UPDATE email_jobs')) return { rows: [] };
+    throw new Error(`unexpected client query: ${sql}`);
+  });
+  return events;
+}
+
+describe('activateSubscription() — Stage B7 open customer purchase', () => {
+  it('an UNEXPIRED open purchase blocks activation: 409 OPEN_CUSTOMER_PURCHASE, no insert, no company update, no void, no audit', async () => {
+    const events = b7ActivationFlow({ unexpired: true });
+    const res = makeRes();
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ success: false, code: 'OPEN_CUSTOMER_PURCHASE', purchase_id: 'purchase-1', expires_at: OPEN_PURCHASE_ROW.expires_at });
+    const sql = mocks.clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sql.some((q) => q.includes('INSERT INTO subscriptions'))).toBe(false);
+    expect(sql.some((q) => q.includes('UPDATE companies'))).toBe(false);
+    expect(sql.some((q) => q.includes("SET status = 'void'"))).toBe(false);
+    expect(events).toContain('ROLLBACK');
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+    expect(mocks.enqueueEmail).not.toHaveBeenCalled();
+    expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('the expiry decision is a separate clock_timestamp() statement issued AFTER the company and purchase locks (never now())', async () => {
+    b7ActivationFlow({ unexpired: true });
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 }), makeRes(), NOOP_NEXT);
+    const sql = mocks.clientQuery.mock.calls.map((c) => String(c[0]));
+    const companyLock = sql.findIndex((q) => q.includes('SELECT id FROM companies'));
+    const purchaseLock = sql.findIndex((q) => q.includes('FROM subscription_purchases sp'));
+    const clock = sql.findIndex((q) => q.includes('clock_timestamp() < expires_at'));
+    expect(companyLock).toBeGreaterThan(0);
+    expect(purchaseLock).toBeGreaterThan(companyLock);
+    expect(sql[purchaseLock]).toContain('FOR UPDATE');
+    expect(clock).toBeGreaterThan(purchaseLock);
+    expect(sql[clock]).not.toMatch(/\bnow\(\)/);
+  });
+
+  it('an EXPIRED open purchase is voided in the same transaction (attempt/session cancel -> invoice void -> sub abandoned -> purchase void), then activation completes with one COMMIT', async () => {
+    const events = b7ActivationFlow({ unexpired: false });
+    const res = makeRes();
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(201);
+    const idx = (needle: string) => events.findIndex((e) => e.includes(needle));
+    const order = [
+      idx('UPDATE payment_attempts SET status'),
+      idx('UPDATE payment_checkout_sessions SET status'),
+      idx("UPDATE invoices SET status = 'void'"),
+      idx("UPDATE subscriptions SET status = 'abandoned'"),
+      idx("UPDATE subscription_purchases SET status = 'void'"),
+      idx('INSERT INTO subscriptions'),
+      idx('COMMIT'),
+    ];
+    for (const i of order) expect(i).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(events.filter((e) => e === 'COMMIT')).toHaveLength(1);
+    // settleOutcome wrote 'cancelled' (never failed/succeeded) for the open attempt.
+    const attemptUpdate = mocks.clientQuery.mock.calls.find((c) => String(c[0]).includes('UPDATE payment_attempts SET status'));
+    expect(attemptUpdate?.[1]).toEqual(['attempt-1', 'cancelled']);
+  });
+
+  it('post-commit order is preserved: B4A activation email first, then the void audit, then admin_subscription_activated (release-owner clarification #1)', async () => {
+    b7ActivationFlow({ unexpired: false });
+    const post: string[] = [];
+    mocks.resolveBillingRecipients.mockImplementation(async () => {
+      post.push('resolveBillingRecipients');
+      return [{ userId: 'user-1', email: 'owner@acme.example', preferredLanguage: 'ar', companyTimezone: 'Asia/Kuwait' }];
+    });
+    mocks.enqueueEmail.mockImplementation(async () => {
+      post.push('enqueueEmail');
+      return { jobId: 'job-1', deduped: false };
+    });
+    mocks.logAudit.mockImplementation(async (p: { action: string }) => {
+      post.push(`audit:${p.action}`);
+    });
+
+    const res = makeRes();
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(201);
+    expect(post).toEqual([
+      'resolveBillingRecipients',
+      'enqueueEmail',
+      'audit:subscription_purchase_voided',
+      'audit:admin_subscription_activated',
+    ]);
+    const voidAudit = mocks.logAudit.mock.calls[0][0];
+    expect(voidAudit).toMatchObject({
+      companyId: 'company-1',
+      userId: null,
+      action: 'subscription_purchase_voided',
+      entityType: 'subscription_purchases',
+      entityId: 'purchase-1',
+    });
+    expect(voidAudit.newValues).toMatchObject({
+      status: 'void',
+      reason: 'expired_admin_action',
+      admin_action: 'activate_subscription',
+      invoice_id: 'pending-invoice-1',
+      invoice_number: 'MC-SUB-000042',
+      subscription_id: 'pending-sub-1',
+      cancelled_payment_attempt_ids: ['attempt-1'],
+    });
+  });
+
+  it('an EXPIRED purchase + an activation that then fails its own conflict check rolls back the void too (no COMMIT, no audit)', async () => {
+    const conflictErr: any = new Error('duplicate key value violates unique constraint "subscriptions_one_live_per_company"');
+    conflictErr.code = '23505';
+    conflictErr.constraint = 'subscriptions_one_live_per_company';
+    const events = b7ActivationFlow({ unexpired: false, insertError: conflictErr });
+    mocks.poolQuery.mockResolvedValue({ rows: [SUBSCRIPTION_ROW] });
+
+    const res = makeRes();
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'annual', currency: 'USD', period_amount: 660 }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(409);
+    expect(events).toContain("UPDATE subscription_purchases SET status = 'void' WHERE id = $1 AND status = 'open' RETURNING id");
+    expect(events).toContain('ROLLBACK');
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+    expect(mocks.enqueueEmail).not.toHaveBeenCalled();
   });
 });

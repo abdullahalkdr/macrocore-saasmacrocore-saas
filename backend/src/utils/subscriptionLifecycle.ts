@@ -15,7 +15,10 @@ export type SupportedCurrency = 'USD' | 'KWD';
 
 export interface PricingCatalog {
   currency: SupportedCurrency;
-  prices: Record<StandardPlan, Record<BillingInterval, number>>;
+  // Stage B7 (design v3 §7.1): canonical decimal strings with exactly the
+  // currency's minor-unit precision (e.g. '312.00' for USD) — see
+  // config/pricingCatalog.ts.
+  prices: Record<StandardPlan, Record<BillingInterval, string>>;
 }
 
 export const ACTIVATABLE_PLANS: ActivatablePlan[] = ['bronze', 'silver', 'gold', 'enterprise'];
@@ -162,7 +165,13 @@ export function resolvePeriodAmount(
 
   const catalogEntry = catalog.prices[plan][interval];
 
-  if (Math.abs(catalogEntry - validatedSupplied) > 1e-6) {
+  // Stage B7 (decision A7): exact comparison, no float tolerance. The
+  // admin-supplied amount has already passed validatePeriodAmount's
+  // minor-unit precision check above, so formatting it to exactly the
+  // currency's minor-unit digits is a lossless canonical spelling of the same
+  // value; the catalogue entry is already stored in that canonical spelling.
+  const suppliedText = validatedSupplied.toFixed(MINOR_UNIT_DECIMALS[currency]);
+  if (suppliedText !== catalogEntry) {
     throw new AppError(
       400,
       `period_amount (${validatedSupplied}) does not match the approved ${plan}/${interval} price (${catalogEntry})`

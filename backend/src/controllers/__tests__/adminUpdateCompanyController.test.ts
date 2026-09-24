@@ -43,6 +43,8 @@ function mockFlow(options: {
       if (options.updateError) throw options.updateError;
       return { rows: [after] };
     }
+    // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+    if (sql.includes('FROM subscription_purchases')) return { rows: [] };
     throw new Error(`unexpected client query: ${sql}`);
   });
 }
@@ -182,8 +184,113 @@ describe('updateCompany()', () => {
     const sql = mocks.clientQuery.mock.calls.map(([statement]) => String(statement));
     expect(sql[0]).toBe('BEGIN');
     expect(sql[1]).toContain('FOR UPDATE');
-    expect(sql[2]).toContain('SELECT EXISTS');
-    expect(sql[3]).toContain('UPDATE companies SET');
-    expect(sql[4]).toBe('COMMIT');
+    // Stage B7 (design v3 §9.7): a status change first looks for an open
+    // customer purchase under the company lock (none here).
+    expect(sql[2]).toContain('FROM subscription_purchases');
+    expect(sql[3]).toContain('SELECT EXISTS');
+    expect(sql[4]).toContain('UPDATE companies SET');
+    expect(sql[5]).toBe('COMMIT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B7 — open customer purchase handling on updateCompany (design v3
+// §9.7, A5 + R2). No activation email exists on this path, so the expired
+// purchase void audit simply precedes the existing company audit.
+// ---------------------------------------------------------------------------
+
+function b7UpdateFlow(opts: { unexpired: boolean; managed?: boolean; before?: Record<string, unknown>; after?: Record<string, unknown> }) {
+  const before = opts.before ?? BEFORE;
+  const after = opts.after ?? { ...before, subscription_status: 'suspended' };
+  const events: string[] = [];
+  mocks.clientQuery.mockImplementation(async (sql: string) => {
+    events.push(sql.trim().split('\n')[0].trim());
+    if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+    if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) return { rows: [before] };
+    if (sql.includes('FROM subscription_purchases sp')) {
+      return {
+        rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-invoice-1',
+          expires_at: '2026-09-24T10:00:00.000Z', target_plan: 'gold', target_interval: 'annual' }],
+      };
+    }
+    if (sql.includes('clock_timestamp() < expires_at AS unexpired')) return { rows: [{ unexpired: opts.unexpired }] };
+    if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
+      return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-invoice-1', status: 'open' }] };
+    }
+    if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
+    if (sql.includes('SELECT id, invoice_number, status FROM invoices')) {
+      return { rows: [{ id: 'pending-invoice-1', invoice_number: 'MC-SUB-000077', status: 'issued' }] };
+    }
+    if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [] };
+    if (sql.includes("UPDATE invoices SET status = 'void'")) return { rows: [{ id: 'pending-invoice-1' }] };
+    if (sql.includes("UPDATE subscriptions SET status = 'abandoned'")) return { rows: [{ id: 'pending-sub-1' }] };
+    if (sql.includes("UPDATE subscription_purchases SET status = 'void'")) return { rows: [{ id: 'purchase-1' }] };
+    if (sql.includes('SELECT EXISTS')) return { rows: [{ is_managed: opts.managed ?? false }] };
+    if (sql.includes('UPDATE companies SET')) return { rows: [after] };
+    throw new Error(`unexpected client query: ${sql}`);
+  });
+  return events;
+}
+
+describe('updateCompany() — Stage B7 open customer purchase', () => {
+  it('an UNEXPIRED open purchase blocks a subscription_status change: 409 OPEN_CUSTOMER_PURCHASE, no UPDATE, no void, no audit', async () => {
+    const events = b7UpdateFlow({ unexpired: true });
+    const res = makeRes();
+    await updateCompany(makeReq({ subscription_status: 'suspended' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ success: false, code: 'OPEN_CUSTOMER_PURCHASE', purchase_id: 'purchase-1' });
+    expect(events.some((e) => e.includes('UPDATE companies SET'))).toBe(false);
+    expect(events.some((e) => e.includes("SET status = 'void'"))).toBe(false);
+    expect(events).toContain('ROLLBACK');
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+    expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('an EXPIRED open purchase is voided, then the PATCH continues in the same transaction; void audit precedes the company audit', async () => {
+    const events = b7UpdateFlow({ unexpired: false });
+    const res = makeRes();
+    await updateCompany(makeReq({ subscription_status: 'suspended' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
+    const voidAt = events.findIndex((e) => e.includes("UPDATE subscription_purchases SET status = 'void'"));
+    const updateAt = events.findIndex((e) => e.includes('UPDATE companies SET'));
+    expect(voidAt).toBeGreaterThan(-1);
+    expect(updateAt).toBeGreaterThan(voidAt);
+    expect(events.filter((e) => e === 'COMMIT')).toHaveLength(1);
+    expect(mocks.logAudit.mock.calls.map((c) => c[0].action)).toEqual([
+      'subscription_purchase_voided',
+      'admin_company_billing_updated',
+    ]);
+    expect(mocks.logAudit.mock.calls[0][0].newValues).toMatchObject({
+      reason: 'expired_admin_action',
+      admin_action: 'update_company',
+      invoice_number: 'MC-SUB-000077',
+    });
+  });
+
+  it('an EXPIRED purchase + a PATCH that then fails its own managed-subscription rule rolls the void back too', async () => {
+    // Managed + subscription_status 'trial' is rejected by the existing rule.
+    const events = b7UpdateFlow({ unexpired: false, managed: true, before: { ...BEFORE, subscription_status: 'suspended' } });
+    await expect(updateCompany(makeReq({ subscription_status: 'trial' }), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 409 });
+    expect(events.some((e) => e.includes("UPDATE subscription_purchases SET status = 'void'"))).toBe(true);
+    expect(events).toContain('ROLLBACK');
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('a trial_end_date-only PATCH never looks at customer purchases', async () => {
+    const events = b7UpdateFlow({ unexpired: true, after: { ...BEFORE, trial_end_date: '2026-10-01T00:00:00.000Z' } });
+    const res = makeRes();
+    await updateCompany(makeReq({ trial_end_date: '2026-10-01T00:00:00.000Z' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
+    expect(events.some((e) => e.includes('subscription_purchases'))).toBe(false);
+  });
+
+  it('re-saving the unchanged plan/status values (the admin UI always resends them) never looks at customer purchases', async () => {
+    const events = b7UpdateFlow({ unexpired: true, after: BEFORE });
+    const res = makeRes();
+    await updateCompany(makeReq({ plan: 'trial', subscription_status: 'trial' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
+    expect(events.some((e) => e.includes('subscription_purchases'))).toBe(false);
   });
 });

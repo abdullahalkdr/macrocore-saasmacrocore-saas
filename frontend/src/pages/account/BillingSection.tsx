@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { get, ApiError } from '../../api/client';
 import { useT } from '../../i18n';
+import { useUpgradeModalStore } from '../../store/upgradeModalStore';
 
 interface CompanyMe {
   name: string;
@@ -14,6 +15,9 @@ export default function BillingSection() {
   const t = useT();
   const [data, setData] = useState<CompanyMe | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Stage B7 — opens the same "ترقية باقتك" modal (server catalogue, plan page,
+  // self-service checkout where available). This section is admin-only.
+  const openUpgradeModal = useUpgradeModalStore((s) => s.openModal);
 
   useEffect(() => {
     get<CompanyMe>('/company/me')
@@ -56,6 +60,9 @@ export default function BillingSection() {
       <div className="card">
         <div className="card-head">
           <h2>{t.account.billing.planDetails}</h2>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => openUpgradeModal()}>
+            {t.billing.upgradeCta}
+          </button>
         </div>
         <div className="card-body">
           <div className="field-grid">

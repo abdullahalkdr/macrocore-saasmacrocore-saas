@@ -18,8 +18,11 @@
  *
  * Builds minimal pre-MIGRATION_084 companies/subscriptions/invoices tables
  * matching the same post-MIGRATION_083 shape SMOKE_B5 uses, then executes
- * the REAL MIGRATION_084 SQL file, then the REAL MIGRATION_085 SQL file —
- * never a hand-copied re-description of either. This is the same "never
+ * the REAL MIGRATION_084, MIGRATION_085 and current MIGRATION_086 SQL files —
+ * never a hand-copied re-description of them. Applying 086 keeps this B6
+ * regression proof runnable against the current settlement code, whose
+ * routing query now left-joins the B7 purchase table; all scenarios here
+ * remain non-purchase B6 sessions. This is the same "never
  * drift from the artifact production will execute" discipline SMOKE_B5
  * already established, extended across the B5 -> B6 boundary.
  *
@@ -477,7 +480,9 @@ async function main() {
     await setup.query(fs.readFileSync(migration084Path, 'utf8'));
     const migration085Path = path.resolve(__dirname, 'MIGRATION_085_payment_simulator_foundation.sql');
     await setup.query(fs.readFileSync(migration085Path, 'utf8'));
-    console.log('Applied MIGRATION_084 and MIGRATION_085 against the disposable database.');
+    const migration086Path = path.resolve(__dirname, 'MIGRATION_086_subscription_purchase_foundation.sql');
+    await setup.query(fs.readFileSync(migration086Path, 'utf8'));
+    console.log('Applied MIGRATION_084, MIGRATION_085 and MIGRATION_086 against the disposable database.');
 
     const checks = [];
     function check(desc, pass) { checks.push([desc, pass]); console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${desc}`); }

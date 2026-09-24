@@ -77,6 +77,8 @@ describe('activateSubscription() + real logAudit() — audit_logs INSERT failure
       // Chat 4C, Stage B4B — Layer A trial-lifecycle cancellation, now part
       // of this same transaction (design v8 §4.6).
       if (sql.includes('UPDATE email_jobs')) return { rows: [] };
+      // Stage B7 — no open customer purchase for this company (design v3 §9.7).
+      if (sql.includes('FROM subscription_purchases')) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
     });
     // The real logAudit()'s own internal pool.query (the audit_logs INSERT)

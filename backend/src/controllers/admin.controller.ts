@@ -24,6 +24,7 @@ import {
   resolveCheckoutSessionCore,
   buildAuditPayloadForResolve,
   buildAuditPayloadForMarkFailed,
+  buildAuditPayloadForPurchaseApplied,
   SettlementOutcome,
   SettleOutcomeResult,
 } from '../services/paymentSettlement';
@@ -39,6 +40,55 @@ import { signSessionToken } from '../utils/paymentSimulatorToken';
 // already do elsewhere in this codebase. No second queue/worker/scheduler.
 import { enqueueEmail, subscriptionActivatedEmailHtml, subscriptionInvoiceIssuedEmailHtml } from '../utils/email';
 import { resolveBillingRecipients } from '../utils/billingRecipients';
+// Stage B7 — trial-to-paid self-service checkout (design v3 §9.7 / R2): both
+// manual admin paths below detect an open customer purchase under their own
+// company lock; the trial-email cancellation SQL is shared with the
+// self-service trusted-success path.
+import {
+  handleOpenPurchaseForAdminAction,
+  cancelTrialLifecycleEmails,
+  VoidSnapshot,
+} from '../services/subscriptionPurchase';
+
+// Stage B7 — post-commit audit row for an expired customer purchase that a
+// manual admin action voided inside its own transaction (design v3 §9.7).
+// SIMULATOR-STAGE RULE ONLY: see services/subscriptionPurchase.ts's
+// handleOpenPurchaseForAdminAction header — must be redesigned before any
+// real payment provider exists.
+async function logExpiredPurchaseVoidAudit(req: Request, snapshot: VoidSnapshot, adminAction: 'activate_subscription' | 'update_company') {
+  try {
+    await logAudit({
+      companyId: snapshot.company_id,
+      userId: null,
+      action: 'subscription_purchase_voided',
+      entityType: 'subscription_purchases',
+      entityId: snapshot.purchase_id,
+      req,
+      oldValues: { status: 'open' },
+      newValues: {
+        status: 'void',
+        reason: snapshot.reason,
+        admin_action: adminAction,
+        invoice_id: snapshot.invoice_id,
+        invoice_number: snapshot.invoice_number,
+        subscription_id: snapshot.subscription_id,
+        cancelled_payment_attempt_ids: snapshot.cancelled_payment_attempt_ids,
+      },
+    });
+  } catch (err) {
+    console.error('expired purchase void audit failed:', (err as Error).message);
+  }
+}
+
+function openCustomerPurchaseConflict(res: Response, purchaseId: string, expiresAt: string | null) {
+  return res.status(409).json({
+    success: false,
+    code: 'OPEN_CUSTOMER_PURCHASE',
+    error: 'This company has a customer self-service checkout in progress. Wait until its payment window ends, then retry.',
+    purchase_id: purchaseId,
+    expires_at: expiresAt,
+  });
+}
 
 // Matches the public pricing page (frontend/src/pages/PricingPage.tsx) — 'trial' is
 // what every signup starts on, not a purchasable tier.
@@ -145,6 +195,7 @@ export const updateCompany = asyncHandler(async (req: Request, res: Response) =>
   const client = await pool.connect();
   let row: { id: string; name: string; plan: unknown; subscription_status: unknown; trial_end_date: string | null };
   let previous: { plan: unknown; subscription_status: unknown; trial_end_date: string | null };
+  let voidedPurchase: VoidSnapshot | null = null;
   try {
     await client.query('BEGIN');
     const previousResult = await client.query(
@@ -154,6 +205,24 @@ export const updateCompany = asyncHandler(async (req: Request, res: Response) =>
     );
     previous = previousResult.rows[0];
     if (!previous) throw new AppError(404, 'Company not found');
+
+    // Stage B7 (design v3 §9.7, A5 + R2): only a real change to plan or
+    // subscription_status interacts with an open customer purchase — a
+    // trial_end_date-only PATCH (or re-saving the current values) skips this.
+    // Unexpired open purchase -> 409; expired -> voided here, in this same
+    // transaction, and the PATCH continues (a later failure rolls the void
+    // back with it).
+    const changesPlanOrStatus =
+      (plan !== undefined && plan !== previous.plan) ||
+      (subscription_status !== undefined && subscription_status !== previous.subscription_status);
+    if (changesPlanOrStatus) {
+      const openPurchase = await handleOpenPurchaseForAdminAction(client, id);
+      if (openPurchase.kind === 'blocked') {
+        await client.query('ROLLBACK');
+        return openCustomerPurchaseConflict(res, openPurchase.purchaseId, openPurchase.expiresAt);
+      }
+      if (openPurchase.kind === 'voided') voidedPurchase = openPurchase.snapshot;
+    }
 
     const managedResult = await client.query(
       `SELECT EXISTS (
@@ -234,6 +303,10 @@ export const updateCompany = asyncHandler(async (req: Request, res: Response) =>
   // or was asked to — this is a targeted B1 addition, not a general expansion of
   // the historical sensitive-action scope. B2 does not add its own new action to
   // SENSITIVE_ACTIONS either — see activateSubscription below.
+  // Stage B7 — no activation email exists on this path, so the expired
+  // purchase void audit simply precedes the existing company audit.
+  if (voidedPurchase) await logExpiredPurchaseVoidAudit(req, voidedPurchase, 'update_company');
+
   const { oldValues, newValues } = buildBillingAuditSnapshot({
     ...row,
     previous_plan: previous.plan,
@@ -424,6 +497,7 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
   // released in `finally`, whichever way the try block exits.
   const client = await pool.connect();
   let subscriptionRow: Record<string, unknown> | undefined;
+  let voidedPurchase: VoidSnapshot | null = null;
 
   try {
     await client.query('BEGIN');
@@ -437,6 +511,17 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
       await client.query('ROLLBACK');
       throw new AppError(404, 'Company not found');
     }
+
+    // Stage B7 (design v3 §9.7 / R2): an unexpired open customer purchase
+    // blocks manual activation (409); an expired one is voided here, in this
+    // same transaction, and activation continues. If activation then fails
+    // (e.g. the live-subscription 409 below) the void rolls back with it.
+    const openPurchase = await handleOpenPurchaseForAdminAction(client, id);
+    if (openPurchase.kind === 'blocked') {
+      await client.query('ROLLBACK');
+      return openCustomerPurchaseConflict(res, openPurchase.purchaseId, openPurchase.expiresAt);
+    }
+    if (openPurchase.kind === 'voided') voidedPurchase = openPurchase.snapshot;
 
     try {
       const insertResult = await client.query(
@@ -491,14 +576,10 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
     // the `companies FOR UPDATE` above — this UPDATE only ever runs after
     // that lock is already held, so it can never race a concurrent
     // deliverTrialLifecycleJob() guard on the same company (§4.8).
-    await client.query(
-      `UPDATE email_jobs
-       SET status = 'cancelled', updated_at = now()
-       WHERE company_id = $1 AND category = 'billing' AND related_entity_type = 'companies' AND related_entity_id = $1
-         AND status IN ('queued', 'temp_failed')
-         AND (starts_with(dedup_key, 'billing:trial_ending:') OR starts_with(dedup_key, 'billing:trial_expired:'))`,
-      [id]
-    );
+    // Stage B7: the SQL itself now lives in the shared helper
+    // services/subscriptionPurchase.ts::cancelTrialLifecycleEmails (moved
+    // verbatim), which the self-service trusted-success path also calls.
+    await cancelTrialLifecycleEmails(client, id);
 
     await client.query('COMMIT');
   } catch (err) {
@@ -559,6 +640,12 @@ export const activateSubscription = asyncHandler(async (req: Request, res: Respo
   } catch {
     console.error('[billing email] subscription-activated recipient resolution failed — the activation itself is unaffected');
   }
+
+  // Stage B7 (release-owner clarification #1): the B4A activation email flow
+  // above keeps running immediately after COMMIT, unchanged; the expired
+  // purchase void audit (when applicable) runs after it and before the
+  // existing admin_subscription_activated audit.
+  if (voidedPurchase) await logExpiredPurchaseVoidAudit(req, voidedPurchase, 'activate_subscription');
 
   // Best-effort, after COMMIT, same non-transactional pattern as B1's
   // updateCompany — a logAudit() failure here never undoes the activation.
@@ -1238,12 +1325,12 @@ function shapeCheckoutSession(row: Record<string, unknown> | undefined, checkout
 // caller has already confirmed PAYMENT_SIMULATOR_OPERATIONAL is true, so
 // PAYMENT_SIMULATOR_BASE_URL/PAYMENT_SIMULATOR_TOKEN_SECRET are both
 // known-valid at the point this runs.
-function buildCheckoutUrl(sessionId: string): string {
+export function buildCheckoutUrl(sessionId: string): string {
   const token = signSessionToken(sessionId, env.PAYMENT_SIMULATOR_TOKEN_SECRET);
   return `${PAYMENT_SIMULATOR_BASE_URL}/simulated-checkout#${sessionId}.${token}`;
 }
 
-function isCompanyAllowlisted(companyId: string): boolean {
+export function isCompanyAllowlisted(companyId: string): boolean {
   return PAYMENT_SIMULATOR_OPERATIONAL && env.PAYMENT_SIMULATOR_COMPANY_IDS.includes(companyId);
 }
 
@@ -1434,7 +1521,7 @@ export const resolveCheckoutSession = asyncHandler(async (req: Request, res: Res
     throw new AppError(404, 'Checkout session not found');
   }
   if (coreResult.kind === 'conflict') {
-    return res.status(409).json({ success: false, error: coreResult.message });
+    return res.status(409).json({ success: false, error: coreResult.message, ...(coreResult.code ? { code: coreResult.code } : {}) });
   }
 
   // Best-effort, strictly after COMMIT + connection release (§4/§8) —
@@ -1444,10 +1531,31 @@ export const resolveCheckoutSession = asyncHandler(async (req: Request, res: Res
       companyId: routingRow.company_id,
       userId: null,
       req,
-      ...buildAuditPayloadForResolve(coreResult.result, 'admin_api'),
+      // Stage B7: the purchase fields are passed only for a purchase-linked
+      // session, so the B6 call shape is unchanged for every other session.
+      ...(coreResult.purchaseId
+        ? buildAuditPayloadForResolve(coreResult.result, 'admin_api', {
+            purchaseId: coreResult.purchaseId,
+            applied: coreResult.purchaseApplied ?? null,
+          })
+        : buildAuditPayloadForResolve(coreResult.result, 'admin_api')),
     });
   } catch (err) {
     console.error('checkout session resolve audit failed:', (err as Error).message);
+  }
+  // Stage B7 — separate post-commit row when the settlement applied a
+  // self-service subscription purchase.
+  if (coreResult.purchaseApplied) {
+    try {
+      await logAudit({
+        companyId: routingRow.company_id,
+        userId: null,
+        req,
+        ...buildAuditPayloadForPurchaseApplied(coreResult.purchaseApplied),
+      });
+    } catch (err) {
+      console.error('subscription purchase applied audit failed:', (err as Error).message);
+    }
   }
 
   return res.status(200).json({

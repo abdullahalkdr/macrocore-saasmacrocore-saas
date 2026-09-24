@@ -115,7 +115,11 @@ export async function settleOutcome(client: PoolClient, params: SettleOutcomePar
 
 export type ResolvedVia = 'admin_api' | 'simulated_hosted_page';
 
-export function buildAuditPayloadForResolve(result: SettleOutcomeResult, resolvedVia: ResolvedVia) {
+export function buildAuditPayloadForResolve(
+  result: SettleOutcomeResult,
+  resolvedVia: ResolvedVia,
+  purchase?: { purchaseId?: string | null; applied?: AppliedPurchase | null }
+) {
   return {
     action: 'payment_checkout_session_resolved',
     entityType: 'payment_checkout_sessions',
@@ -130,6 +134,15 @@ export function buildAuditPayloadForResolve(result: SettleOutcomeResult, resolve
             payment_attempt_status: result.attemptNewStatus,
             invoice_status: result.invoiceNewStatus,
             invoice_payment_date: result.invoicePaymentDate,
+          }
+        : {}),
+      // Stage B7 — only for sessions whose invoice belongs to a self-service
+      // purchase; absent (unchanged B6 shape) otherwise.
+      ...(purchase?.purchaseId
+        ? {
+            purchase_id: purchase.purchaseId,
+            purchase_status: purchase.applied ? 'completed' : 'open',
+            ...(purchase.applied ? { applied_plan: purchase.applied.new_values.plan } : {}),
           }
         : {}),
     },
@@ -173,14 +186,19 @@ export function buildAuditPayloadForMarkFailed(result: SettleOutcomeResult) {
 // that happens in each caller, after COMMIT, in its own try/catch, per §4.
 
 import { Pool } from 'pg';
+import { applyPurchaseOnTrustedSuccess, AppliedPurchase } from './subscriptionPurchase';
 
 export type ResolveCoreResult =
   | { kind: 'not_found' }
-  | { kind: 'conflict'; message: string }
+  | { kind: 'conflict'; message: string; code?: string }
   | {
       kind: 'ok';
       result: SettleOutcomeResult;
       session: { id: string; status: SettlementOutcome; resolved_at: string | null };
+      // Stage B7 — present only when the settled invoice belongs to a
+      // self-service subscription purchase AND the outcome applied it.
+      purchaseApplied?: AppliedPurchase;
+      purchaseId?: string | null;
     };
 
 export async function resolveCheckoutSessionCore(
@@ -191,15 +209,25 @@ export async function resolveCheckoutSessionCore(
   // UNLOCKED pre-transaction lookup — routing IDs only (attempt_id,
   // invoice_id), one query, both hops (session -> attempt -> invoice).
   // Nothing here is trusted for any STATUS or business-logic decision.
+  // Stage B7: also returns the self-service purchase linked to the invoice,
+  // if any. That link is immutable and created atomically WITH the invoice
+  // (subscription_purchases guard trigger), so an unlocked read is
+  // trustworthy for choosing which code path runs.
   const routing = await pool.query(
-    `SELECT pa.id AS attempt_id, pa.invoice_id AS invoice_id
+    `SELECT pa.id AS attempt_id, pa.invoice_id AS invoice_id,
+            sp.id AS purchase_id, sp.company_id AS purchase_company_id
      FROM payment_checkout_sessions pcs
      JOIN payment_attempts pa ON pa.id = pcs.payment_attempt_id
+     LEFT JOIN subscription_purchases sp ON sp.invoice_id = pa.invoice_id
      WHERE pcs.id = $1`,
     [sessionId]
   );
   const routingRow = routing.rows[0];
   if (!routingRow) return { kind: 'not_found' };
+
+  if (routingRow.purchase_id) {
+    return resolvePurchaseLinkedSession(pool, sessionId, outcome, routingRow);
+  }
 
   const client = await pool.connect();
   try {
@@ -270,4 +298,151 @@ export async function resolveCheckoutSessionCore(
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stage B7 — settlement of a session whose invoice belongs to a self-service
+// subscription purchase (design v3 §9.1, §9.4, §9.5). Same shared core, both
+// simulator callers (hosted page + admin resolve route). Lock order is the
+// B7 global order: companies -> subscription_purchases -> subscriptions ->
+// invoices -> payment_attempts -> payment_checkout_sessions.
+// ---------------------------------------------------------------------------
+async function resolvePurchaseLinkedSession(
+  pool: Pool,
+  sessionId: string,
+  outcome: SettlementOutcome,
+  routingRow: { attempt_id: string; invoice_id: string; purchase_id: string; purchase_company_id: string }
+): Promise<ResolveCoreResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const companyRow = (
+      await client.query(`SELECT id, plan, subscription_status FROM companies WHERE id = $1 FOR UPDATE`, [
+        routingRow.purchase_company_id,
+      ])
+    ).rows[0];
+    const purchaseRow = (
+      await client.query(
+        `SELECT id, company_id, subscription_id, invoice_id, status FROM subscription_purchases WHERE id = $1 FOR UPDATE`,
+        [routingRow.purchase_id]
+      )
+    ).rows[0];
+    if (!companyRow || !purchaseRow || purchaseRow.invoice_id !== routingRow.invoice_id || purchaseRow.company_id !== companyRow.id) {
+      await client.query('ROLLBACK');
+      return { kind: 'not_found' };
+    }
+    const pendingSubRow = (
+      await client.query(`SELECT id, status, plan FROM subscriptions WHERE id = $1 FOR UPDATE`, [purchaseRow.subscription_id])
+    ).rows[0];
+    const invoiceRow = (await client.query(`SELECT * FROM invoices WHERE id = $1 FOR UPDATE`, [routingRow.invoice_id])).rows[0];
+    if (!pendingSubRow || !invoiceRow) {
+      await client.query('ROLLBACK');
+      return { kind: 'not_found' };
+    }
+    const attemptRow = (await client.query(`SELECT * FROM payment_attempts WHERE id = $1 FOR UPDATE`, [routingRow.attempt_id])).rows[0];
+    if (!attemptRow || attemptRow.invoice_id !== invoiceRow.id) {
+      await client.query('ROLLBACK');
+      return { kind: 'not_found' };
+    }
+    const sessionRow = (
+      await client.query(`SELECT * FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE`, [attemptRow.id])
+    ).rows[0];
+    if (!sessionRow || sessionRow.id !== sessionId) {
+      await client.query('ROLLBACK');
+      return { kind: 'not_found' };
+    }
+
+    // Existing B6 preconditions, unchanged, all locks held.
+    if (sessionRow.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return { kind: 'conflict', message: `checkout session is already resolved as '${sessionRow.status}'` };
+    }
+    if (attemptRow.status !== 'initiated') {
+      await client.query('ROLLBACK');
+      return { kind: 'conflict', message: 'payment attempt is not in an initiated state' };
+    }
+    if (invoiceRow.status !== 'issued') {
+      await client.query('ROLLBACK');
+      return { kind: 'conflict', message: 'invoice is not in an issued state' };
+    }
+
+    if (outcome !== 'succeeded') {
+      // failed/cancelled: no deadline check, no purchase/subscription/company
+      // write. The purchase stays open (retryable until its window ends).
+      const result = await settleOutcome(client, {
+        attempt: { id: attemptRow.id },
+        session: { id: sessionRow.id },
+        invoice: null,
+        outcome,
+      });
+      await client.query('COMMIT');
+      return {
+        kind: 'ok',
+        result,
+        session: { id: result.sessionId as string, status: result.attemptNewStatus, resolved_at: result.sessionResolvedAt },
+        purchaseId: purchaseRow.id,
+      };
+    }
+
+    // Simulated-provider authorization gate (design v3 §9.4, R1). In B7 the
+    // simulator IS the provider, and this is its authorization decision: a
+    // fresh clock_timestamp() comparison issued only after every lock above
+    // is held — never transaction now(). Refusal writes nothing.
+    const gate = await client.query(
+      `SELECT (status = 'open' AND clock_timestamp() < expires_at) AS may_succeed FROM subscription_purchases WHERE id = $1`,
+      [purchaseRow.id]
+    );
+    if (gate.rows[0]?.may_succeed !== true) {
+      await client.query('ROLLBACK');
+      return {
+        kind: 'conflict',
+        code: 'SESSION_EXPIRED',
+        message: 'the payment window for this order has ended; this checkout can no longer succeed',
+      };
+    }
+
+    const { settle, applied } = await applyPurchaseOnTrustedSuccess(client, {
+      company: companyRow,
+      purchase: purchaseRow,
+      pendingSub: pendingSubRow,
+      attempt: { id: attemptRow.id },
+      session: { id: sessionRow.id },
+      invoice: { id: invoiceRow.id },
+    });
+
+    await client.query('COMMIT');
+    return {
+      kind: 'ok',
+      result: settle,
+      session: { id: settle.sessionId as string, status: settle.attemptNewStatus, resolved_at: settle.sessionResolvedAt },
+      purchaseApplied: applied,
+      purchaseId: purchaseRow.id,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Stage B7 — post-commit audit payload for a self-service purchase applied by
+// a trusted simulated success. Pure shape-builder; the caller logs it after
+// COMMIT, in its own try/catch, next to buildAuditPayloadForResolve's row.
+export function buildAuditPayloadForPurchaseApplied(applied: AppliedPurchase) {
+  return {
+    action: 'subscription_purchase_applied',
+    entityType: 'subscription_purchases',
+    entityId: applied.purchase_id,
+    oldValues: applied.old_values,
+    newValues: {
+      ...applied.new_values,
+      subscription_id: applied.subscription_id,
+      billing_interval: applied.billing_interval,
+      current_period_start: applied.current_period_start,
+      current_period_end: applied.current_period_end,
+      completed_at: applied.completed_at,
+    },
+  };
 }

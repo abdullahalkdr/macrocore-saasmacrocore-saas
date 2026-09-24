@@ -136,3 +136,31 @@ export async function submitActivation(
     hooks.onError(err instanceof Error ? err.message : 'Failed to activate subscription');
   }
 }
+
+// Stage B7 — Platform Admin presentation of the new self-service states
+// (design v3 §6.4). listSubscriptions/listInvoices return EVERY row, so
+// customer checkout rows appear here too; these labels make them
+// understandable. This page is English-only, like the rest of it. Existing
+// values render unchanged.
+const SUBSCRIPTION_STATUS_LABELS: Record<string, string> = {
+  pending_payment: 'Pending payment — customer checkout',
+  abandoned: 'Abandoned — never activated',
+};
+const INVOICE_STATUS_LABELS: Record<string, string> = {
+  void: 'Void — unpaid, closed',
+};
+
+export function subscriptionStatusLabel(status: string): string {
+  return SUBSCRIPTION_STATUS_LABELS[status] ?? status;
+}
+
+export function invoiceStatusLabel(status: string): string {
+  return INVOICE_STATUS_LABELS[status] ?? status;
+}
+
+// "Issue invoice" is offered only for a commercially active subscription —
+// the existing behaviour (createSubscriptionInvoice also rejects anything
+// else server-side). Pending and abandoned customer-checkout rows never get it.
+export function canIssueInvoice(subscriptionStatus: string): boolean {
+  return subscriptionStatus === 'active';
+}

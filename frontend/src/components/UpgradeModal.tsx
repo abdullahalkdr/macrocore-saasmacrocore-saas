@@ -1,25 +1,49 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useT } from '../i18n';
 import { useUpgradeModalStore } from '../store/upgradeModalStore';
-import { PLANS, SALES_EMAIL } from '../pricingData';
+import { useAuthStore } from '../store/authStore';
+import { SALES_EMAIL } from '../pricingData';
+import { fetchBillingPlans, PlansResponse } from '../api/billing';
+import { currentPlanKey, formatMoney, planCta, planPrice } from '../pages/billing/billingHelpers';
 import { IconClose } from './Icon';
 
-// The Wafeq-style upgrade popup: a blocked-feature banner (only when triggered by an
-// actual 403 PLAN_UPGRADE_REQUIRED — see api/client.ts) plus the same pricing cards
-// as the public PricingPage, in a wider one-off overlay instead of the standard
-// Modal.tsx (that one caps at 520px, too narrow for a 4-column comparison).
+// The Wafeq-style upgrade popup ("ترقية باقتك"): an optional blocked-feature
+// banner (shown only when a message is passed — a real 403
+// PLAN_UPGRADE_REQUIRED from api/client.ts, or a locked nav item in
+// Layout.tsx) plus one card per plan, in a wider one-off overlay instead of
+// the standard Modal.tsx (that one caps at 520px, too narrow for 4 columns).
 //
-// CTAs differ from PricingPage on purpose: whoever sees this is already a logged-in
-// customer hitting a real wall, not a visitor deciding whether to sign up — "start a
-// free trial" makes no sense for them. Until a payment gateway exists, "contact us to
-// upgrade" is the only honest CTA (see docs/macrocore-خارطة-طريق.md's payment section
-// — Abdullah manually flips a company to the new plan from /platform-admin).
+// Stage B7 (design v3 §6.1): every price, plan level and the current plan now
+// come from the server catalogue (GET /api/billing/plans) — this modal no
+// longer reads prices from pricingData.ts (that file now serves only the
+// public, unauthenticated PricingPage). Choosing a standard plan takes a
+// tenant admin to the dedicated plan page (/billing/plans/:plan), which shows
+// the full features/limits/comparison and — only where the server says
+// self-service checkout is available — the confirm button. Non-admins are
+// told to ask their account admin; Enterprise stays contact-sales. If the
+// catalogue cannot be loaded, the honest "contact us" CTA remains.
 export default function UpgradeModal() {
   const t = useT();
+  const navigate = useNavigate();
   const open = useUpgradeModalStore((s) => s.open);
   const message = useUpgradeModalStore((s) => s.message);
   const closeModal = useUpgradeModalStore((s) => s.closeModal);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const [annual, setAnnual] = useState(true);
+  const [plans, setPlans] = useState<PlansResponse | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadFailed(false);
+    fetchBillingPlans()
+      .then(setPlans)
+      .catch(() => {
+        setPlans(null);
+        setLoadFailed(true);
+      });
+  }, [open]);
 
   if (!open) return null;
 
@@ -29,6 +53,14 @@ export default function UpgradeModal() {
     gold: t.pricing.taglineGold,
     enterprise: t.pricing.taglineEnterprise,
   };
+  const interval = annual ? 'annual' : 'monthly';
+  const current = plans ? currentPlanKey(plans.current) : null;
+  const cards = plans?.plans ?? [];
+
+  function choose(planKey: string) {
+    closeModal();
+    navigate(`/billing/plans/${planKey}?interval=${interval}`);
+  }
 
   return (
     <div className="modal-overlay" onClick={closeModal}>
@@ -36,99 +68,113 @@ export default function UpgradeModal() {
         className="modal-box"
         onClick={(e) => e.stopPropagation()}
         style={{ maxWidth: 980 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upgrade-modal-title"
       >
         <div className="modal-head">
-          <h3>{t.pricing.upgradeModalTitle}</h3>
-          <button className="modal-close" onClick={closeModal} type="button">
+          <h3 id="upgrade-modal-title">{t.pricing.upgradeModalTitle}</h3>
+          <button className="modal-close" onClick={closeModal} type="button" aria-label={t.common.close}>
             <IconClose />
           </button>
         </div>
         <div className="modal-body">
-          <div className="error-banner" style={{ marginBottom: 16 }}>
-            {message || t.pricing.blockedBannerDefault}
-          </div>
+          {message && (
+            <div className="error-banner" style={{ marginBottom: 16 }}>
+              {message}
+            </div>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-            <div style={{ display: 'inline-flex', background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 999, padding: 4, gap: 4 }}>
-              <button
-                type="button"
-                onClick={() => setAnnual(true)}
-                className="btn btn-sm"
-                style={{ borderRadius: 999, background: annual ? 'var(--stone-800)' : 'transparent', color: annual ? '#fff' : 'var(--text)', border: 'none' }}
-              >
+            <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
+              <button type="button" aria-pressed={annual} onClick={() => setAnnual(true)}>
                 {t.pricing.annual}
               </button>
-              <button
-                type="button"
-                onClick={() => setAnnual(false)}
-                className="btn btn-sm"
-                style={{ borderRadius: 999, background: !annual ? 'var(--stone-800)' : 'transparent', color: !annual ? '#fff' : 'var(--text)', border: 'none' }}
-              >
+              <button type="button" aria-pressed={!annual} onClick={() => setAnnual(false)}>
                 {t.pricing.monthly}
               </button>
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-            {PLANS.map((plan) => {
-              const usdPrice = annual ? plan.annualMonthlyUsd : plan.monthlyUsd;
-              const kdPrice = annual ? plan.annualKd : plan.monthlyKd;
-              return (
-                <div
-                  key={plan.key}
-                  className="card"
-                  style={{ position: 'relative', padding: 16, border: plan.featured ? '2px solid var(--amber-500)' : '1px solid var(--border)' }}
-                >
-                  {plan.featured && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: -11,
-                        insetInlineStart: '50%',
-                        transform: 'translateX(50%)',
-                        background: 'var(--amber-500)',
-                        color: '#fff',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        padding: '2px 8px',
-                        borderRadius: 999,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {t.pricing.mostPopular}
-                    </span>
-                  )}
-                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{plan.name}</div>
-                  <p className="muted" style={{ fontSize: 11.5, minHeight: 44, marginBottom: 10 }}>
-                    {planTagline[plan.key]}
-                  </p>
-                  {plan.contactSales ? (
-                    <div style={{ minHeight: 46, display: 'flex', alignItems: 'center', marginBottom: 10 }}>
-                      <div style={{ fontWeight: 800, fontSize: 13 }}>{t.pricing.ctaContactSales}</div>
+          {loadFailed && (
+            <div style={{ textAlign: 'center' }}>
+              <div className="info-banner">{t.billing.modal.loadFailed}</div>
+              <a href={`mailto:${SALES_EMAIL}?subject=${encodeURIComponent('Upgrade')}`} className="btn btn-primary">
+                {t.pricing.ctaUpgradeContact}
+              </a>
+            </div>
+          )}
+          {!plans && !loadFailed && <div className="muted" role="status">{t.billing.loading}</div>}
+
+          {plans && (
+            <div className="billing-plan-grid">
+              {cards.map((plan) => {
+                const price = planPrice(plan, interval);
+                const cta = planCta(plan.key, isAdmin, plans);
+                const isCurrent = current === plan.key;
+                const name = t.billing.planNames[plan.key] ?? plan.key;
+                return (
+                  <div key={plan.key} className={`card billing-plan-card${isCurrent ? ' is-current' : ''}`}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                      <div style={{ fontWeight: 800, fontSize: 15 }}>{name}</div>
+                      {isCurrent && <span className="tag green">{t.billing.currentPlan}</span>}
                     </div>
-                  ) : (
-                    <div style={{ minHeight: 46, marginBottom: 10 }}>
-                      <span style={{ fontWeight: 800, fontSize: 20 }}>${usdPrice}</span>
-                      <span className="muted" style={{ fontSize: 11 }}> {t.pricing.perMonth}</span>
-                      <div className="muted" style={{ fontSize: 11 }}>
-                        {t.pricing.approx} {kdPrice?.toFixed(3)} KD
+                    <p className="muted" style={{ fontSize: 11.5, minHeight: 36, margin: 0 }}>
+                      {planTagline[plan.key]}
+                    </p>
+                    {price ? (
+                      <div style={{ minHeight: 46 }}>
+                        {price.monthlyEquivalent ? (
+                          <>
+                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 20 }}>
+                              {formatMoney(price.monthlyEquivalent, plans.currency)}
+                            </bdi>
+                            <span className="muted"> {t.billing.perMonth}</span>
+                            <div className="muted">
+                              <bdi dir="ltr" className="billing-amount">{formatMoney(price.amount, plans.currency)}</bdi>{' '}
+                              {t.billing.billedAnnuallySuffix}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 20 }}>
+                              {formatMoney(price.amount, plans.currency)}
+                            </bdi>
+                            <span className="muted"> {t.billing.perMonth}</span>
+                          </>
+                        )}
                       </div>
-                    </div>
-                  )}
-                  <a
-                    href={`mailto:${SALES_EMAIL}?subject=${encodeURIComponent(`Upgrade to ${plan.name}`)}`}
-                    className={plan.featured ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-                    style={{ width: '100%', display: 'block', textAlign: 'center' }}
-                  >
-                    {plan.contactSales ? t.pricing.ctaContactSales : t.pricing.ctaUpgradeContact}
-                  </a>
-                </div>
-              );
-            })}
-          </div>
+                    ) : (
+                      <div style={{ minHeight: 46, display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: 13 }}>
+                        {t.pricing.ctaContactSales}
+                      </div>
+                    )}
+                    {cta === 'choose' && (
+                      <button type="button" className="btn btn-primary btn-sm" onClick={() => choose(plan.key)}>
+                        {t.billing.modal.choose}
+                      </button>
+                    )}
+                    {cta === 'contact_sales' && (
+                      <a
+                        href={`mailto:${SALES_EMAIL}?subject=${encodeURIComponent('Enterprise plan')}`}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        {t.pricing.ctaContactSales}
+                      </a>
+                    )}
+                    {cta === 'ask_admin' && (
+                      <div className="muted" style={{ textAlign: 'center', marginTop: 'auto' }}>
+                        {t.billing.modal.askAdmin}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <p className="muted" style={{ textAlign: 'center', fontSize: 11, marginTop: 16, marginBottom: 0 }}>
-            {t.pricing.currencyNote}
+            {t.billing.usdNote}
           </p>
         </div>
       </div>

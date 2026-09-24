@@ -8,6 +8,9 @@ import {
   defaultActivationForm,
   nextActivationForm,
   submitActivation,
+  subscriptionStatusLabel,
+  invoiceStatusLabel,
+  canIssueInvoice,
   type ActivationForm,
 } from './platformAdminHelpers';
 
@@ -543,7 +546,7 @@ export default function PlatformAdminPage() {
                 <tr key={s.id}>
                   <td style={{ fontWeight: 700 }}>{s.company_name}</td>
                   <td>{s.plan}</td>
-                  <td>{s.status}</td>
+                  <td>{subscriptionStatusLabel(s.status)}</td>
                   {/* Stage B2: shows the row's OWN currency and its actual
                       period_amount (the real agreed charge) — never a
                       hardcoded "KD" label, and never monthly_price presented
@@ -568,7 +571,7 @@ export default function PlatformAdminPage() {
                         irrelevant here and deliberately not checked. No
                         fields are submitted — the endpoint copies everything
                         from this subscription's own row server-side. */}
-                    {s.status === 'active' ? (
+                    {canIssueInvoice(s.status) ? (
                       <button
                         className="btn btn-secondary btn-sm"
                         type="button"
@@ -627,7 +630,7 @@ export default function PlatformAdminPage() {
                   <td className="num">
                     {inv.amount !== undefined && inv.currency ? `${Number(inv.amount).toFixed(3)} ${inv.currency}` : '—'}
                   </td>
-                  <td>{inv.status}</td>
+                  <td>{invoiceStatusLabel(inv.status)}</td>
                   <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>
                     {inv.period_start ? new Date(inv.period_start).toLocaleDateString('en-GB') : '—'}
                     {' → '}

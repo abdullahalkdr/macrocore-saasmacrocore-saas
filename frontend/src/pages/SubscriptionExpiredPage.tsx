@@ -4,6 +4,7 @@ import { get, ApiError } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import { useT } from '../i18n';
 import { IconBuilding } from '../components/Icon';
+import { useUpgradeModalStore } from '../store/upgradeModalStore';
 
 // Landed on after any API call comes back 402 + code SUBSCRIPTION_INACTIVE (see
 // api/client.ts). The token is still valid — only the subscription is blocked — so
@@ -23,6 +24,11 @@ export default function SubscriptionExpiredPage() {
   const navigate = useNavigate();
   const t = useT();
   const logout = useAuthStore((s) => s.logout);
+  // Stage B7 — a trial admin can pick a plan straight from here. The modal is
+  // mounted globally in App.tsx; its plan cards lead to the self-service plan
+  // page, which lives outside Layout precisely so an expired trial can reach it.
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const openUpgradeModal = useUpgradeModalStore((s) => s.openModal);
   const [company, setCompany] = useState<CompanyStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +91,11 @@ export default function SubscriptionExpiredPage() {
           </p>
         )}
 
+        {isAdmin && company?.subscription_status === 'trial' && (
+          <button className="btn btn-primary" style={{ width: '100%', marginBottom: 8, justifyContent: 'center' }} onClick={() => openUpgradeModal()}>
+            {t.billing.choosePlanCta}
+          </button>
+        )}
         <button className="btn btn-primary" style={{ width: '100%', marginBottom: 8 }} onClick={() => navigate('/support')}>
           {t.subscriptionExpired.openSupportTicket}
         </button>

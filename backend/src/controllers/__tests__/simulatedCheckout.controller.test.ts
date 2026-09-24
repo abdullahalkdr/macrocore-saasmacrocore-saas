@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   logAudit: vi.fn(),
   resolveCheckoutSessionCore: vi.fn(),
   buildAuditPayloadForResolve: vi.fn(),
+  buildAuditPayloadForPurchaseApplied: vi.fn(),
 }));
 
 const TOKEN_SECRET = 'unit-test-simulator-secret-32-bytes-min';
@@ -39,6 +40,8 @@ vi.mock('../../config/env', () => ({
       return envState.companyIds;
     },
     PAYMENT_SIMULATOR_TOKEN_SECRET: 'unit-test-simulator-secret-32-bytes-min',
+    // Stage B7 — origin the hosted page links back to (return_url).
+    FRONTEND_URL: 'https://app.macrocore.test',
   },
   get PAYMENT_SIMULATOR_OPERATIONAL() {
     return envState.operational;
@@ -47,6 +50,7 @@ vi.mock('../../config/env', () => ({
 vi.mock('../../services/paymentSettlement', () => ({
   resolveCheckoutSessionCore: mocks.resolveCheckoutSessionCore,
   buildAuditPayloadForResolve: mocks.buildAuditPayloadForResolve,
+  buildAuditPayloadForPurchaseApplied: mocks.buildAuditPayloadForPurchaseApplied,
 }));
 
 import { getHostedCheckoutSession, resolveHostedCheckoutSession } from '../simulatedCheckout.controller';
@@ -181,6 +185,10 @@ describe('getHostedCheckoutSession — happy path', () => {
       success: true,
       session: { id: SESSION_ID, status: 'pending', resolved_at: null },
       payment_attempt: { amount: '660.000', currency: 'USD', plan: 'gold', billing_interval: 'annual' },
+      // Stage B7 additions: advisory can_succeed (row lacked it -> false)
+      // and no return link for a session that is not a self-service purchase.
+      can_succeed: false,
+      return_url: null,
     });
   });
 
@@ -342,5 +350,73 @@ describe('resolveHostedCheckoutSession', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Stage B7 — purchase-linked sessions on the hosted page.
+// ---------------------------------------------------------------------------
+
+describe('getHostedCheckoutSession — Stage B7 purchase fields', () => {
+  it('returns can_succeed (advisory, SQL clock_timestamp()) and a server-built return_url for a purchase session', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ company_id: 'company-allowed' }] });
+    mocks.poolQuery.mockResolvedValueOnce({
+      rows: [{
+        id: SESSION_ID, status: 'pending', resolved_at: null, amount: '39.000', currency: 'USD', plan: 'silver',
+        billing_interval: 'monthly', purchase_id: '11111111-2222-3333-4444-555555555555', can_succeed: true,
+      }],
+    });
+    const res = makeRes();
+    await getHostedCheckoutSession(makeReq(bearerFor(SESSION_ID)), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.can_succeed).toBe(true);
+    expect(res.body.return_url).toBe('https://app.macrocore.test/billing/checkout/return?purchase=11111111-2222-3333-4444-555555555555');
+    const dataSql = String(mocks.poolQuery.mock.calls[1][0]);
+    expect(dataSql).toContain('clock_timestamp() < sp.expires_at');
+    expect(dataSql).not.toMatch(/\bnow\(\)/);
+  });
+
+  it('reports can_succeed=false after the window (display only — the settlement core re-checks under locks)', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ company_id: 'company-allowed' }] });
+    mocks.poolQuery.mockResolvedValueOnce({
+      rows: [{ id: SESSION_ID, status: 'pending', resolved_at: null, amount: '39.000', currency: 'USD', plan: 'silver', billing_interval: 'monthly', purchase_id: 'p-1', can_succeed: false }],
+    });
+    const res = makeRes();
+    await getHostedCheckoutSession(makeReq(bearerFor(SESSION_ID)), res, NOOP_NEXT);
+    expect(res.body.can_succeed).toBe(false);
+  });
+});
+
+describe('resolveHostedCheckoutSession — Stage B7', () => {
+  it('passes the SESSION_EXPIRED code through on a 409 and writes no audit', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ company_id: 'company-allowed' }] });
+    mocks.resolveCheckoutSessionCore.mockResolvedValueOnce({ kind: 'conflict', code: 'SESSION_EXPIRED', message: 'window ended' });
+    const res = makeRes();
+    await resolveHostedCheckoutSession(makeReq(bearerFor(SESSION_ID), { outcome: 'succeeded' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ success: false, error: 'window ended', code: 'SESSION_EXPIRED' });
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('a purchase-applying success logs the resolve row (with purchase fields) and then subscription_purchase_applied, post-commit', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ company_id: 'company-allowed' }] });
+    const settled = { sessionId: SESSION_ID, attemptNewStatus: 'succeeded', sessionResolvedAt: '2026-09-24T09:00:00.000Z', invoiceId: 'inv-1' };
+    const applied = { purchase_id: 'p-1', new_values: { plan: 'gold', subscription_status: 'active' } };
+    mocks.resolveCheckoutSessionCore.mockResolvedValueOnce({
+      kind: 'ok', result: settled, session: { id: SESSION_ID, status: 'succeeded', resolved_at: '2026-09-24T09:00:00.000Z' },
+      purchaseApplied: applied, purchaseId: 'p-1',
+    });
+    mocks.buildAuditPayloadForResolve.mockReturnValueOnce({ action: 'payment_checkout_session_resolved' });
+    mocks.buildAuditPayloadForPurchaseApplied.mockReturnValueOnce({ action: 'subscription_purchase_applied' });
+    mocks.logAudit.mockResolvedValue(undefined);
+
+    const res = makeRes();
+    await resolveHostedCheckoutSession(makeReq(bearerFor(SESSION_ID), { outcome: 'succeeded' }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.buildAuditPayloadForResolve).toHaveBeenCalledWith(settled, 'simulated_hosted_page', { purchaseId: 'p-1', applied });
+    expect(mocks.logAudit.mock.calls.map((c) => c[0].action)).toEqual(['payment_checkout_session_resolved', 'subscription_purchase_applied']);
+    expect(mocks.logAudit.mock.calls[1][0].companyId).toBe('company-allowed');
   });
 });

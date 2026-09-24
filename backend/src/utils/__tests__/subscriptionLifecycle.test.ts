@@ -1,3 +1,4 @@
+import { APPROVED_PRICING_CATALOG } from '../../config/pricingCatalog';
 import { describe, it, expect } from 'vitest';
 import {
   addUtcMonths,
@@ -146,17 +147,41 @@ describe('resolvePeriodAmount() — manual Enterprise and currency-specific stan
   });
 
   it('a standard plan validates against a configured catalog entry and accepts a match', () => {
-    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: 9, annual: 96 }, silver: { monthly: 12, annual: 120 }, gold: { monthly: 20, annual: 204 } } };
+    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: '9.000', annual: '96.000' }, silver: { monthly: '12.000', annual: '120.000' }, gold: { monthly: '20.000', annual: '204.000' } } };
     expect(resolvePeriodAmount('gold', 'monthly', 'KWD', 20, catalog)).toBe(20);
   });
 
   it('a standard plan rejects a mismatched amount once a catalog entry exists — this IS the enforcement mechanism', () => {
-    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: 9, annual: 96 }, silver: { monthly: 12, annual: 120 }, gold: { monthly: 20, annual: 204 } } };
+    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: '9.000', annual: '96.000' }, silver: { monthly: '12.000', annual: '120.000' }, gold: { monthly: '20.000', annual: '204.000' } } };
     expect(() => resolvePeriodAmount('gold', 'monthly', 'KWD', 25, catalog)).toThrow(/does not match the approved/);
   });
 
   it('rejects a currency that does not match the approved catalog', () => {
-    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: 9, annual: 96 }, silver: { monthly: 12, annual: 120 }, gold: { monthly: 20, annual: 204 } } };
+    const catalog = { currency: 'KWD' as const, prices: { bronze: { monthly: '9.000', annual: '96.000' }, silver: { monthly: '12.000', annual: '120.000' }, gold: { monthly: '20.000', annual: '204.000' } } };
     expect(() => resolvePeriodAmount('gold', 'monthly', 'USD', 20, catalog)).toThrow(/currency must be KWD/);
+  });
+
+  // Stage B7 (decision A7): exact comparison against the canonical string
+  // catalogue — no float tolerance anywhere.
+  it('B7: accepts 32 and 32.0 against the canonical USD catalogue string "32.00"', () => {
+    expect(resolvePeriodAmount('bronze', 'monthly', 'USD', 32, APPROVED_PRICING_CATALOG)).toBe(32);
+    expect(resolvePeriodAmount('bronze', 'monthly', 'USD', 32.0, APPROVED_PRICING_CATALOG)).toBe(32);
+    expect(resolvePeriodAmount('gold', 'annual', 'USD', 660, APPROVED_PRICING_CATALOG)).toBe(660);
+  });
+
+  it('B7: rejects 32.001 for USD on precision before any catalogue comparison', () => {
+    expect(() => resolvePeriodAmount('bronze', 'monthly', 'USD', 32.001, APPROVED_PRICING_CATALOG)).toThrow(/more decimal precision/);
+  });
+
+  it('B7: rejects 31.99 (a near-miss is a mismatch, not "close enough")', () => {
+    expect(() => resolvePeriodAmount('bronze', 'monthly', 'USD', 31.99, APPROVED_PRICING_CATALOG)).toThrow(/does not match the approved/);
+  });
+
+  it('B7: every canonical catalogue price is exact 2-decimal USD text', () => {
+    for (const plan of ['bronze', 'silver', 'gold'] as const) {
+      for (const interval of ['monthly', 'annual'] as const) {
+        expect(APPROVED_PRICING_CATALOG.prices[plan][interval]).toMatch(/^(0|[1-9]\d{0,6})\.\d{2}$/);
+      }
+    }
   });
 });

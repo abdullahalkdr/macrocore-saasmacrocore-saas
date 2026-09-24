@@ -13,6 +13,8 @@ import PricingPage from './pages/PricingPage';
 import SubscriptionExpiredPage from './pages/SubscriptionExpiredPage';
 import PlatformAdminPage from './pages/PlatformAdminPage';
 import UpgradeModal from './components/UpgradeModal';
+import PlanCheckoutPage from './pages/billing/PlanCheckoutPage';
+import CheckoutReturnPage from './pages/billing/CheckoutReturnPage';
 import DashboardPage from './pages/DashboardPage';
 import ProductsPage from './pages/ProductsPage';
 import EmployeesPage from './pages/EmployeesPage';
@@ -100,6 +102,26 @@ export default function App() {
         <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
         <Route path="/platform-admin" element={<PlatformAdminPage />} />
         <Route element={<ProtectedRoute />}>
+          {/* Stage B7 — trial-to-paid self-service checkout. Deliberately OUTSIDE
+              <Layout>: Layout's own guarded API polling would 402-redirect an
+              expired trial to /subscription-expired before it could buy. Admin
+              only in the UI; the backend (/api/billing) enforces the same. */}
+          <Route
+            path="/billing/plans/:plan"
+            element={
+              <RequireRole roles={ADMIN_ROLES}>
+                <PlanCheckoutPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/billing/checkout/return"
+            element={
+              <RequireRole roles={ADMIN_ROLES}>
+                <CheckoutReturnPage />
+              </RequireRole>
+            }
+          />
           <Route element={<Layout />}>
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route

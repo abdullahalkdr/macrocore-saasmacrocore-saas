@@ -27,8 +27,25 @@ import { parseBearerSessionToken, verifySessionToken } from '../utils/paymentSim
 import {
   resolveCheckoutSessionCore,
   buildAuditPayloadForResolve,
+  buildAuditPayloadForPurchaseApplied,
   SettlementOutcome,
 } from '../services/paymentSettlement';
+
+// Stage B7 — the app page the hosted simulator links back to after a
+// self-service purchase checkout. Built server-side from env.FRONTEND_URL and
+// the purchase UUID only (never from request input), so it cannot become an
+// open redirect. Returns null (no link rendered) if FRONTEND_URL is unusable.
+export function buildPurchaseReturnUrl(purchaseId: string): string | null {
+  try {
+    const base = new URL(env.FRONTEND_URL);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') return null;
+    const url = new URL('/billing/checkout/return', base.origin);
+    url.searchParams.set('purchase', purchaseId);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 
 function toIsoOrNull(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -76,11 +93,20 @@ export const getHostedCheckoutSession = asyncHandler(async (req: Request, res: R
     return res.status(auth.status).json({ success: false });
   }
 
+  // Stage B7: also reports whether this session can still succeed and, for a
+  // self-service purchase, where to return. can_succeed uses the same SQL
+  // expression as the locked resolve-time gate (clock_timestamp(), never
+  // now()), but here it is ADVISORY DISPLAY ONLY and unlocked — the
+  // authoritative check always happens inside the settlement transaction.
   const result = await pool.query(
     `SELECT pcs.id, pcs.status, pcs.resolved_at,
-            pa.amount::text AS amount, pa.currency, pa.plan, pa.billing_interval
+            pa.amount::text AS amount, pa.currency, pa.plan, pa.billing_interval,
+            sp.id AS purchase_id,
+            (pcs.status = 'pending'
+              AND (sp.id IS NULL OR (sp.status = 'open' AND clock_timestamp() < sp.expires_at))) AS can_succeed
      FROM payment_checkout_sessions pcs
      JOIN payment_attempts pa ON pa.id = pcs.payment_attempt_id
+     LEFT JOIN subscription_purchases sp ON sp.invoice_id = pa.invoice_id
      WHERE pcs.id = $1`,
     [auth.sessionId]
   );
@@ -98,6 +124,8 @@ export const getHostedCheckoutSession = asyncHandler(async (req: Request, res: R
       plan: row.plan,
       billing_interval: row.billing_interval,
     },
+    can_succeed: row.can_succeed === true,
+    return_url: row.purchase_id ? buildPurchaseReturnUrl(row.purchase_id) : null,
   });
 });
 
@@ -123,7 +151,7 @@ export const resolveHostedCheckoutSession = asyncHandler(async (req: Request, re
     return res.status(404).json({ success: false });
   }
   if (coreResult.kind === 'conflict') {
-    return res.status(409).json({ success: false, error: coreResult.message });
+    return res.status(409).json({ success: false, error: coreResult.message, ...(coreResult.code ? { code: coreResult.code } : {}) });
   }
 
   // Best-effort, strictly after COMMIT + connection release (§4/§8).
@@ -132,10 +160,30 @@ export const resolveHostedCheckoutSession = asyncHandler(async (req: Request, re
       companyId: auth.companyId,
       userId: null,
       req,
-      ...buildAuditPayloadForResolve(coreResult.result, 'simulated_hosted_page'),
+      // Stage B7: the purchase fields are passed only for a purchase-linked
+      // session, so the B6 call shape is unchanged for every other session.
+      ...(coreResult.purchaseId
+        ? buildAuditPayloadForResolve(coreResult.result, 'simulated_hosted_page', {
+            purchaseId: coreResult.purchaseId,
+            applied: coreResult.purchaseApplied ?? null,
+          })
+        : buildAuditPayloadForResolve(coreResult.result, 'simulated_hosted_page')),
     });
   } catch (err) {
     console.error('hosted checkout resolve audit failed:', (err as Error).message);
+  }
+  // Stage B7 — separate post-commit row when a self-service purchase was applied.
+  if (coreResult.purchaseApplied) {
+    try {
+      await logAudit({
+        companyId: auth.companyId,
+        userId: null,
+        req,
+        ...buildAuditPayloadForPurchaseApplied(coreResult.purchaseApplied),
+      });
+    } catch (err) {
+      console.error('hosted checkout purchase-applied audit failed:', (err as Error).message);
+    }
   }
 
   return res.status(200).json({

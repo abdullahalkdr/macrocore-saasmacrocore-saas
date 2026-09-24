@@ -98,6 +98,12 @@ button:disabled { cursor: wait; opacity: 0.58; }
 .loading, .error { margin: 0; padding: 1rem 0; text-align: center; line-height: 1.7; }
 .loading { color: var(--muted); }
 .error { color: var(--danger); }
+.expired-note { margin: 0 0 1rem; padding: 0.85rem; border-radius: 10px; background: var(--surface-alt); color: var(--muted); text-align: center; font-weight: 700; }
+.return-link {
+  display: block; margin-top: 1rem; padding: 0.72rem 1rem; border-radius: 10px; text-align: center;
+  background: var(--stone-900); color: #fff; font-weight: 700; text-decoration: none;
+}
+.return-link:focus-visible { outline: 3px solid var(--amber-100); outline-offset: 2px; }
 .provider-note { margin: 0.9rem 0 0; color: var(--muted); text-align: center; font-size: 0.78rem; line-height: 1.6; }
 @media (max-width: 520px) { .checkout-shell { margin: 1.5rem auto; } .checkout-card { padding: 1.15rem; } }
 @media (prefers-color-scheme: dark) {
@@ -108,6 +114,7 @@ button:disabled { cursor: wait; opacity: 0.58; }
   }
   .checkout-card { box-shadow: 0 14px 40px rgba(0, 0, 0, 0.25); }
   .btn-failure { border-color: rgba(248, 113, 113, 0.35); }
+  .return-link { background: var(--amber-500); color: var(--stone-900); }
 }
 `;
 
@@ -156,9 +163,28 @@ export const SIMULATED_CHECKOUT_JS = `
     cancelled: 'سيتم إلغاء المحاولة نهائيًا. لإعادة المحاولة ستحتاج إلى إنشاء محاولة دفع جديدة. هل تريد المتابعة؟'
   };
 
+  // Stage B7 — "return to Macrocore" link for self-service purchase sessions.
+  // The URL is built server-side from FRONTEND_URL + the purchase UUID; it is
+  // still re-validated here and set through the DOM href property, never
+  // interpolated into HTML.
+  function appendReturnLink(url) {
+    if (!url) return;
+    var parsed;
+    try { parsed = new URL(url); } catch (e) { return; }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return;
+    var link = document.createElement('a');
+    link.className = 'return-link';
+    link.href = parsed.toString();
+    link.textContent = 'العودة إلى Macrocore';
+    document.getElementById('app').appendChild(link);
+  }
+
   function renderResult(data) {
     var session = data.session;
     var attempt = data.payment_attempt;
+    // Stage B7: advisory only — the settlement transaction re-checks it under
+    // locks. Absent for older payloads means "can succeed".
+    var canSucceed = data.can_succeed !== false;
     var rows =
       '<div class="details">' +
       '<div class="row"><span class="row-label">الباقة</span><span class="row-value">' + escapeHtml(planLabels[attempt.plan] || attempt.plan) + '</span></div>' +
@@ -169,13 +195,17 @@ export const SIMULATED_CHECKOUT_JS = `
     if (session.status === 'pending') {
       render(
         '<h1>إتمام الدفع التجريبي</h1>' +
-        '<p class="intro">اختر نتيجة محاكاة واحدة لاختبار دورة الدفع كاملة بدون أي خصم حقيقي.</p>' + rows +
+        (canSucceed
+          ? '<p class="intro">اختر نتيجة محاكاة واحدة لاختبار دورة الدفع كاملة بدون أي خصم حقيقي.</p>'
+          : '<p class="expired-note">انتهت مهلة جلسة الدفع</p>') +
+        rows +
         '<div class="actions">' +
-        '<button class="btn-success" data-outcome="succeeded">محاكاة نجاح الدفع</button>' +
+        (canSucceed ? '<button class="btn-success" data-outcome="succeeded">محاكاة نجاح الدفع</button>' : '') +
         '<button class="btn-failure" data-outcome="failed">محاكاة فشل الدفع</button>' +
         '<button class="btn-cancel" data-outcome="cancelled">إلغاء العملية التجريبية</button>' +
         '</div>'
       );
+      if (!canSucceed) appendReturnLink(data.return_url);
       Array.prototype.forEach.call(document.querySelectorAll('button[data-outcome]'), function (btn) {
         btn.addEventListener('click', function () {
           if (resolving) return;
@@ -187,6 +217,7 @@ export const SIMULATED_CHECKOUT_JS = `
     } else {
       var statusClass = session.status === 'succeeded' ? 'status-success' : (session.status === 'failed' ? 'status-failed' : 'status-cancelled');
       render('<h1>نتيجة الدفع التجريبي</h1>' + rows + '<div class="status ' + statusClass + '">' + escapeHtml(statusLabels[session.status] || session.status) + '</div>');
+      appendReturnLink(data.return_url);
       authHeader = '';
     }
   }

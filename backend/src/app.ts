@@ -58,6 +58,7 @@ import approvalsRoutes from './routes/approvals.routes';
 import emailWebhooksRoutes from './routes/emailWebhooks.routes';
 import emailAdminRoutes from './routes/emailAdmin.routes';
 import simulatedCheckoutRoutes from './routes/simulatedCheckout.routes';
+import billingRoutes from './routes/billing.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requireAuth } from './middleware/auth';
 import { requireActiveSubscription } from './middleware/subscription';
@@ -126,6 +127,10 @@ const invSilver = (label: string) => [...guarded, requirePlanLevel(2, label), re
 
 app.use('/api/auth', authRoutes);
 app.use('/api/company', companyRoutes);
+// Stage B7 — trial-to-paid self-service checkout (see billing.routes.ts). Same
+// exemption from requireActiveSubscription as /api/company: an expired trial
+// must still be able to see plans and buy one. No plan-tier gate.
+app.use('/api/billing', billingRoutes);
 app.use('/api/users', ...guarded, usersRoutes);
 app.use('/api/invitations', ...guarded, invitationsRoutes);
 app.use('/api/products', ...inv('Products'), productsRoutes);
