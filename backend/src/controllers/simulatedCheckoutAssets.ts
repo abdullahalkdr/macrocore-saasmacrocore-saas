@@ -33,6 +33,17 @@ export const SIMULATED_CHECKOUT_HTML = `<!doctype html>
   </section>
   <p class="provider-note">اختبار داخلي لمجرى الدفع المستضاف — لا توجد بوابة دفع حقيقية متصلة.</p>
 </main>
+<dialog id="confirmation-dialog" class="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message">
+  <div class="confirmation-dialog-body">
+    <span class="confirmation-dialog-mark" aria-hidden="true">!</span>
+    <h2 id="confirmation-title">تأكيد نتيجة الدفع</h2>
+    <p id="confirmation-message"></p>
+    <div class="confirmation-dialog-actions">
+      <button id="confirmation-submit" type="button">تأكيد</button>
+      <button id="confirmation-cancel" class="btn-cancel" type="button" autofocus>تراجع</button>
+    </div>
+  </div>
+</dialog>
 <script src="/simulated-checkout/app.js"></script>
 </body>
 </html>
@@ -105,6 +116,22 @@ button:disabled { cursor: wait; opacity: 0.58; }
 }
 .return-link:focus-visible { outline: 3px solid var(--amber-100); outline-offset: 2px; }
 .provider-note { margin: 0.9rem 0 0; color: var(--muted); text-align: center; font-size: 0.78rem; line-height: 1.6; }
+.confirmation-dialog {
+  width: min(calc(100% - 2rem), 420px); padding: 0; border: 1px solid var(--border);
+  border-radius: 16px; background: var(--surface); color: var(--text);
+  box-shadow: 0 24px 70px rgba(28, 25, 23, 0.28);
+}
+.confirmation-dialog::backdrop { background: rgba(28, 25, 23, 0.72); }
+.confirmation-dialog-body { padding: 1.5rem; text-align: center; }
+.confirmation-dialog-mark {
+  display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 0.85rem;
+  border-radius: 12px; background: var(--amber-100); color: var(--amber-600); font-size: 1.35rem; font-weight: 800;
+}
+.confirmation-dialog h2 { margin: 0 0 0.6rem; font-size: 1.15rem; }
+.confirmation-dialog p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.8; }
+.confirmation-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-top: 1.25rem; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover:not(:disabled) { opacity: 0.9; }
 @media (max-width: 520px) { .checkout-shell { margin: 1.5rem auto; } .checkout-card { padding: 1.15rem; } }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -113,6 +140,9 @@ button:disabled { cursor: wait; opacity: 0.58; }
     --danger: #f87171; --success: #34d399; --red-50: rgba(220, 38, 38, 0.14); --emerald-50: rgba(4, 120, 87, 0.18);
   }
   .checkout-card { box-shadow: 0 14px 40px rgba(0, 0, 0, 0.25); }
+  .confirmation-dialog { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5); }
+  .confirmation-dialog-mark { background: rgba(245, 158, 11, 0.16); color: var(--amber-500); }
+  .btn-danger { color: var(--stone-900); }
   .btn-failure { border-color: rgba(248, 113, 113, 0.35); }
   .return-link { background: var(--amber-500); color: var(--stone-900); }
 }
@@ -123,6 +153,11 @@ export const SIMULATED_CHECKOUT_JS = `
   'use strict';
 
   var resolving = false;
+  var pendingOutcome = '';
+  var confirmationDialog = document.getElementById('confirmation-dialog');
+  var confirmationMessage = document.getElementById('confirmation-message');
+  var confirmationSubmit = document.getElementById('confirmation-submit');
+  var confirmationCancel = document.getElementById('confirmation-cancel');
 
   function render(html) {
     document.getElementById('app').innerHTML = html;
@@ -162,6 +197,30 @@ export const SIMULATED_CHECKOUT_JS = `
     failed: 'سيتم تسجيل المحاولة كفاشلة نهائيًا. لإعادة المحاولة ستحتاج إلى إنشاء محاولة دفع جديدة. هل تريد المتابعة؟',
     cancelled: 'سيتم إلغاء المحاولة نهائيًا. لإعادة المحاولة ستحتاج إلى إنشاء محاولة دفع جديدة. هل تريد المتابعة؟'
   };
+
+  function openConfirmation(outcome) {
+    pendingOutcome = outcome;
+    confirmationMessage.textContent = confirmationMessages[outcome];
+    confirmationSubmit.textContent = outcome === 'succeeded' ? 'تأكيد نجاح الدفع' : (outcome === 'failed' ? 'تأكيد فشل الدفع' : 'تأكيد الإلغاء');
+    confirmationSubmit.className = outcome === 'succeeded' ? 'btn-success' : 'btn-danger';
+    confirmationDialog.showModal();
+    // The safer action gets initial focus explicitly — not left to each
+    // browser's autofocus handling inside a modal dialog.
+    confirmationCancel.focus();
+  }
+
+  function closeConfirmation() {
+    pendingOutcome = '';
+    confirmationDialog.close();
+  }
+
+  confirmationCancel.addEventListener('click', closeConfirmation);
+  confirmationDialog.addEventListener('cancel', function () { pendingOutcome = ''; });
+  confirmationSubmit.addEventListener('click', function () {
+    var outcome = pendingOutcome;
+    closeConfirmation();
+    if (outcome) resolve(outcome);
+  });
 
   // Stage B7 — "return to Macrocore" link for self-service purchase sessions.
   // The URL is built server-side from FRONTEND_URL + the purchase UUID; it is
@@ -210,8 +269,7 @@ export const SIMULATED_CHECKOUT_JS = `
         btn.addEventListener('click', function () {
           if (resolving) return;
           var outcome = btn.getAttribute('data-outcome');
-          if (!window.confirm(confirmationMessages[outcome])) return;
-          resolve(outcome);
+          openConfirmation(outcome);
         });
       });
     } else {

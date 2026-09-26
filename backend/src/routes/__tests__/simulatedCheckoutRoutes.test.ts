@@ -57,6 +57,8 @@ describe('simulated checkout hosted route', () => {
     expect(html).toContain('لن يتم خصم أي مبلغ حقيقي');
     expect(html).toContain('<link rel="stylesheet" href="/simulated-checkout/app.css">');
     expect(html).toContain('<script src="/simulated-checkout/app.js"></script>');
+    expect(html).toContain('<dialog id="confirmation-dialog"');
+    expect(html).toContain('aria-labelledby="confirmation-title"');
     expect(html).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>/i);
     expect(html).not.toMatch(/\sstyle=/i);
   });
@@ -66,7 +68,9 @@ describe('simulated checkout hosted route', () => {
     const js = await jsResponse.text();
     expect(jsResponse.headers.get('content-type')).toContain('application/javascript');
     expectSecurityHeaders(jsResponse);
-    expect(js).toContain('window.confirm');
+    expect(js).not.toContain('window.confirm');
+    expect(js).toContain('confirmationDialog.showModal()');
+    expect(js).toContain('confirmationCancel.focus()');
     expect(js).toContain('if (resolving) return');
 
     const cssResponse = await request('/simulated-checkout/app.css');
@@ -74,6 +78,9 @@ describe('simulated checkout hosted route', () => {
     expect(cssResponse.headers.get('content-type')).toContain('text/css');
     expectSecurityHeaders(cssResponse);
     expect(css).toContain('--amber-500: #f59e0b');
+    expect(css).toContain('.confirmation-dialog::backdrop');
+    // Dark mode: white on the light-red --danger fails contrast; dark text instead.
+    expect(css).toMatch(/prefers-color-scheme: dark[\s\S]*\.btn-danger \{ color: var\(--stone-900\); \}/);
     expect(css).toContain('@media (prefers-color-scheme: dark)');
   });
 
