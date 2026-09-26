@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { get, ApiError } from '../api/client';
 import { useT } from '../i18n';
 import { useAuthStore } from '../store/authStore';
+import { planLevelOf } from '../planLevels';
 import PageHeader from '../components/PageHeader';
 import StatCard from '../components/StatCard';
 import { IconPlus, IconExpense, IconAttendance, IconReports } from '../components/Icon';
@@ -64,8 +65,12 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Inventory alerts read Silver+ routes (app.ts invSilver) — skip them below Silver
+  // instead of firing reads that can only 403.
+  const authCompany = useAuthStore((s) => s.company);
+  const canReadInventory = !!authCompany?.plan_gating_bypassed || planLevelOf(authCompany?.plan) >= 2;
   useEffect(() => {
-    if (!isManager) return;
+    if (!isManager || !canReadInventory) return;
     Promise.all([
       get<{ materials: { low_stock: boolean }[] }>('/inventory/overview').catch(() => ({ materials: [] })),
       get<{ batches: { days_until_expiry: number | null }[] }>('/raw-material-batches').catch(() => ({ batches: [] })),
@@ -75,7 +80,7 @@ export default function DashboardPage() {
         expiringBatches: expiringCount(b.batches),
       });
     }).catch(() => {});
-  }, [isManager]);
+  }, [isManager, canReadInventory]);
 
   const trialDaysLeft = company?.trial_end_date
     ? Math.max(0, Math.ceil((new Date(company.trial_end_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))

@@ -144,12 +144,16 @@ export default function Layout() {
   // any plan-tier gate, so keeping the sidebar's locked badges/upgrade-modal prompts up
   // would be actively misleading — every item they'd block is actually reachable.
   const [planGatingBypassed, setPlanGatingBypassed] = useState(false);
+  // True once /company/me answered — the direct-visit upgrade check below must not run
+  // on the cached plan before the live plan/bypass state is known.
+  const [planLoaded, setPlanLoaded] = useState(false);
   const updateCompany = useAuthStore((s) => s.updateCompany);
   useEffect(() => {
     get<{ plan: string; plan_gating_bypassed?: boolean; inventory_enabled?: boolean }>('/company/me')
       .then((r) => {
         setLivePlan(r.plan);
         setPlanGatingBypassed(!!r.plan_gating_bypassed);
+        setPlanLoaded(true);
         // Also push into the shared authStore so pages that don't poll /company/me
         // themselves (e.g. PayrollPage.tsx's Performance-linked adjustments check)
         // can read the live bypass state via useAuthStore(s => s.company) instead of
@@ -446,6 +450,22 @@ export default function Layout() {
   }, [location.pathname]);
 
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+
+  // Direct visit (typed URL, bookmark, back button) to a section the plan doesn't
+  // cover: the page's own GETs no longer pop the modal (api/client.ts), so open it
+  // here once per such visit — same effect as clicking the locked sidebar item.
+  useEffect(() => {
+    if (!planLoaded || planGatingBypassed) return;
+    const path = location.pathname;
+    const hit = navGroups
+      .flatMap((g) => g.items)
+      .find((i) => {
+        const minPlan = 'minPlan' in i ? i.minPlan : undefined;
+        return !!minPlan && companyPlanLevel < minPlan && (path === i.to || path.startsWith(`${i.to}/`));
+      });
+    if (hit) openUpgradeModal(t.pricing.blockedBannerDefault);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, planLoaded, planGatingBypassed, companyPlanLevel]);
 
   function toggleGroup(key: string) {
     setExpandedGroupKeys((prev) => {

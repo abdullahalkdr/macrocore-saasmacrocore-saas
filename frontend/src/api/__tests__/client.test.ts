@@ -20,12 +20,13 @@ function planGated() {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('shouldOpenUpgradeModal', () => {
-  it('opens only for a user-initiated 403 PLAN_UPGRADE_REQUIRED', () => {
-    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED')).toBe(true);
-    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', {})).toBe(true);
-    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', { background: true })).toBe(false);
-    expect(shouldOpenUpgradeModal(403, 'FORBIDDEN')).toBe(false);
-    expect(shouldOpenUpgradeModal(402, 'PLAN_UPGRADE_REQUIRED')).toBe(false);
+  it('opens only for a user action (non-GET) that hits a plan gate', () => {
+    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', 'POST')).toBe(true);
+    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', 'delete')).toBe(true);
+    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', 'GET')).toBe(false);
+    expect(shouldOpenUpgradeModal(403, 'PLAN_UPGRADE_REQUIRED', 'POST', { background: true })).toBe(false);
+    expect(shouldOpenUpgradeModal(403, 'FORBIDDEN', 'POST')).toBe(false);
+    expect(shouldOpenUpgradeModal(402, 'PLAN_UPGRADE_REQUIRED', 'POST')).toBe(false);
   });
 });
 
@@ -42,10 +43,10 @@ describe('request interceptor — upgrade modal', () => {
     expect(openModal).not.toHaveBeenCalled();
   });
 
-  it('a user-initiated GET (default) still pops the modal', async () => {
-    await expect(get('/leave-requests')).rejects.toMatchObject({ status: 403, code: 'PLAN_UPGRADE_REQUIRED' });
+  it('a plain GET (page-load read, e.g. dashboard inventory widgets) does NOT pop the modal, but still rejects', async () => {
+    await expect(get('/raw-material-batches')).rejects.toMatchObject({ status: 403, code: 'PLAN_UPGRADE_REQUIRED' });
     await flush();
-    expect(openModal).toHaveBeenCalledTimes(1);
+    expect(openModal).not.toHaveBeenCalled();
   });
 
   it('a user action (POST) still pops the modal', async () => {

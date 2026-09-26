@@ -34,8 +34,14 @@ export interface RequestOpts {
 }
 
 // Pure, exported for tests — the single rule for when the interceptor pops the modal.
-export function shouldOpenUpgradeModal(status: number, code: string | undefined, opts?: RequestOpts): boolean {
-  return status === 403 && code === 'PLAN_UPGRADE_REQUIRED' && !opts?.background;
+// Only a user ACTION (POST/PATCH/PUT/DELETE) on a gated feature pops it. A GET never
+// does: page loads fire many reads (dashboard widgets, dropdown data, badge polls)
+// that the user never asked for, and each one on a lower plan used to pop the modal
+// unprompted. Opening a locked section is handled where the user acts on it — the
+// sidebar's locked items and Layout's direct-visit check (components/Layout.tsx).
+export function shouldOpenUpgradeModal(status: number, code: string | undefined, method: string, opts?: RequestOpts): boolean {
+  if (status !== 403 || code !== 'PLAN_UPGRADE_REQUIRED' || opts?.background) return false;
+  return method.toUpperCase() !== 'GET';
 }
 
 async function request<T>(path: string, options: RequestInit = {}, opts?: RequestOpts): Promise<T> {
@@ -87,7 +93,7 @@ async function request<T>(path: string, options: RequestInit = {}, opts?: Reques
     // "please upgrade" handling — dynamic import avoids a require-cycle with the
     // store pulling in this same client module elsewhere.
     // Background requests (opts.background) are exempt — see RequestOpts above.
-    if (shouldOpenUpgradeModal(res.status, code, opts)) {
+    if (shouldOpenUpgradeModal(res.status, code, options.method ?? 'GET', opts)) {
       import('../store/upgradeModalStore').then(({ useUpgradeModalStore }) => {
         useUpgradeModalStore.getState().openModal(message);
       });
