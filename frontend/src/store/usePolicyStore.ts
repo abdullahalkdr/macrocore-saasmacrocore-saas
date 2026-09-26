@@ -217,7 +217,9 @@ export const usePolicyStore = create<PolicyState>()((set, getStore) => ({
   fetchPendingAcknowledgments: async () => {
     set({ pendingLoading: true });
     try {
-      const r = await get<{ pending: PendingPolicy[] }>('/policies/pending-acknowledgment');
+      // background: runs on every page load and window focus, never user-initiated —
+      // must not pop the upgrade modal on a plan below Silver (api/client.ts).
+      const r = await get<{ pending: PendingPolicy[] }>('/policies/pending-acknowledgment', { background: true });
       set({ pending: r.pending, pendingLoading: false });
     } catch {
       // Non-fatal, same instinct as Layout's pending-leave-requests poll — a failed

@@ -25,7 +25,20 @@ function getToken(): string | null {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+// Per-call options that are NOT fetch options. `background: true` marks a request
+// the user did not trigger (sidebar badge polls, on-focus checks): a 403
+// PLAN_UPGRADE_REQUIRED from it must never pop the global upgrade modal — the modal
+// is only for a click on a locked section/feature or a direct visit to a gated page.
+export interface RequestOpts {
+  background?: boolean;
+}
+
+// Pure, exported for tests — the single rule for when the interceptor pops the modal.
+export function shouldOpenUpgradeModal(status: number, code: string | undefined, opts?: RequestOpts): boolean {
+  return status === 403 && code === 'PLAN_UPGRADE_REQUIRED' && !opts?.background;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, opts?: RequestOpts): Promise<T> {
   const token = getToken();
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -73,7 +86,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // modal everywhere instead of every one of the ~20 gated pages needing its own
     // "please upgrade" handling — dynamic import avoids a require-cycle with the
     // store pulling in this same client module elsewhere.
-    if (res.status === 403 && code === 'PLAN_UPGRADE_REQUIRED') {
+    // Background requests (opts.background) are exempt — see RequestOpts above.
+    if (shouldOpenUpgradeModal(res.status, code, opts)) {
       import('../store/upgradeModalStore').then(({ useUpgradeModalStore }) => {
         useUpgradeModalStore.getState().openModal(message);
       });
@@ -83,7 +97,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
-export const get = <T = unknown>(path: string) => request<T>(path);
+export const get = <T = unknown>(path: string, opts?: RequestOpts) => request<T>(path, {}, opts);
 export const post = <T = unknown>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined });
 export const patch = <T = unknown>(path: string, body?: unknown) =>

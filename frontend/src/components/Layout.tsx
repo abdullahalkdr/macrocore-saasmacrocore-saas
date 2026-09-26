@@ -172,17 +172,24 @@ export default function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Leave requests are Silver+ (app.ts). Same rule as the approvals badge below: never
+  // poll a plan-gated route the company can't use, and mark the poll as background so
+  // a 403 PLAN_UPGRADE_REQUIRED can't pop the upgrade modal on the dashboard.
   useEffect(() => {
     if (!isManagerRole) return;
+    if (!planGatingBypassed && planLevelOf(livePlan ?? company?.plan) < 2) {
+      setPendingRequests(0);
+      return;
+    }
     function loadPending() {
-      get<{ leave_requests: unknown[] }>('/leave-requests?status=pending')
+      get<{ leave_requests: unknown[] }>('/leave-requests?status=pending', { background: true })
         .then((r) => setPendingRequests(r.leave_requests.length))
         .catch(() => {});
     }
     loadPending();
     const interval = setInterval(loadPending, 60000);
     return () => clearInterval(interval);
-  }, [isManagerRole]);
+  }, [isManagerRole, livePlan, company?.plan, planGatingBypassed]);
 
   // MIGRATION_055 — pending approval-workflow count for the sidebar badge. Gated on
   // BOTH isManagerRole and the live plan level (gold, same as the /api/approvals route
@@ -200,7 +207,7 @@ export default function Layout() {
     // regardless of the company's real stored plan level.
     if (!planGatingBypassed && planLevelOf(livePlan ?? company?.plan) < 3) return;
     function loadPendingApprovals() {
-      get<{ requests: unknown[] }>('/approvals/pending')
+      get<{ requests: unknown[] }>('/approvals/pending', { background: true })
         .then((r) => setPendingApprovals(r.requests.length))
         .catch(() => {});
     }
@@ -550,7 +557,9 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <AcknowledgmentModal />
+      {/* Policies are Silver+ (app.ts) — below that there is nothing to acknowledge,
+          so don't mount the on-load/on-focus check at all. */}
+      {(planGatingBypassed || companyPlanLevel >= 2) && <AcknowledgmentModal />}
       <div className="mobile-topbar">
         <button type="button" className="mobile-menu-btn" onClick={() => setMobileNavOpen(true)} title={t.common.menu}>
           <IconMenu />
