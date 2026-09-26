@@ -123,7 +123,7 @@ describe('settleOutcome', () => {
     expect(client.query).toHaveBeenCalledTimes(3);
     expect(client.query).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining("UPDATE invoices SET status = 'paid', payment_date = now()"),
+      expect.stringContaining("UPDATE invoices SET status = 'paid', payment_date = clock_timestamp()"),
       ['invoice-1']
     );
     expect(result).toEqual<SettleOutcomeResult>({
@@ -729,7 +729,7 @@ describe('resolveCheckoutSessionCore — Stage B7 purchase-linked sessions', () 
       'SELECT * FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE',
       'UPDATE payment_attempts SET status = $2 WHERE id = $1',
       'UPDATE payment_checkout_sessions SET status = $2 WHERE id = $1 RETURNING id, status, resolved_at',
-      "UPDATE invoices SET status = 'paid', payment_date = now() WHERE id = $1",
+      "UPDATE invoices SET status = 'paid', payment_date = clock_timestamp() WHERE id = $1",
       'COMMIT',
     ]);
   });
@@ -768,5 +768,128 @@ describe('Stage B7 audit payload builders', () => {
       newValues: { plan: 'gold', subscription_status: 'active', subscription_id: 'sub-1', billing_interval: 'annual' },
     });
     expect(JSON.stringify(payload)).not.toMatch(/token|checkout_url|idempotency|#/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B8 — upgrade-purchase settlement (design v4 §8.4; test T-SET-1).
+// ---------------------------------------------------------------------------
+describe('resolveCheckoutSessionCore — Stage B8 upgrade purchases', () => {
+  const ROUTING = { attempt_id: 'attempt-1', invoice_id: 'invoice-1', purchase_id: 'purchase-1', purchase_company_id: 'company-1' };
+
+  function upgradePool(opts: { maySucceed?: boolean; sourceStatus?: string; companyPlan?: string; sessionStatus?: string } = {}) {
+    const calls: { sql: string; params: any[] }[] = [];
+    const clientQuery = vi.fn(async (sql: string, params: any[] = []) => {
+      calls.push({ sql, params });
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: 'company-1', plan: opts.companyPlan ?? 'bronze', subscription_status: 'active' }] };
+      }
+      if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-1', invoice_id: 'invoice-1', status: 'open', replaces_subscription_id: 'source-1' }] };
+      }
+      if (sql.includes('SELECT id, company_id, plan, status, billing_interval FROM subscriptions WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: 'source-1', company_id: 'company-1', plan: 'bronze', status: opts.sourceStatus ?? 'active', billing_interval: 'monthly' }] };
+      }
+      if (sql.includes('SELECT id, status, plan, billing_interval FROM subscriptions WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: 'pending-1', status: 'pending_payment', plan: 'gold', billing_interval: 'monthly' }] };
+      }
+      if (sql.includes('FROM invoices WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'invoice-1', status: 'issued' }] };
+      if (sql.includes('FROM payment_attempts WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'attempt-1', invoice_id: 'invoice-1', status: 'initiated' }] };
+      if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) return { rows: [{ id: 'session-1', status: opts.sessionStatus ?? 'pending' }] };
+      if (sql.includes('AS may_succeed')) return { rows: [{ may_succeed: opts.maySucceed ?? true }] };
+      if (sql.includes('AS has_other')) return { rows: [{ has_other: false }] };
+      if (sql.includes('UPDATE payment_attempts')) {
+        return { rows: [{ id: 'attempt-1', status: params[1], failed_at: params[1] === 'failed' ? RESOLVED_AT : null, succeeded_at: params[1] === 'succeeded' ? RESOLVED_AT : null, cancelled_at: params[1] === 'cancelled' ? RESOLVED_AT : null }] };
+      }
+      if (sql.includes('UPDATE payment_checkout_sessions')) return { rows: [{ id: 'session-1', status: params[1], resolved_at: RESOLVED_AT }] };
+      if (sql.includes("UPDATE invoices SET status = 'paid'")) return { rows: [{ id: 'invoice-1', status: 'paid', payment_date: RESOLVED_AT }] };
+      if (sql.includes("UPDATE subscriptions SET status = 'superseded'")) return { rows: [{ id: 'source-1' }] };
+      if (sql.includes("UPDATE subscriptions SET status = 'active'")) {
+        return { rows: [{ id: 'pending-1', plan: 'gold', billing_interval: 'monthly', current_period_start: '2026-09-24T08:00:00.000Z', current_period_end: '2026-10-24T08:00:00.000Z' }] };
+      }
+      if (sql.includes('UPDATE companies SET plan')) return { rows: [{ id: 'company-1' }] };
+      if (sql.includes("UPDATE subscription_purchases SET status = 'completed'")) return { rows: [{ completed_at: RESOLVED_AT }] };
+      throw new Error(`unexpected client query: ${sql}`);
+    });
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM payment_checkout_sessions pcs')) return { rows: [ROUTING] };
+        throw new Error(`unexpected pool query: ${sql}`);
+      }),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    };
+    const idx = (needle: string) => calls.findIndex((c) => c.sql.includes(needle));
+    const isWrite = (sql: string) => /^\s*(INSERT|UPDATE|DELETE)\b/.test(sql);
+    return { pool, calls, idx, isWrite };
+  }
+
+  it('succeeded: company -> purchase -> SOURCE -> pending -> invoice -> attempt -> session, gate after all 7 locks, then apply; one COMMIT', async () => {
+    const { pool, calls, idx } = upgradePool();
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') throw new Error('unreachable');
+    expect(result.purchaseApplied).toMatchObject({ superseded_subscription_id: 'source-1', new_values: { plan: 'gold' } });
+    const locks = [
+      idx('FROM companies WHERE id = $1 FOR UPDATE'),
+      idx('FROM subscription_purchases WHERE id = $1 FOR UPDATE'),
+      idx('SELECT id, company_id, plan, status, billing_interval FROM subscriptions'),
+      idx('SELECT id, status, plan, billing_interval FROM subscriptions'),
+      idx('FROM invoices WHERE id = $1 FOR UPDATE'),
+      idx('FROM payment_attempts WHERE id = $1 FOR UPDATE'),
+      idx('FROM payment_checkout_sessions WHERE payment_attempt_id'),
+    ];
+    expect(locks.every((i) => i >= 0)).toBe(true);
+    expect([...locks].sort((a, b) => a - b)).toEqual(locks);
+    const gate = idx('AS may_succeed');
+    expect(gate).toBeGreaterThan(Math.max(...locks));
+    expect(calls[gate].sql).toContain('clock_timestamp()');
+    expect(idx("UPDATE subscriptions SET status = 'superseded'")).toBeGreaterThan(gate);
+    expect(idx("UPDATE subscriptions SET status = 'superseded'")).toBeLessThan(idx("UPDATE subscriptions SET status = 'active'"));
+    expect(calls[idx('SELECT id, company_id, plan, status, billing_interval FROM subscriptions')].params).toEqual(['source-1']);
+    expect(calls[idx("UPDATE invoices SET status = 'paid'")].sql).toContain('payment_date = clock_timestamp()');
+    expect(calls.filter((c) => c.sql === 'COMMIT')).toHaveLength(1);
+  });
+
+  it('succeeded after the window -> 409 SESSION_EXPIRED, ROLLBACK, zero writes', async () => {
+    const { pool, calls, isWrite } = upgradePool({ maySucceed: false });
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result).toMatchObject({ kind: 'conflict', code: 'SESSION_EXPIRED' });
+    expect(calls.some((c) => isWrite(c.sql))).toBe(false);
+    expect(calls.map((c) => c.sql)).toContain('ROLLBACK');
+  });
+
+  it.each(['failed', 'cancelled'] as const)('%s writes only the attempt/session — never the source, pending row or company', async (outcome) => {
+    const { pool, calls } = upgradePool();
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', outcome);
+    expect(result.kind).toBe('ok');
+    const writes = calls.filter((c) => /^\s*UPDATE/.test(c.sql)).map((c) => c.sql);
+    expect(writes.every((s) => /payment_attempts|payment_checkout_sessions/.test(s))).toBe(true);
+  });
+
+  it('replay (session already resolved) -> 409 before the gate, no apply', async () => {
+    const { pool, calls, idx } = upgradePool({ sessionStatus: 'succeeded' });
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result.kind).toBe('conflict');
+    expect(idx('AS may_succeed')).toBe(-1);
+    expect(calls.some((c) => c.sql.includes("'superseded'"))).toBe(false);
+  });
+
+  it('an integrity violation (source no longer active) throws -> ROLLBACK, never silently applied', async () => {
+    const { pool, calls } = upgradePool({ sourceStatus: 'superseded' });
+    await expect(resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded')).rejects.toThrow(/source subscription is 'superseded'/);
+    expect(calls.map((c) => c.sql)).toContain('ROLLBACK');
+    expect(calls.map((c) => c.sql)).not.toContain('COMMIT');
+  });
+
+  it('the applied-audit payload records the superseded source in old and new values', () => {
+    const payload = buildAuditPayloadForPurchaseApplied({
+      purchase_id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-1',
+      old_values: { plan: 'bronze', subscription_status: 'active' }, new_values: { plan: 'gold', subscription_status: 'active' },
+      billing_interval: 'monthly', current_period_start: null, current_period_end: null, completed_at: null,
+      superseded_subscription_id: 'source-1',
+    });
+    expect(payload.oldValues).toEqual({ plan: 'bronze', subscription_status: 'active', subscription_id: 'source-1' });
+    expect(payload.newValues).toMatchObject({ subscription_id: 'pending-1', superseded_subscription_id: 'source-1' });
   });
 });

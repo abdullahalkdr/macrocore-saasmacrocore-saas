@@ -14,12 +14,22 @@ const mocks = vi.hoisted(() => ({
   clientQuery: vi.fn(),
   clientRelease: vi.fn(),
   logAudit: vi.fn(),
+  // Stage B8: answers the open-purchase lookup (default: none).
+  openPurchaseLookup: vi.fn(),
 }));
 
 vi.mock('../../db/pool', () => ({
   pool: {
     query: mocks.poolQuery,
-    connect: vi.fn(async () => ({ query: mocks.clientQuery, release: mocks.clientRelease })),
+    // Stage B8: createSubscriptionInvoice now looks up an open customer
+    // purchase right after the company lock. These pre-B8 cases have none;
+    // that one lookup answers "no rows" here and every other statement still
+    // reaches the per-test clientQuery mock unchanged.
+    connect: vi.fn(async () => ({
+      query: (sql: string, params?: unknown[]) =>
+        typeof sql === 'string' && sql.includes('FROM subscription_purchases sp') ? mocks.openPurchaseLookup(sql, params) : mocks.clientQuery(sql, params),
+      release: mocks.clientRelease,
+    })),
   },
 }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -75,6 +85,7 @@ const INVOICE_ROW = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.logAudit.mockResolvedValue(undefined);
+  mocks.openPurchaseLookup.mockResolvedValue({ rows: [] });
 });
 
 describe('createSubscriptionInvoice() — success path', () => {
@@ -389,5 +400,154 @@ describe('listInvoices() — includes the B3 snapshot fields', () => {
     for (const col of ['invoice_number', 'plan', 'billing_interval', 'currency', 'period_start', 'period_end']) {
       expect(sql).toContain(col);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B8 — T-ADM-3: createSubscriptionInvoice with an open customer purchase
+// (design v4 §8.6). Exact lock order: companies -> subscription_purchases ->
+// the active (source) subscription -> AUTHORITATIVE clock read (B8-R1) ->
+// [void chain] -> INSERT. lockOpenPurchase() also reads the clock before the
+// source lock; that early read must never decide anything here.
+// ---------------------------------------------------------------------------
+describe('createSubscriptionInvoice() — Stage B8 open customer purchase', () => {
+  const OPEN = {
+    id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-inv-1',
+    expires_at: '2026-09-24T10:00:00.000Z', target_plan: 'gold', target_interval: 'annual',
+  };
+
+  // unexpired = the early lockOpenPurchase() read; unexpiredAfterSourceLock
+  // (defaults to unexpired) = the authoritative post-source-lock read.
+  function flow(opts: { unexpired: boolean; unexpiredAfterSourceLock?: boolean; insertError?: any }) {
+    const events: string[] = [];
+    mocks.openPurchaseLookup.mockImplementation(async (sql: string) => {
+      events.push(sql.replace(/\s+/g, ' ').trim());
+      return { rows: [OPEN] };
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string, params: unknown[]) => {
+      events.push(sql.replace(/\s+/g, ' ').trim());
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
+      if (sql.includes('clock_timestamp() < expires_at AS unexpired')) {
+        const sourceLocked = events.some((e) => e.includes("FROM subscriptions WHERE company_id = $1 AND status = 'active' FOR UPDATE"));
+        return { rows: [{ unexpired: sourceLocked ? (opts.unexpiredAfterSourceLock ?? opts.unexpired) : opts.unexpired }] };
+      }
+      if (sql.includes("FROM subscriptions WHERE company_id = $1 AND status = 'active' FOR UPDATE")) return { rows: [ACTIVE_SUBSCRIPTION_ROW] };
+      if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
+        return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-inv-1', status: 'open' }] };
+      }
+      if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
+      if (sql.includes('SELECT id, invoice_number, status FROM invoices')) return { rows: [{ id: 'pending-inv-1', invoice_number: 'MC-SUB-000050', status: 'issued' }] };
+      if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [] };
+      if (sql.includes("UPDATE invoices SET status = 'void'")) return { rows: [{ id: 'pending-inv-1' }] };
+      if (sql.includes("UPDATE subscriptions SET status = 'abandoned'")) return { rows: [{ id: 'pending-sub-1' }] };
+      if (sql.includes("UPDATE subscription_purchases SET status = 'void'")) return { rows: [{ id: 'purchase-1' }] };
+      if (sql.includes('INSERT INTO invoices')) {
+        if (opts.insertError) throw opts.insertError;
+        return { rows: [INVOICE_ROW] };
+      }
+      throw new Error(`unexpected client query: ${sql} ${JSON.stringify(params)}`);
+    });
+    return events;
+  }
+
+  it('unexpired: company -> purchase -> source locks -> authoritative clock, then ROLLBACK + 409 OPEN_CUSTOMER_PURCHASE, zero writes, no audit', async () => {
+    const events = flow({ unexpired: true });
+    const res = makeRes();
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'OPEN_CUSTOMER_PURCHASE', purchase_id: 'purchase-1' });
+    const at = (needle: string) => events.findIndex((e) => e.includes(needle));
+    expect(at('SELECT id FROM companies')).toBeLessThan(at('FROM subscription_purchases sp'));
+    const lastClock = events.map((e, i) => (e.includes('clock_timestamp() < expires_at') ? i : -1)).filter((i) => i >= 0).pop()!;
+    expect(at('FROM subscription_purchases sp')).toBeLessThan(at("FROM subscriptions WHERE company_id = $1 AND status = 'active'"));
+    expect(at("FROM subscriptions WHERE company_id = $1 AND status = 'active'")).toBeLessThan(lastClock);
+    expect(lastClock).toBeLessThan(events.indexOf('ROLLBACK'));
+    expect(events.some((e) => /^(INSERT|UPDATE)/.test(e))).toBe(false);
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('expired: the source is locked BEFORE the void chain; void then INSERT in one COMMIT; void audit precedes the invoice audit', async () => {
+    const events = flow({ unexpired: false });
+    const res = makeRes();
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(201);
+    const at = (needle: string) => events.findIndex((e) => e.includes(needle));
+    const order = [
+      at('SELECT id FROM companies'),
+      at('FROM subscription_purchases sp'),
+      at("FROM subscriptions WHERE company_id = $1 AND status = 'active'"),
+      events.map((e, i) => (e.includes('clock_timestamp() < expires_at') ? i : -1)).filter((i) => i >= 0).pop()!,
+      at('FROM subscription_purchases WHERE id = $1 FOR UPDATE'),
+      at('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE'),
+      at('SELECT id, invoice_number, status FROM invoices'),
+      at("UPDATE subscription_purchases SET status = 'void'"),
+      at('INSERT INTO invoices'),
+      at('COMMIT'),
+    ];
+    for (const i of order) expect(i).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(events.filter((e) => e === 'COMMIT')).toHaveLength(1);
+    expect(mocks.logAudit.mock.calls.map((c) => c[0].action)).toEqual(['subscription_purchase_voided', 'admin_subscription_invoice_issued']);
+    expect(mocks.logAudit.mock.calls[0][0].newValues).toMatchObject({ reason: 'expired_admin_action', admin_action: 'create_subscription_invoice' });
+  });
+
+  it('B8-R1: unexpired before the source lock but expired after it -> treated as EXPIRED (void + invoice), never 409', async () => {
+    flow({ unexpired: true, unexpiredAfterSourceLock: false });
+    const res = makeRes();
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(201);
+    expect(mocks.logAudit.mock.calls[0][0].newValues).toMatchObject({ reason: 'expired_admin_action' });
+  });
+
+  it('B8-R1: the decisive clock read is issued after the source FOR UPDATE, on the database clock, for the locked purchase', async () => {
+    const events = flow({ unexpired: true });
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), makeRes(), NOOP_NEXT);
+    const source = events.findIndex((e) => e.includes("FROM subscriptions WHERE company_id = $1 AND status = 'active' FOR UPDATE"));
+    const clocks = events.map((e, i) => (e.includes('clock_timestamp() < expires_at') ? i : -1)).filter((i) => i >= 0);
+    expect(clocks.some((i) => i > source)).toBe(true);
+    const post = mocks.clientQuery.mock.calls.filter((c) => String(c[0]).includes('clock_timestamp() < expires_at')).pop()!;
+    expect(post[1]).toEqual(['purchase-1']);
+    expect(String(post[0])).not.toMatch(/now\(\)/);
+  });
+
+  it('expired + the duplicate-period conflict: ROLLBACK undoes the void too; 409, no void audit', async () => {
+    const dup: any = new Error('dup');
+    dup.code = '23505';
+    dup.constraint = 'invoices_one_invoice_per_period';
+    const events = flow({ unexpired: false, insertError: dup });
+    mocks.poolQuery.mockResolvedValue({ rows: [INVOICE_ROW] });
+    const res = makeRes();
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(events.some((e) => e.startsWith("UPDATE subscription_purchases SET status = 'void'"))).toBe(true);
+    expect(events).toContain('ROLLBACK');
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('no open purchase: the only addition to the B3 sequence is the one purchase lookup after the company lock', async () => {
+    const events: string[] = [];
+    mocks.openPurchaseLookup.mockImplementation(async (sql: string) => {
+      events.push('PURCHASE_LOOKUP');
+      return { rows: [] };
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      events.push(sql.replace(/\s+/g, ' ').trim());
+      if (sql === 'BEGIN' || sql === 'COMMIT') return {};
+      if (sql.includes('SELECT id FROM companies')) return { rows: [{ id: 'company-1' }] };
+      if (sql.includes('FROM subscriptions WHERE company_id')) return { rows: [ACTIVE_SUBSCRIPTION_ROW] };
+      if (sql.includes('INSERT INTO invoices')) return { rows: [INVOICE_ROW] };
+      throw new Error(`unexpected client query: ${sql}`);
+    });
+    const res = makeRes();
+    await createSubscriptionInvoice(makeReq({ id: 'company-1' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(201);
+    expect(events[0]).toBe('BEGIN');
+    expect(events[1]).toContain('SELECT id FROM companies');
+    expect(events[2]).toBe('PURCHASE_LOOKUP');
+    expect(events[3]).toContain('FROM subscriptions WHERE company_id');
+    expect(events.filter((e) => e === 'PURCHASE_LOOKUP')).toHaveLength(1);
   });
 });

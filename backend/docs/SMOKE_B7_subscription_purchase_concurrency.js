@@ -107,13 +107,21 @@ async function buildSchema(setup) {
     .sort();
   let applied = 0;
   for (const file of migrations) {
-    if (file.startsWith('MIGRATION_086')) continue;
+    // Stage B8: 086 and every later migration are applied explicitly below,
+    // in order — the glob must never apply MIGRATION_087 before 086.
+    if (file >= 'MIGRATION_086') continue;
     await setup.query(fs.readFileSync(path.join(__dirname, file), 'utf8'));
     applied += 1;
   }
   console.log(`Replayed the bootstrap schema + ${applied} migration files (through MIGRATION_085).`);
   await setup.query(fs.readFileSync(path.join(__dirname, 'MIGRATION_086_subscription_purchase_foundation.sql'), 'utf8'));
   console.log('Applied the REAL MIGRATION_086_subscription_purchase_foundation.sql.');
+  // Stage B8: the current settlement / purchase code reads
+  // subscription_purchases.replaces_subscription_id, so this B7 regression
+  // proof also applies the REAL MIGRATION_087. Every scenario here remains a
+  // B7 trial-to-paid purchase (replaces_subscription_id IS NULL).
+  await setup.query(fs.readFileSync(path.join(__dirname, 'MIGRATION_087_subscription_upgrade_foundation.sql'), 'utf8'));
+  console.log('Applied the REAL MIGRATION_087_subscription_upgrade_foundation.sql.');
 }
 
 // A Connectable adapter over a dedicated pg Client that records the
@@ -476,7 +484,11 @@ async function main() {
       const applied = s.company.subscription_status === 'active' && count(s.subs, (x) => x.status === 'active') === 1 && s.purchases.some((x) => x.id === p.purchaseId && x.status === 'completed');
       const voided = s.company.subscription_status === 'trial' && s.purchases.some((x) => x.id === p.purchaseId && x.status === 'void') && s.sessions.some((x) => x.id === c.sessionId && x.status === 'cancelled');
       if (applied === voided) { d5ok = false; console.log('    D5 incoherent', JSON.stringify(s)); }
-      if (applied && !(sw.status === 'rejected' && sw.reason.code === 'NOT_ELIGIBLE')) { d5ok = false; console.log('    D5 switch should be NOT_ELIGIBLE after apply'); }
+      // Stage B8 (design v4 §6.2 / §11 C3a): once the trial purchase applied,
+      // the company is 'active' (upgrade mode), and a trial-shaped confirm
+      // without expected_source_subscription_id is rejected as
+      // UPGRADE_CONTEXT_STALE with zero writes (was NOT_ELIGIBLE in B7).
+      if (applied && !(sw.status === 'rejected' && sw.reason.code === 'UPGRADE_CONTEXT_STALE')) { d5ok = false; console.log('    D5 switch should be UPGRADE_CONTEXT_STALE after apply'); }
       if (voided && !(res.status === 'fulfilled' && res.value.kind === 'conflict')) { d5ok = false; console.log('    D5 resolve should conflict after void'); }
       if (count(s.invoices, (x) => x.status === 'paid') > 1) d5ok = false;
     }
@@ -491,11 +503,13 @@ async function main() {
         confirm(co, 'silver', 'monthly').then((v) => ({ ok: v }), (e) => ({ err: e })),
       ]);
       const s = await state(co);
-      const activationWon = act.status === 201 && con.err && con.err.code === 'NOT_ELIGIBLE' && count(s.purchases, () => true) === 0;
+      // Stage B8: after activation the company is in upgrade mode, so the
+      // trial-shaped confirm (no source assertion) gets UPGRADE_CONTEXT_STALE.
+      const activationWon = act.status === 201 && con.err && con.err.code === 'UPGRADE_CONTEXT_STALE' && count(s.purchases, () => true) === 0;
       const confirmWon = act.status === 409 && act.body && act.body.code === 'OPEN_CUSTOMER_PURCHASE' && con.ok && con.ok.kind === 'created' && s.company.subscription_status === 'trial';
       if (!(activationWon || confirmWon)) { d6ok = false; console.log('    D6 incoherent', act.status, act.body && act.body.code, con.err && con.err.code); }
     }
-    check(`admin activation vs customer confirm (${ITERATIONS} iterations): exactly one wins, the other gets 409 / NOT_ELIGIBLE`, d6ok);
+    check(`admin activation vs customer confirm (${ITERATIONS} iterations): exactly one wins, the other gets 409 / UPGRADE_CONTEXT_STALE (B8: was NOT_ELIGIBLE)`, d6ok);
 
     // D7: admin activation vs simulated success (unexpired purchase)
     let d7ok = true;

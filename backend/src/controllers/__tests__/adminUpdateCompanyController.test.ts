@@ -294,3 +294,32 @@ describe('updateCompany() — Stage B7 open customer purchase', () => {
     expect(events.some((e) => e.includes('subscription_purchases'))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage B8 — T-ADM-1: the same guard protects an UPGRADE purchase on a paid
+// (active, managed) company; the void touches only the pending chain.
+// ---------------------------------------------------------------------------
+describe('updateCompany() — Stage B8 open upgrade purchase on a paid company', () => {
+  const PAID = { ...BEFORE, plan: 'bronze', subscription_status: 'active' };
+
+  it('unexpired: suspending the paid company -> 409 OPEN_CUSTOMER_PURCHASE, zero writes', async () => {
+    const events = b7UpdateFlow({ unexpired: true, managed: true, before: PAID });
+    const res = makeRes();
+    await updateCompany(makeReq({ subscription_status: 'suspended' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('OPEN_CUSTOMER_PURCHASE');
+    expect(events.some((e) => /^UPDATE/.test(e))).toBe(false);
+  });
+
+  it('expired: the upgrade chain is voided (pending row only) and the suspension applies in one COMMIT', async () => {
+    const events = b7UpdateFlow({ unexpired: false, managed: true, before: PAID, after: { ...PAID, subscription_status: 'suspended' } });
+    const res = makeRes();
+    await updateCompany(makeReq({ subscription_status: 'suspended' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(200);
+    expect(events.filter((e) => e === 'COMMIT')).toHaveLength(1);
+    const subscriptionWrites = mocks.clientQuery.mock.calls.filter((c) => /^\s*UPDATE subscriptions/.test(String(c[0])));
+    expect(subscriptionWrites).toHaveLength(1);
+    expect(subscriptionWrites[0][1]).toEqual(['pending-sub-1']);
+    expect(String(subscriptionWrites[0][0])).toContain("'abandoned'");
+  });
+});

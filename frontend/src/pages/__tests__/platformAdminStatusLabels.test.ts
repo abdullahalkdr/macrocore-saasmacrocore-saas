@@ -19,3 +19,11 @@ describe('Platform Admin status labels', () => {
     for (const s of ['pending_payment', 'abandoned', 'past_due', 'cancelled']) expect(canIssueInvoice(s)).toBe(false);
   });
 });
+
+// Stage B8 — T-FE-5: a paid subscription replaced by a self-service upgrade.
+describe('Platform Admin — Stage B8 superseded subscriptions', () => {
+  it('labels superseded rows and never offers "Issue invoice" for them', () => {
+    expect(subscriptionStatusLabel('superseded')).toBe('Superseded — upgraded');
+    expect(canIssueInvoice('superseded')).toBe(false);
+  });
+});

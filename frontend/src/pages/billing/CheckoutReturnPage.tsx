@@ -2,14 +2,21 @@
 // (design v3 §6.1 step 7). Polls the tenant-scoped purchase status; never
 // trusts anything in the URL beyond the purchase id it looks up. Rendered
 // OUTSIDE Layout, like PlanCheckoutPage.
-import { useCallback, useEffect, useRef, useState } from 'react';
+//
+// Stage B8 (design v4 §9.3): fetching, polling and the auth-store plan sync
+// live in the pure returnPageController (tested without a DOM). This page is
+// a thin renderer: order-scoped copy is HISTORICAL ("this order did / did not
+// change your subscription"), and the "current plan" line comes only from
+// the controller's fresh /company/me snapshot — never from the purchase.
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError, get } from '../../api/client';
-import { fetchPurchase, PurchaseSummary, startPurchaseCheckout } from '../../api/billing';
+import { ApiError } from '../../api/client';
+import { fetchCompanySnapshot, fetchPurchase, startPurchaseCheckout } from '../../api/billing';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../store/authStore';
 import { BillingShell } from './PlanCheckoutPage';
-import { billingErrorKey, formatMoney, returnState, shouldPoll, ReturnState } from './billingHelpers';
+import { billingErrorKey, formatMoney, ReturnState } from './billingHelpers';
+import { createReturnPageController, ReturnPageSnapshot } from './returnPageController';
 
 const POLL_MS = 3000;
 const MAX_POLLS = 40; // ~2 minutes, then the customer can refresh manually
@@ -21,51 +28,37 @@ export default function CheckoutReturnPage() {
   const purchaseId = searchParams.get('purchase');
   const updateCompany = useAuthStore((s) => s.updateCompany);
 
-  const [purchase, setPurchase] = useState<PurchaseSummary | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  const [snap, setSnap] = useState<ReturnPageSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const polls = useRef(0);
-  const syncedCompany = useRef(false);
 
-  const load = useCallback(async () => {
+  const controller = useMemo(
+    () =>
+      createReturnPageController({
+        fetchPurchase: (id) => fetchPurchase(id).then((r) => r.purchase),
+        fetchCompany: () => fetchCompanySnapshot(),
+        syncCompanyPlan: (plan) => updateCompany({ plan }),
+        schedule: (fn, ms) => {
+          const handle = setTimeout(fn, ms);
+          return () => clearTimeout(handle);
+        },
+        onUpdate: setSnap,
+        pollMs: POLL_MS,
+        maxPolls: MAX_POLLS,
+      }),
+    [updateCompany]
+  );
+
+  useEffect(() => {
     if (!purchaseId) return;
-    setLoadError(false);
-    try {
-      const { purchase: p } = await fetchPurchase(purchaseId);
-      setPurchase(p);
-      setNotFound(false);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) setNotFound(true);
-      else setLoadError(true);
-    }
-  }, [purchaseId]);
+    setSnap(null);
+    controller.start(purchaseId);
+    return () => controller.stop();
+  }, [controller, purchaseId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const state: ReturnState | null = purchase ? returnState(purchase) : null;
-
-  useEffect(() => {
-    if (!state || !shouldPoll(state) || polls.current >= MAX_POLLS) return;
-    const timer = setTimeout(() => {
-      polls.current += 1;
-      load();
-    }, POLL_MS);
-    return () => clearTimeout(timer);
-  }, [state, purchase, load]);
-
-  // On success, refresh the cached company snapshot so the sidebar's plan
-  // locks update immediately (Layout also re-polls /company/me on its own).
-  useEffect(() => {
-    if (state !== 'success' || syncedCompany.current) return;
-    syncedCompany.current = true;
-    get<{ plan: string }>('/company/me')
-      .then((c) => updateCompany({ plan: c.plan }))
-      .catch(() => {});
-  }, [state, updateCompany]);
+  const purchase = snap?.purchase ?? null;
+  const view = snap?.view ?? null;
+  const state: ReturnState | null = view?.state ?? null;
 
   async function retry() {
     if (!purchase || busy) return;
@@ -77,51 +70,89 @@ export default function CheckoutReturnPage() {
     } catch (err) {
       setActionError(t.billing.errors[billingErrorKey(err instanceof ApiError ? err.code : undefined)]);
       setBusy(false);
-      load();
+      if (purchaseId) controller.start(purchaseId);
     }
   }
 
   const planName = (key: string) => t.billing.planNames[key] ?? key;
+  const statusName = (status: string) => {
+    switch (status) {
+      case 'active': return t.account.billing.activeStatus;
+      case 'trial': return t.account.billing.trialWithoutEndStatus;
+      case 'past_due': return t.account.billing.pastDueStatus;
+      case 'suspended': return t.account.billing.suspendedStatus;
+      case 'cancelled': return t.account.billing.cancelledStatus;
+      default: return t.account.billing.unknownStatus;
+    }
+  };
   const startOver = () =>
     navigate(purchase ? `/billing/plans/${purchase.plan}?interval=${purchase.billing_interval}` : '/billing/plans/silver');
 
   let body;
   if (!purchaseId) {
     body = <div className="error-banner">{t.billing.returnPage.missingId}</div>;
-  } else if (notFound) {
+  } else if (snap?.notFound) {
     body = <div className="error-banner">{t.billing.returnPage.notFound}</div>;
-  } else if (loadError && !purchase) {
+  } else if (snap?.loadError && !purchase) {
     body = (
       <div className="billing-result">
         <div className="error-banner" role="alert">{t.billing.errors.generic}</div>
-        <button type="button" className="btn btn-secondary" onClick={load}>{t.billing.retryLoad}</button>
+        <button type="button" className="btn btn-secondary" onClick={() => controller.start(purchaseId)}>
+          {t.billing.retryLoad}
+        </button>
       </div>
     );
-  } else if (!purchase || !state) {
+  } else if (!purchase || !view || !state) {
     body = <div className="muted" role="status">{t.billing.returnPage.loading}</div>;
   } else {
-    const view: Record<ReturnState, { icon: string; tone: 'ok' | 'warn' | 'bad'; title: string; text: string }> = {
-      success: { icon: '✓', tone: 'ok', title: t.billing.returnPage.success, text: t.billing.returnPage.successBody(planName(purchase.plan)) },
-      failed: { icon: '!', tone: 'bad', title: t.billing.returnPage.failed, text: t.billing.returnPage.retryBody },
-      cancelled: { icon: '×', tone: 'warn', title: t.billing.returnPage.cancelled, text: t.billing.returnPage.retryBody },
-      pending: { icon: '…', tone: 'warn', title: t.billing.returnPage.pending, text: t.billing.returnPage.pendingBody },
-      notStarted: { icon: '…', tone: 'warn', title: t.billing.returnPage.notStarted, text: t.billing.returnPage.retryBody },
-      expired: { icon: '⏱', tone: 'warn', title: t.billing.returnPage.expired, text: t.billing.returnPage.expiredBody },
-      closed: { icon: '—', tone: 'warn', title: t.billing.returnPage.closed, text: t.billing.returnPage.closedBody },
+    const b7Text: Record<ReturnState, string> = {
+      success: t.billing.returnPage.successBody(planName(purchase.plan)),
+      failed: t.billing.returnPage.retryBody,
+      cancelled: t.billing.returnPage.retryBody,
+      pending: t.billing.returnPage.pendingBody,
+      notStarted: t.billing.returnPage.retryBody,
+      expired: t.billing.returnPage.expiredBody,
+      closed: t.billing.returnPage.closedBody,
     };
-    const v = view[state];
+    const head: Record<ReturnState, { icon: string; tone: 'ok' | 'warn' | 'bad'; title: string }> = {
+      success: { icon: '✓', tone: 'ok', title: t.billing.returnPage.success },
+      failed: { icon: '!', tone: 'bad', title: t.billing.returnPage.failed },
+      cancelled: { icon: '×', tone: 'warn', title: t.billing.returnPage.cancelled },
+      pending: { icon: '…', tone: 'warn', title: t.billing.returnPage.pending },
+      notStarted: { icon: '…', tone: 'warn', title: t.billing.returnPage.notStarted },
+      expired: { icon: '⏱', tone: 'warn', title: t.billing.returnPage.expired },
+      closed: { icon: '—', tone: 'warn', title: t.billing.returnPage.closed },
+    };
+    const h = head[state];
+    const orderText =
+      view.orderLine.key === 'orderUpgraded'
+        ? t.billing.returnPage.orderUpgraded(planName(view.orderLine.plan))
+        : view.orderLine.key === 'orderDidNotChange'
+        ? t.billing.returnPage.orderDidNotChange
+        : b7Text[state];
     const canRetry = state === 'failed' || state === 'cancelled' || state === 'pending' || state === 'notStarted';
     body = (
       <div className="card billing-result" aria-live="polite">
-        <div className={`billing-status-icon ${v.tone}`} aria-hidden="true">{v.icon}</div>
-        <h1 style={{ fontSize: 20 }}>{v.title}</h1>
-        <p className="muted" style={{ fontSize: 13 }}>{v.text}</p>
+        <div className={`billing-status-icon ${h.tone}`} aria-hidden="true">{h.icon}</div>
+        <h1 style={{ fontSize: 20 }}>{h.title}</h1>
+        <p className="muted" style={{ fontSize: 13 }}>{orderText}</p>
         <p style={{ fontSize: 13, margin: '10px 0 0' }}>
           <strong>{planName(purchase.plan)}</strong> ·{' '}
           {purchase.billing_interval === 'annual' ? t.billing.annual : t.billing.monthly} ·{' '}
           <bdi dir="ltr" className="billing-amount">{formatMoney(purchase.amount, purchase.currency)}</bdi>
         </p>
+        {view.upgradeFrom && (
+          <p className="billing-footnote" style={{ margin: '4px 0 0' }}>{t.billing.returnPage.upgradeFrom(planName(view.upgradeFrom))}</p>
+        )}
         <p className="billing-footnote">{t.billing.returnPage.invoice(purchase.invoice_number)}</p>
+        {snap?.companyStatus === 'ok' && view.currentPlan && (
+          <p style={{ fontSize: 13, margin: '6px 0 0' }}>
+            {t.billing.returnPage.currentPlanNow(planName(view.currentPlan.plan), statusName(view.currentPlan.status))}
+          </p>
+        )}
+        {snap?.companyStatus === 'failed' && (
+          <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>{t.billing.returnPage.currentPlanUnknown}</p>
+        )}
         {actionError && <div className="error-banner" role="alert">{actionError}</div>}
         <div className="actions">
           {state === 'success' && (

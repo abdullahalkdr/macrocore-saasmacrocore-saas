@@ -163,3 +163,79 @@ describe('GET /api/billing/purchases/:id', () => {
     expect(mocks.getPurchaseSummary).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage B8 — the upgrade source assertion at the controller boundary
+// (design v4 §6.2; tests T-API-6, T-API-7, T-API-8).
+// ---------------------------------------------------------------------------
+describe('POST /api/billing/purchases — Stage B8 source assertion', () => {
+  const SOURCE = '11111111-1111-4111-8111-111111111111';
+
+  it.each([
+    ['a number', 123],
+    ['an empty string', ''],
+    ['a non-UUID string', 'x'],
+    ['an array', []],
+    ['an object', {}],
+    ['null', null],
+  ])('T-API-6: a malformed expected_source_subscription_id (%s) -> 409 UPGRADE_CONTEXT_STALE with zero service calls', async (_label, value) => {
+    const res = makeRes();
+    await createPurchase(makeReq({ plan: 'gold', billing_interval: 'monthly', expected_source_subscription_id: value }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ success: false, code: 'UPGRADE_CONTEXT_STALE' });
+    expect(mocks.confirmPurchase).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseSummary).not.toHaveBeenCalled();
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it('T-API-7: a trial request WITHOUT the field keeps the exact B7 service input (no source key at all)', async () => {
+    mocks.confirmPurchase.mockResolvedValue({ kind: 'created', purchaseId: 'p-1', invoiceId: 'i-1', invoiceNumber: 'N', subscriptionId: 's-1', voided: null });
+    await createPurchase(makeReq({ plan: 'silver', billing_interval: 'annual' }), makeRes(), NOOP_NEXT);
+    const passed = mocks.confirmPurchase.mock.calls[0][1];
+    expect(Object.keys(passed).sort()).toEqual(['amountText', 'companyId', 'currency', 'interval', 'plan']);
+  });
+
+  it('a well-formed value is forwarded to the service as the (non-authoritative) assertion', async () => {
+    mocks.confirmPurchase.mockResolvedValue({
+      kind: 'created', purchaseId: 'p-9', invoiceId: 'i-9', invoiceNumber: 'MC-SUB-000030', subscriptionId: 's-9', voided: null,
+      upgrade: { replacesSubscriptionId: SOURCE, fromPlan: 'bronze' },
+    });
+    const res = makeRes();
+    await createPurchase(makeReq({ plan: 'gold', billing_interval: 'monthly', expected_source_subscription_id: SOURCE }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(201);
+    expect(mocks.confirmPurchase).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1', plan: 'gold', interval: 'monthly', currency: 'USD', amountText: '67.00', expectedSourceSubscriptionId: SOURCE,
+    });
+    const created = mocks.logAudit.mock.calls.find((c) => c[0].action === 'subscription_purchase_created')![0];
+    expect(created.newValues).toMatchObject({ kind: 'upgrade', replaces_subscription_id: SOURCE, from_plan: 'bronze' });
+  });
+
+  it.each([
+    ['UPGRADE_CONTEXT_STALE'],
+    ['NOT_AN_UPGRADE'],
+    ['INTERVAL_CHANGE_NOT_SUPPORTED'],
+    ['UNPAID_INVOICE'],
+  ])('maps the service code %s to 409 and writes no audit', async (code) => {
+    mocks.confirmPurchase.mockRejectedValue(new PurchaseError(409, code, 'x'));
+    const res = makeRes();
+    await createPurchase(makeReq({ plan: 'gold', billing_interval: 'monthly', expected_source_subscription_id: SOURCE }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe(code);
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+
+  it.each(['source_plan', 'from_plan', 'replaces_subscription_id'])(
+    'T-API-8: the authoritative field "%s" is rejected with 400 UNKNOWN_FIELD even alongside a valid assertion',
+    async (field) => {
+      const res = makeRes();
+      await createPurchase(
+        makeReq({ plan: 'gold', billing_interval: 'monthly', expected_source_subscription_id: SOURCE, [field]: 'x' }),
+        res,
+        NOOP_NEXT
+      );
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'UNKNOWN_FIELD', fields: [field] });
+      expect(mocks.confirmPurchase).not.toHaveBeenCalled();
+    }
+  );
+});

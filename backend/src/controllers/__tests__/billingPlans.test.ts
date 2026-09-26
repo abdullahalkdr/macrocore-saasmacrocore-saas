@@ -45,6 +45,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.allowlisted.mockReturnValue(true);
   mocks.getOpenPurchaseSummary.mockResolvedValue(null);
+  // Stage B8: follow-up upgrade-mode reads (live-row count, unpaid-invoice
+  // check) for paid tenants; the first call is always the company row.
+  mocks.poolQuery.mockResolvedValue({ rows: [{ n: 1, has_unpaid: false }] });
 });
 
 describe('GET /api/billing/plans', () => {
@@ -108,5 +111,102 @@ describe('GET /api/billing/plans', () => {
   it('404 when the company does not exist', async () => {
     mocks.poolQuery.mockResolvedValueOnce({ rows: [] });
     await expect(getPlans(makeReq(), makeRes(), NOOP_NEXT)).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B8 — the upgrade object (design v4 §6.1; test T-API-10). The legacy
+// can_purchase / purchase_block_reason keep their exact B7 meaning.
+// ---------------------------------------------------------------------------
+describe('GET /api/billing/plans — Stage B8 upgrade object', () => {
+  const SOURCE = '11111111-1111-4111-8111-111111111111';
+  function paid(plan: string, interval = 'monthly', overrides: Record<string, unknown> = {}) {
+    companyRow({ plan, subscription_status: 'active', live_id: SOURCE, live_status: 'active', live_plan: plan, live_interval: interval, ...overrides });
+  }
+
+  it('legacy fields for a paid tenant stay exactly B7 (can_purchase false, NOT_ELIGIBLE)', async () => {
+    paid('bronze');
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body).toMatchObject({ can_purchase: false, purchase_block_reason: 'NOT_ELIGIBLE' });
+  });
+
+  it.each([
+    ['bronze', 'monthly', ['silver', 'gold']],
+    ['bronze', 'annual', ['silver', 'gold']],
+    ['silver', 'annual', ['gold']],
+  ])('a %s/%s JWT admin gets targets %j at the SOURCE interval, and the source id', async (plan, interval, targets) => {
+    paid(plan, interval);
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toEqual({ available: true, block_reason: null, source_subscription_id: SOURCE, interval, targets });
+    expect(res.body.current.live_subscription.id).toBe(SOURCE);
+  });
+
+  it('a gold source -> NO_UPGRADE_AVAILABLE with no targets', async () => {
+    paid('gold', 'annual');
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'NO_UPGRADE_AVAILABLE', targets: [] });
+  });
+
+  it('an enterprise source, or companies.plan out of step with the live row -> NOT_ELIGIBLE', async () => {
+    paid('enterprise', 'annual');
+    let res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'NOT_ELIGIBLE', targets: [] });
+    paid('bronze', 'monthly', { plan: 'silver' });
+    res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'NOT_ELIGIBLE' });
+  });
+
+  it('an unpaid issued source invoice -> UNPAID_INVOICE (checked on the live subscription id)', async () => {
+    paid('bronze');
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ n: 1 }] }).mockResolvedValueOnce({ rows: [{ has_unpaid: true }] });
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'UNPAID_INVOICE' });
+    expect(mocks.poolQuery.mock.calls[2][1]).toEqual([SOURCE]);
+  });
+
+  it('simulator unavailable -> CHECKOUT_UNAVAILABLE', async () => {
+    mocks.allowlisted.mockReturnValue(false);
+    paid('bronze');
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'CHECKOUT_UNAVAILABLE' });
+  });
+
+  it('a non-admin user and an API key never see the source id', async () => {
+    paid('bronze');
+    let res = makeRes();
+    await getPlans(makeReq('employee'), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'NOT_ADMIN', source_subscription_id: null });
+    expect(res.body.current.live_subscription.id).toBeNull();
+    paid('bronze');
+    res = makeRes();
+    await getPlans(makeReq('admin', { 'x-api-key': 'k' }), res, NOOP_NEXT);
+    expect(res.body.upgrade).toMatchObject({ available: false, block_reason: 'USER_SESSION_REQUIRED', source_subscription_id: null });
+    expect(res.body.current.live_subscription.id).toBeNull();
+  });
+
+  it('no upgrade object for trial, suspended, cancelled, past_due or multi-live companies', async () => {
+    for (const row of [
+      {},
+      { subscription_status: 'suspended' },
+      { subscription_status: 'cancelled' },
+      { plan: 'bronze', subscription_status: 'active', live_id: SOURCE, live_status: 'past_due', live_plan: 'bronze', live_interval: 'monthly' },
+    ]) {
+      companyRow(row);
+      const res = makeRes();
+      await getPlans(makeReq(), res, NOOP_NEXT);
+      expect(res.body.upgrade).toBeNull();
+    }
+    paid('bronze');
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ n: 2 }] });
+    const res = makeRes();
+    await getPlans(makeReq(), res, NOOP_NEXT);
+    expect(res.body.upgrade).toBeNull();
   });
 });

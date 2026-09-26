@@ -420,3 +420,18 @@ describe('resolveHostedCheckoutSession — Stage B7', () => {
     expect(mocks.logAudit.mock.calls[1][0].companyId).toBe('company-allowed');
   });
 });
+
+// Stage B8 — T-SIM-1: a stale session of a voided upgrade chain (its session
+// was cancelled by voidPurchaseChain) can no longer succeed: the shared core
+// reports a conflict before its gate, and the hosted page writes no audit.
+describe('resolveHostedCheckoutSession — Stage B8 stale upgrade session', () => {
+  it('a cancelled session from a superseded/voided upgrade chain -> 409, no audit', async () => {
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [{ company_id: 'company-allowed' }] });
+    mocks.resolveCheckoutSessionCore.mockResolvedValueOnce({ kind: 'conflict', message: "checkout session is already resolved as 'cancelled'" });
+    const res = makeRes();
+    await resolveHostedCheckoutSession(makeReq(bearerFor(SESSION_ID), { outcome: 'succeeded' }), res, NOOP_NEXT);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ success: false, error: "checkout session is already resolved as 'cancelled'" });
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+  });
+});

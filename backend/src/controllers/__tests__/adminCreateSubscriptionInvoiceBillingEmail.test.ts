@@ -26,7 +26,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../db/pool', () => ({
   pool: {
     query: mocks.poolQuery,
-    connect: vi.fn(async () => ({ query: mocks.clientQuery, release: mocks.clientRelease })),
+    // Stage B8: createSubscriptionInvoice now looks up an open customer
+    // purchase right after the company lock. These pre-B8 cases have none;
+    // that one lookup answers "no rows" here and every other statement still
+    // reaches the per-test clientQuery mock unchanged.
+    connect: vi.fn(async () => ({
+      query: (sql: string, params?: unknown[]) =>
+        typeof sql === 'string' && sql.includes('FROM subscription_purchases sp') ? Promise.resolve({ rows: [] }) : mocks.clientQuery(sql, params),
+      release: mocks.clientRelease,
+    })),
   },
 }));
 vi.mock('../../utils/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));

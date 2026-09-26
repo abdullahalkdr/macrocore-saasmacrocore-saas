@@ -5,7 +5,7 @@ import { useUpgradeModalStore } from '../store/upgradeModalStore';
 import { useAuthStore } from '../store/authStore';
 import { SALES_EMAIL } from '../pricingData';
 import { fetchBillingPlans, PlansResponse } from '../api/billing';
-import { currentPlanKey, formatMoney, planCta, planPrice } from '../pages/billing/billingHelpers';
+import { currentPlanKey, formatMoney, planCta, planPrice, upgradeIntervalFor } from '../pages/billing/billingHelpers';
 import { IconClose } from './Icon';
 
 // The Wafeq-style upgrade popup ("ترقية باقتك"): an optional blocked-feature
@@ -53,7 +53,10 @@ export default function UpgradeModal() {
     gold: t.pricing.taglineGold,
     enterprise: t.pricing.taglineEnterprise,
   };
-  const interval = annual ? 'annual' : 'monthly';
+  // Stage B8: in upgrade mode the cycle is locked to the current
+  // subscription's interval (decision O4) and the toggle is hidden.
+  const lockedInterval = upgradeIntervalFor(plans);
+  const interval = lockedInterval ?? (annual ? 'annual' : 'monthly');
   const current = plans ? currentPlanKey(plans.current) : null;
   const cards = plans?.plans ?? [];
 
@@ -86,14 +89,20 @@ export default function UpgradeModal() {
           )}
 
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-            <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
-              <button type="button" aria-pressed={annual} onClick={() => setAnnual(true)}>
-                {t.pricing.annual}
-              </button>
-              <button type="button" aria-pressed={!annual} onClick={() => setAnnual(false)}>
-                {t.pricing.monthly}
-              </button>
-            </div>
+            {lockedInterval ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t.billing.confirm.sameIntervalNote(lockedInterval === 'annual' ? t.billing.annual : t.billing.monthly)}
+              </span>
+            ) : (
+              <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
+                <button type="button" aria-pressed={annual} onClick={() => setAnnual(true)}>
+                  {t.pricing.annual}
+                </button>
+                <button type="button" aria-pressed={!annual} onClick={() => setAnnual(false)}>
+                  {t.pricing.monthly}
+                </button>
+              </div>
+            )}
           </div>
 
           {loadFailed && (
@@ -153,6 +162,16 @@ export default function UpgradeModal() {
                       <button type="button" className="btn btn-primary btn-sm" onClick={() => choose(plan.key)}>
                         {t.billing.modal.choose}
                       </button>
+                    )}
+                    {cta === 'upgrade' && (
+                      <button type="button" className="btn btn-primary btn-sm" onClick={() => choose(plan.key)}>
+                        {t.billing.modal.upgrade}
+                      </button>
+                    )}
+                    {cta === 'lower' && (
+                      <div className="muted" style={{ textAlign: 'center', marginTop: 'auto' }}>
+                        {t.billing.modal.lowerPlan}
+                      </div>
                     )}
                     {cta === 'contact_sales' && (
                       <a

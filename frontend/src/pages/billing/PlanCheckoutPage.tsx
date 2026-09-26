@@ -6,7 +6,9 @@
 // Every price, feature, limit, current-plan fact and availability flag comes
 // from GET /api/billing/plans. Money is the server's exact decimal string,
 // displayed verbatim — this page performs no arithmetic on it. Confirming
-// sends ONLY {plan, billing_interval}; the server decides everything else.
+// sends ONLY {plan, billing_interval}, plus expected_source_subscription_id
+// for a paid-to-paid upgrade (Stage B8, from /plans upgrade.source_subscription_id);
+// the server decides everything else.
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
@@ -22,11 +24,29 @@ import {
   currentPlanKey,
   featureIncluded,
   formatMoney,
+  normalizeIntervalParam,
   openPurchaseRelation,
-  parseIntervalParam,
   parsePlanParam,
   planPrice,
+  shouldRefetchPlans,
+  upgradeBlockKey,
 } from './billingHelpers';
+
+// Renders the approved upgrade disclosure verbatim, with the price isolated
+// in an LTR <bdi> so the currency sign never flips inside Arabic text. The
+// i18n function is called with a private marker in place of the price, and
+// the sentence is split around it — the approved wording is never rebuilt.
+const PRICE_MARKER = '\u0000PRICE\u0000';
+function DisclosureWithPrice({ text, price }: { text: string; price: string }) {
+  const [before, after] = text.split(PRICE_MARKER);
+  return (
+    <>
+      {before}
+      <bdi dir="ltr" className="billing-amount">{price}</bdi>
+      {after ?? ''}
+    </>
+  );
+}
 
 // Shared standalone shell for both billing pages (brand, language + theme
 // toggles, a way back into the app). Mirrors SubscriptionExpiredPage's
@@ -77,9 +97,13 @@ export default function PlanCheckoutPage() {
   const params = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const planKey = parsePlanParam(params.plan);
-  const interval = parseIntervalParam(searchParams.get('interval'));
 
   const [data, setData] = useState<PlansResponse | null>(null);
+  // Stage B8: in upgrade mode the only purchasable interval is the source's
+  // (decision O4) — any other ?interval value is replaced, and the cycle
+  // toggles are hidden.
+  const interval = normalizeIntervalParam(searchParams.get('interval'), data);
+  const upgrade = data?.upgrade ?? null;
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -91,6 +115,14 @@ export default function PlanCheckoutPage() {
       .catch(() => setLoadError(true));
   };
   useEffect(load, []);
+  useEffect(() => {
+    if (!upgrade) return;
+    if (searchParams.get('interval') !== upgrade.interval) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('interval', upgrade.interval);
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [upgrade, searchParams, setSearchParams]);
 
   const plan = useMemo(() => data?.plans.find((p) => p.key === planKey) ?? null, [data, planKey]);
   const planName = (key: string) => t.billing.planNames[key] ?? key;
@@ -107,15 +139,28 @@ export default function PlanCheckoutPage() {
     setBusy(true);
     setActionError(null);
     try {
-      const { purchase } = await createPurchase(planKey, interval);
+      // Stage B8: an upgrade sends the source this page rendered (from the
+      // same /plans response) as the optimistic-concurrency assertion; a
+      // trial purchase sends the exact B7 body.
+      const expectedSource = upgrade?.source_subscription_id ?? undefined;
+      const { purchase } = await createPurchase(planKey, interval, expectedSource);
       const { checkout_url } = await startPurchaseCheckout(purchase.id);
       window.location.assign(checkout_url);
     } catch (err) {
       const code = err instanceof ApiError ? err.code : undefined;
       setActionError(t.billing.errors[billingErrorKey(code)]);
       setBusy(false);
-      // Refresh the server view (availability/eligibility may have changed).
-      fetchBillingPlans().then(setData).catch(() => {});
+      // Refresh the server view (availability/eligibility/source may have
+      // changed). A stale-context rejection is never auto-resubmitted: the
+      // page re-renders with the new source and disclosure first.
+      // For a stale context the old disclosure is taken off screen until the
+      // fresh /plans response (new source, new end date) has rendered.
+      if (shouldRefetchPlans(code)) setData(null);
+      fetchBillingPlans()
+        .then(setData)
+        .catch(() => {
+          if (shouldRefetchPlans(code)) setLoadError(true);
+        });
     }
   }
 
@@ -152,9 +197,23 @@ export default function PlanCheckoutPage() {
   const trialEndsIso = data.current.trial_end_date;
   const trialStillRunning = onTrial && !!trialEndsIso && new Date(trialEndsIso).getTime() > Date.now();
   const price = planPrice(plan, interval);
-  const block = blockReasonKey(data.purchase_block_reason);
   const relation = openPurchaseRelation(data.open_purchase, plan.key, interval);
   const standardPlans = data.plans;
+  // Stage B8: in upgrade mode the block comes from the upgrade object (a
+  // target outside upgrade.targets is "not an upgrade"); otherwise the B7
+  // legacy fields apply unchanged.
+  const upgradeBlock = upgrade ? upgradeBlockKey(upgrade.block_reason) : null;
+  const notAnUpgradeTarget = !!upgrade && !plan.contact_sales && !upgrade.targets.includes(plan.key);
+  const block = upgrade ? null : blockReasonKey(data.purchase_block_reason);
+  const upgradeBlockText =
+    upgradeBlock === null
+      ? null
+      : upgradeBlock === 'notEligible'
+      ? t.billing.errors.notEligible
+      : t.billing.blocked[upgradeBlock];
+  const sourceEnd = data.current.live_subscription?.current_period_end ?? null;
+  const intervalLabel = interval === 'annual' ? t.billing.annual : t.billing.monthly;
+  const showCycleToggle = !upgrade;
 
   return (
     <BillingShell>
@@ -175,7 +234,7 @@ export default function PlanCheckoutPage() {
               {planName(plan.key)}{' '}
               {current === plan.key && <span className="tag green">{t.billing.currentPlan}</span>}
             </h2>
-            {plan.prices && (
+            {plan.prices && showCycleToggle && (
               <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
                 <button type="button" aria-pressed={interval === 'monthly'} onClick={() => setInterval('monthly')}>
                   {t.billing.monthly}
@@ -240,6 +299,55 @@ export default function PlanCheckoutPage() {
                 {t.billing.contactSales}
               </a>
             </>
+          ) : upgrade ? (
+            notAnUpgradeTarget || upgradeBlockText ? (
+              <>
+                <div className="info-banner" role="status">
+                  {notAnUpgradeTarget && upgradeBlock !== 'notEligible' && upgradeBlock !== 'noUpgradeAvailable'
+                    ? t.billing.blocked.notAnUpgrade
+                    : upgradeBlockText}
+                </div>
+                {upgradeBlock !== 'notAdmin' && upgradeBlock !== 'sessionRequired' && (
+                  <a
+                    className="btn btn-secondary"
+                    href={`mailto:${SALES_EMAIL}?subject=${encodeURIComponent(`Upgrade to ${planName(plan.key)}`)}`}
+                  >
+                    {t.pricing.ctaUpgradeContact}
+                  </a>
+                )}
+              </>
+            ) : (
+              <>
+                {relation === 'same' && <div className="info-banner">{t.billing.confirm.sameOpen}</div>}
+                {relation === 'other' && data.open_purchase && (
+                  <div className="info-banner">{t.billing.confirm.replacesOther(planName(data.open_purchase.plan))}</div>
+                )}
+                <div className="billing-disclosure">
+                  <DisclosureWithPrice
+                    text={t.billing.confirm.upgradeRule(
+                      planName(current ?? ''),
+                      planName(plan.key),
+                      formatDate(sourceEnd, lang),
+                      PRICE_MARKER
+                    )}
+                    price={price ? formatMoney(price.amount, data.currency) : ''}
+                  />
+                </div>
+                <p className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</p>
+                <p className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.windowNote(data.checkout_window_minutes)}</p>
+                {actionError && <div className="error-banner" role="alert">{actionError}</div>}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={confirmAndPay}
+                  disabled={busy}
+                  aria-busy={busy}
+                >
+                  {busy ? t.billing.confirm.working : relation === 'same' ? t.billing.confirm.continueButton : t.billing.confirm.upgradeButton}
+                </button>
+              </>
+            )
           ) : block ? (
             <>
               <div className="info-banner" role="status">{t.billing.blocked[block]}</div>
@@ -280,14 +388,18 @@ export default function PlanCheckoutPage() {
       <section className="card no-pad" aria-labelledby="billing-compare-title">
         <div className="card-head">
           <h2 id="billing-compare-title">{t.billing.compareTitle}</h2>
-          <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
-            <button type="button" aria-pressed={interval === 'monthly'} onClick={() => setInterval('monthly')}>
-              {t.billing.monthly}
-            </button>
-            <button type="button" aria-pressed={interval === 'annual'} onClick={() => setInterval('annual')}>
-              {t.billing.annual}
-            </button>
-          </div>
+          {showCycleToggle ? (
+            <div className="billing-segment" role="group" aria-label={t.billing.billingCycle}>
+              <button type="button" aria-pressed={interval === 'monthly'} onClick={() => setInterval('monthly')}>
+                {t.billing.monthly}
+              </button>
+              <button type="button" aria-pressed={interval === 'annual'} onClick={() => setInterval('annual')}>
+                {t.billing.annual}
+              </button>
+            </div>
+          ) : (
+            <span className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</span>
+          )}
         </div>
         <div className="table-wrap">
           <table className="billing-compare">

@@ -7,6 +7,8 @@ import {
   monthlyEquivalentText,
   PLAN_FEATURES,
   PRICE_TEXT_RE,
+  SELF_SERVICE_PLANS,
+  upgradeTargetsFor,
 } from '../planCatalog';
 import { APPROVED_PRICING_CATALOG } from '../pricingCatalog';
 import { BRONZE_LOCATION_LIMIT, PLAN_LEVEL } from '../planFeatures';
@@ -129,5 +131,25 @@ describe('self-service guards and the checkout window constant', () => {
   it('the checkout window is exactly 30 minutes (decision A3)', () => {
     expect(CHECKOUT_WINDOW_MINUTES).toBe(30);
     expect(Number.isInteger(CHECKOUT_WINDOW_MINUTES)).toBe(true);
+  });
+});
+
+// Stage B8 — T-CAT-1: upgrade targets derive from PLAN_LEVEL (design v4 §6.1).
+describe('upgradeTargetsFor (Stage B8)', () => {
+  it('returns strictly higher self-service plans only', () => {
+    expect(upgradeTargetsFor('bronze')).toEqual(['silver', 'gold']);
+    expect(upgradeTargetsFor('silver')).toEqual(['gold']);
+    expect(upgradeTargetsFor('gold')).toEqual([]);
+    expect(upgradeTargetsFor('enterprise')).toEqual([]);
+    expect(upgradeTargetsFor('trial')).toEqual([]);
+    expect(upgradeTargetsFor('platinum')).toEqual([]);
+  });
+
+  it('agrees with PLAN_LEVEL for every self-service pair', () => {
+    for (const from of SELF_SERVICE_PLANS) {
+      for (const to of SELF_SERVICE_PLANS) {
+        expect(upgradeTargetsFor(from).includes(to)).toBe(PLAN_LEVEL[to] > PLAN_LEVEL[from]);
+      }
+    }
   });
 });

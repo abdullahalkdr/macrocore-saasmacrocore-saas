@@ -145,6 +145,8 @@ export async function submitActivation(
 const SUBSCRIPTION_STATUS_LABELS: Record<string, string> = {
   pending_payment: 'Pending payment — customer checkout',
   abandoned: 'Abandoned — never activated',
+  // Stage B8 — a paid subscription replaced by a self-service upgrade.
+  superseded: 'Superseded — upgraded',
 };
 const INVOICE_STATUS_LABELS: Record<string, string> = {
   void: 'Void — unpaid, closed',

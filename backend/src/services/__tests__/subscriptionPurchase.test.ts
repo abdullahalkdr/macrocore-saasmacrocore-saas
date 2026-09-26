@@ -224,6 +224,9 @@ describe('confirmPurchase — creation (design v3 §8.3 / §9.2)', () => {
   ])('%s -> 409 NOT_ELIGIBLE, ROLLBACK, zero writes', async (_label, overrides, hasLive) => {
     on('FROM companies WHERE id = $1 FOR UPDATE', { rows: [{ id: COMPANY, plan: 'trial', subscription_status: 'trial', ...overrides }] });
     on('AS has_live', { rows: [{ has_live: hasLive }] });
+    // Stage B8: a non-trial company takes the upgrade path; with no single
+    // active live row it is rejected as NOT_ELIGIBLE before any other lock.
+    on("FROM subscriptions WHERE company_id = $1 AND status IN ('active','past_due')", { rows: [] });
     const pool = makePool();
     await expect(confirmPurchase(pool as any, INPUT)).rejects.toMatchObject({ status: 409, code: 'NOT_ELIGIBLE' });
     expect(sqls()).toContain('ROLLBACK');
@@ -417,9 +420,14 @@ describe('applyPurchaseOnTrustedSuccess (design v3 §9.5)', () => {
       old_values: { plan: 'trial', subscription_status: 'trial' }, new_values: { plan: 'gold', subscription_status: 'active' },
     });
     expect(settle.invoiceNewStatus).toBe('paid');
-    // No statement reads the clock or the deadline (B6's own invoice
-    // payment_date = now() stamp inside settleOutcome is a write, not a check).
-    expect(sqls().some((s) => /clock_timestamp|expires_at/.test(s))).toBe(false);
+    // No statement reads the clock or the deadline. (settleOutcome's invoice
+    // payment_date = clock_timestamp() stamp — Stage B8 — is a write, not a
+    // check, so it is excluded here.)
+    expect(
+      sqls()
+        .filter((s) => !/payment_date = clock_timestamp\(\)/.test(s))
+        .some((s) => /clock_timestamp|expires_at/.test(s))
+    ).toBe(false);
   });
 
   it('writes in the approved order: settle (attempt/session/invoice) -> sub active -> company -> trial emails -> purchase completed', async () => {
@@ -459,5 +467,119 @@ describe('applyPurchaseOnTrustedSuccess (design v3 §9.5)', () => {
   it('a pending_payment -> active UPDATE hitting zero rows throws (caller rolls back)', async () => {
     applyHandlers({ subRows: [] });
     await expect(applyPurchaseOnTrustedSuccess(makePool().client as any, LOCKED)).rejects.toThrow(/exactly one row/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B8 — trial path unchanged; read model; void never touches a source.
+// ---------------------------------------------------------------------------
+import { createHash } from 'crypto';
+import { getPurchaseSummary } from '../subscriptionPurchase';
+
+describe('Stage B8 — the B7 trial confirm SQL is byte-identical (T-API-7)', () => {
+  // sha256 of the full statement sequence ("\n---\n"-joined), recorded by
+  // running the SAME scenario against the accepted B7 code (HEAD aadd332).
+  const B7_PLAIN_SHA = '7f0ab5e1dede209018c0b14d3417b0c2a90cf54c8198b6e57f348ae367ecece1';
+  const B7_SUPERSEDE_SHA = '31f1e5551739b3844993347a9950aa1c274abf2cb4d583963edb97b3cef36906';
+  const shaOf = () => createHash('sha256').update(fake.calls.map((c) => c.sql).join('\n---\n')).digest('hex');
+  function trialScenario(open: boolean) {
+    on('FROM companies WHERE id = $1 FOR UPDATE', { rows: [{ id: 'c', plan: 'trial', subscription_status: 'trial' }] });
+    on('AS has_live', { rows: [{ has_live: false }] });
+    on('FROM subscription_purchases sp', {
+      rows: open ? [{ id: 'op', company_id: 'c', subscription_id: 'os', invoice_id: 'oi', expires_at: null, target_plan: 'bronze', target_interval: 'monthly' }] : [],
+    });
+    on('AS unexpired', { rows: [{ unexpired: true }] });
+    on('FROM subscription_purchases WHERE id = $1 FOR UPDATE', { rows: [{ id: 'op', company_id: 'c', subscription_id: 'os', invoice_id: 'oi', status: 'open' }] });
+    on('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE', { rows: [{ id: 'os' }] });
+    on('SELECT id, invoice_number, status FROM invoices', { rows: [{ id: 'oi', invoice_number: 'N', status: 'issued' }] });
+    on('FROM payment_attempts WHERE invoice_id', { rows: [] });
+    on('UPDATE', { rows: [{ id: 'x' }] });
+    on('INSERT INTO invoices', { rows: [{ id: 'ni', invoice_number: 'N2' }] });
+    on('INSERT', { rows: [{ id: 'n' }] });
+  }
+  const TRIAL_INPUT = { companyId: 'c', plan: 'silver' as const, interval: 'annual' as const, currency: 'USD', amountText: '384.00' };
+
+  it('a plain trial confirm issues exactly the B7 statements', async () => {
+    trialScenario(false);
+    await confirmPurchase(makePool() as any, TRIAL_INPUT);
+    expect(shaOf()).toBe(B7_PLAIN_SHA);
+  });
+
+  it('a superseding trial confirm issues exactly the B7 statements', async () => {
+    trialScenario(true);
+    await confirmPurchase(makePool() as any, TRIAL_INPUT);
+    expect(shaOf()).toBe(B7_SUPERSEDE_SHA);
+  });
+
+  it('a trial company that sends the upgrade source field -> 409 UPGRADE_CONTEXT_STALE, zero writes', async () => {
+    trialScenario(false);
+    await expect(
+      confirmPurchase(makePool() as any, { ...TRIAL_INPUT, expectedSourceSubscriptionId: '11111111-1111-4111-8111-111111111111' })
+    ).rejects.toMatchObject({ status: 409, code: 'UPGRADE_CONTEXT_STALE' });
+    expect(sqls()).toContain('ROLLBACK');
+    expect(sqls().some(isWrite)).toBe(false);
+  });
+});
+
+describe('Stage B8 — purchase read model (T-API-9)', () => {
+  const baseRow = {
+    id: 'p-1', status: 'void', created_at: '2026-09-24T10:00:00Z', expires_at: '2026-09-24T10:30:00Z', checkout_open: false,
+    plan: 'silver', billing_interval: 'monthly', currency: 'USD', amount: '39.00',
+    current_period_start: '2026-09-24T10:00:00Z', current_period_end: '2026-10-24T10:00:00Z',
+    invoice_id: 'i-1', invoice_number: 'MC-SUB-000040', invoice_status: 'void', latest_attempt_status: null, latest_session_status: null,
+  };
+
+  it('an upgrade purchase reports kind=upgrade and the HISTORICAL source plan/interval only', async () => {
+    const db = { query: async () => ({ rows: [{ ...baseRow, replaces_subscription_id: 'src-1', replaces_plan: 'bronze', replaces_interval: 'monthly' }] }) };
+    const summary = await getPurchaseSummary(db as any, 'company-1', 'p-1');
+    expect(summary).toMatchObject({ kind: 'upgrade', replaces: { plan: 'bronze', billing_interval: 'monthly' } });
+    // No current-state field is exposed about the source.
+    expect(Object.keys(summary!.replaces!).sort()).toEqual(['billing_interval', 'plan']);
+    expect(JSON.stringify(summary)).not.toContain('src-1');
+  });
+
+  it('a B7 purchase reports kind=new_subscription and replaces=null', async () => {
+    const db = { query: async () => ({ rows: [{ ...baseRow, replaces_subscription_id: null, replaces_plan: null, replaces_interval: null }] }) };
+    expect(await getPurchaseSummary(db as any, 'company-1', 'p-1')).toMatchObject({ kind: 'new_subscription', replaces: null });
+  });
+
+  it('the summary query stays tenant-scoped and LEFT-JOINs the source by the immutable link', async () => {
+    let seen: { sql: string; params: unknown[] } | null = null;
+    const db = { query: async (sql: string, params: unknown[]) => { seen = { sql, params }; return { rows: [] }; } };
+    expect(await getPurchaseSummary(db as any, 'company-1', 'p-1')).toBeNull();
+    expect(seen!.sql).toContain('LEFT JOIN subscriptions src ON src.id = sp.replaces_subscription_id');
+    expect(seen!.sql).toContain('WHERE sp.id = $1 AND sp.company_id = $2');
+    expect(seen!.params).toEqual(['p-1', 'company-1']);
+  });
+});
+
+describe('Stage B8 — voidPurchaseChain never touches the source of an upgrade chain', () => {
+  it('locks and updates only the pending row, its invoice, attempts and sessions', async () => {
+    voidChainHandlers([]);
+    await voidPurchaseChain(makePool().client as any, 'old-purchase', 'superseded');
+    const subscriptionStatements = sqls().filter((s) => /subscriptions/.test(s) && !/subscription_purchases/.test(s));
+    expect(subscriptionStatements.length).toBe(2); // pending lock + pending -> abandoned
+    for (const call of fake.calls) {
+      if (/subscriptions/.test(call.sql) && !/subscription_purchases/.test(call.sql)) expect(call.params).toEqual(['old-sub']);
+    }
+    expect(sqls().some((s) => s.includes("'superseded'") && s.startsWith('UPDATE subscriptions'))).toBe(false);
+  });
+});
+
+describe('Stage B8 — startCheckout is byte-identical for every purchase kind (T-CHK-1)', () => {
+  // Recorded against the accepted B7 code (HEAD aadd332), same scenario:
+  // one earlier failed attempt -> a new attempt b7:<id>:2 + a new session.
+  const B7_CHECKOUT_SHA = '393d02268644ce84ecfab6827718c863223edf8f9079d5869c8c09e5981eb538';
+  it('issues exactly the B7 statements and never touches a source subscription', async () => {
+    on('FROM companies WHERE id = $1 FOR UPDATE', { rows: [{ id: 'c' }] });
+    on('FROM subscription_purchases WHERE id = $1 AND company_id = $2 FOR UPDATE', { rows: [{ id: 'p', company_id: 'c', subscription_id: 's', invoice_id: 'i', status: 'open' }] });
+    on('FROM subscriptions WHERE id = $1 FOR UPDATE', { rows: [{ id: 's', status: 'pending_payment' }] });
+    on('FROM invoices WHERE id = $1 FOR UPDATE', { rows: [{ id: 'i', status: 'issued' }] });
+    on('FROM payment_attempts WHERE invoice_id', { rows: [{ id: 'a0', status: 'failed' }] });
+    on('AS unexpired', { rows: [{ unexpired: true }] });
+    on('INSERT', { rows: [{ id: 'n' }] });
+    await startCheckout(makePool() as any, 'c', 'p');
+    expect(createHash('sha256').update(fake.calls.map((c) => c.sql).join('\n---\n')).digest('hex')).toBe(B7_CHECKOUT_SHA);
+    expect(sqls().some((s) => s.includes('replaces_subscription_id') || s.includes("'superseded'"))).toBe(false);
   });
 });

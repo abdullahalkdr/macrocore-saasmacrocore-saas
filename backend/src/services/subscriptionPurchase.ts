@@ -27,8 +27,18 @@
 // No function in this module calls logAudit() or enqueueEmail(). Callers write
 // audit rows post-commit from the snapshots returned here; B7 sends no email.
 
+//
+// Stage B8 — paid-to-paid self-service upgrades
+// (claude/chat8a-b8-paid-subscription-upgrade-design-pass-v4-2026-09-24.md,
+// approved). The same module now also handles upgrade purchases: a purchase
+// whose replaces_subscription_id is non-NULL replaces the company's single
+// active subscription. The global lock order gains one intra-table rule:
+// within subscriptions, the SOURCE (live) row is locked before the PENDING
+// row. The trial-to-paid (B7) SQL paths are kept byte-identical.
+
 import type { PoolClient } from 'pg';
 import { CHECKOUT_WINDOW_MINUTES } from '../config/billing';
+import { PLAN_LEVEL } from '../config/planFeatures';
 import { settleOutcome, SettleOutcomeResult } from './paymentSettlement';
 import type { BillingInterval, StandardPlan } from '../utils/subscriptionLifecycle';
 
@@ -137,6 +147,21 @@ export async function lockOpenPurchase(client: Queryable, companyId: string): Pr
     target_interval: row.target_interval,
     unexpired: clock.rows[0]?.unexpired === true,
   };
+}
+
+// B8-R1 — authoritative expiry read for callers that take MORE locks after
+// lockOpenPurchase() (the upgrade confirm and admin invoice creation both lock
+// the source subscription next). Must be called only after the LAST lock the
+// decision depends on is held, so a wait on that lock can never be decided
+// with a pre-wait clock. Database clock only (clock_timestamp(), never now()
+// or a JavaScript time). The caller holds the purchase row FOR UPDATE, so
+// expires_at itself cannot change underneath it.
+export async function purchaseUnexpiredNow(client: Queryable, purchaseId: string): Promise<boolean> {
+  const result = await client.query(
+    `SELECT clock_timestamp() < expires_at AS unexpired FROM subscription_purchases WHERE id = $1`,
+    [purchaseId]
+  );
+  return result.rows[0]?.unexpired === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,17 +281,41 @@ export interface ConfirmPurchaseInput {
   interval: BillingInterval;
   currency: string;
   amountText: string;
+  // Stage B8 — the optimistic-concurrency assertion from the plan page: the id
+  // of the live subscription the customer was shown. Never authoritative and
+  // never used in SQL; only string-compared with the server-locked source.
+  // Omitted (undefined) when the request did not carry the field.
+  expectedSourceSubscriptionId?: string;
+}
+
+export const UPGRADE_CONTEXT_STALE_MESSAGE =
+  'Your subscription changed since this page was opened. Review the updated details and confirm again.';
+
+function staleContext(): PurchaseError {
+  return new PurchaseError(409, 'UPGRADE_CONTEXT_STALE', UPGRADE_CONTEXT_STALE_MESSAGE);
 }
 
 export type ConfirmPurchaseResult =
   | { kind: 'replayed'; purchaseId: string }
-  | { kind: 'created'; purchaseId: string; invoiceId: string; invoiceNumber: string; subscriptionId: string; voided: VoidSnapshot | null };
+  | {
+      kind: 'created';
+      purchaseId: string;
+      invoiceId: string;
+      invoiceNumber: string;
+      subscriptionId: string;
+      voided: VoidSnapshot | null;
+      // Stage B8 — present only for an upgrade purchase (server-derived source).
+      upgrade?: { replacesSubscriptionId: string; fromPlan: string };
+    };
 
-async function assertTrialEligibleLocked(client: Queryable, companyId: string): Promise<{ plan: string; subscription_status: string }> {
-  const company = (
-    await client.query(`SELECT id, plan, subscription_status FROM companies WHERE id = $1 FOR UPDATE`, [companyId])
-  ).rows[0];
-  if (!company) throw new PurchaseError(404, 'NOT_FOUND', 'Company not found');
+// B7 trial eligibility. The caller has already run
+// `SELECT id, plan, subscription_status FROM companies WHERE id = $1 FOR UPDATE`
+// (the exact B7 statement), so the trial SQL sequence is unchanged.
+async function assertTrialEligibleAfterCompanyLock(
+  client: Queryable,
+  companyId: string,
+  company: { plan: string; subscription_status: string }
+): Promise<{ plan: string; subscription_status: string }> {
   // Fresh statement after the lock (READ COMMITTED lesson from B2).
   const live = await client.query(
     `SELECT EXISTS (SELECT 1 FROM subscriptions WHERE company_id = $1 AND status IN ('active','past_due')) AS has_live`,
@@ -278,28 +327,15 @@ async function assertTrialEligibleLocked(client: Queryable, companyId: string): 
   return company;
 }
 
-export async function confirmPurchase(pool: Connectable, input: ConfirmPurchaseInput): Promise<ConfirmPurchaseResult> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await assertTrialEligibleLocked(client, input.companyId);
-
-    let voided: VoidSnapshot | null = null;
-    const open = await lockOpenPurchase(client, input.companyId);
-    if (open) {
-      if (open.unexpired && open.target_plan === input.plan && open.target_interval === input.interval) {
-        await client.query('COMMIT');
-        return { kind: 'replayed', purchaseId: open.id };
-      }
-      voided = await voidPurchaseChain(client, open.id, open.unexpired ? 'superseded' : 'expired_superseded');
-    }
-
-    // confirmed_at is captured ONCE, here, after every lock and check above
-    // (a volatile CTE is evaluated exactly once) and stored as
-    // current_period_start. Everything else derives from that stored value.
-    const sub = expectOneRow(
-      await client.query(
-        `WITH c AS (SELECT clock_timestamp() AS confirmed_at)
+// Pending-chain inserts shared by the trial (B7) and upgrade (B8) confirm
+// paths. The SQL text is exactly B7's.
+async function insertPendingSubscription(client: Queryable, input: ConfirmPurchaseInput): Promise<{ id: string }> {
+  // confirmed_at is captured ONCE, here, after every lock and check the caller
+  // performed (a volatile CTE is evaluated exactly once) and stored as
+  // current_period_start. Everything else derives from that stored value.
+  return expectOneRow(
+    await client.query(
+      `WITH c AS (SELECT clock_timestamp() AS confirmed_at)
          INSERT INTO subscriptions
            (company_id, plan, status, currency, period_amount, monthly_price, billing_interval,
             current_period_start, current_period_end, auto_renew, next_billing_date)
@@ -314,24 +350,65 @@ export async function confirmPurchase(pool: Connectable, input: ConfirmPurchaseI
                    + CASE WHEN $5::text = 'annual' THEN interval '12 months' ELSE interval '1 month' END)
          FROM c
          RETURNING id`,
-        [input.companyId, input.plan, input.currency, input.amountText, input.interval]
-      ),
-      'pending subscription insert'
-    );
+      [input.companyId, input.plan, input.currency, input.amountText, input.interval]
+    ),
+    'pending subscription insert'
+  );
+}
 
-    const invoice = expectOneRow(
-      await client.query(
-        `INSERT INTO invoices
+async function insertInvoiceForPending(client: Queryable, pendingSubscriptionId: string): Promise<{ id: string; invoice_number: string }> {
+  return expectOneRow(
+    await client.query(
+      `INSERT INTO invoices
            (company_id, subscription_id, plan, billing_interval, currency, amount,
             period_start, period_end, status, issue_date, due_date)
          SELECT company_id, id, plan, billing_interval, currency, period_amount,
                 current_period_start, current_period_end, 'issued', current_period_start, current_period_start
          FROM subscriptions WHERE id = $1
          RETURNING id, invoice_number`,
-        [sub.id]
-      ),
-      'invoice insert'
-    );
+      [pendingSubscriptionId]
+    ),
+    'invoice insert'
+  );
+}
+
+interface ConfirmContext {
+  mode: 'trial' | 'upgrade';
+  sourceSubscriptionId: string | null;
+}
+
+export async function confirmPurchase(pool: Connectable, input: ConfirmPurchaseInput): Promise<ConfirmPurchaseResult> {
+  const client = await pool.connect();
+  const ctx: ConfirmContext = { mode: 'trial', sourceSubscriptionId: null };
+  try {
+    await client.query('BEGIN');
+    // Stage B8: the mode is decided under the company lock. A company that is
+    // not on 'trial' can only take the upgrade path (or be rejected); the
+    // trial path below is the unchanged B7 SQL sequence.
+    const lockedCompany = (
+      await client.query(`SELECT id, plan, subscription_status FROM companies WHERE id = $1 FOR UPDATE`, [input.companyId])
+    ).rows[0];
+    if (!lockedCompany) throw new PurchaseError(404, 'NOT_FOUND', 'Company not found');
+    if (lockedCompany.subscription_status !== 'trial') {
+      ctx.mode = 'upgrade';
+      return await confirmUpgradeLocked(client, input, lockedCompany, ctx);
+    }
+    // Trial mode never carries a source assertion (design v4 §6.2).
+    if (input.expectedSourceSubscriptionId !== undefined) throw staleContext();
+    await assertTrialEligibleAfterCompanyLock(client, input.companyId, lockedCompany);
+
+    let voided: VoidSnapshot | null = null;
+    const open = await lockOpenPurchase(client, input.companyId);
+    if (open) {
+      if (open.unexpired && open.target_plan === input.plan && open.target_interval === input.interval) {
+        await client.query('COMMIT');
+        return { kind: 'replayed', purchaseId: open.id };
+      }
+      voided = await voidPurchaseChain(client, open.id, open.unexpired ? 'superseded' : 'expired_superseded');
+    }
+
+    const sub = await insertPendingSubscription(client, input);
+    const invoice = await insertInvoiceForPending(client, sub.id);
 
     const purchase = expectOneRow(
       await client.query(
@@ -360,6 +437,27 @@ export async function confirmPurchase(pool: Connectable, input: ConfirmPurchaseI
     if (pgErr.code === '23505' && pgErr.constraint === 'subscription_purchases_one_open_per_company') {
       // Backstop only — the company lock already serializes confirms. One
       // re-read on the plain pool, never the rolled-back client.
+      if (ctx.mode === 'upgrade') {
+        const existing = (
+          await pool.query(
+            `SELECT sp.id, sp.replaces_subscription_id, s.plan, s.billing_interval, (clock_timestamp() < sp.expires_at) AS unexpired
+             FROM subscription_purchases sp JOIN subscriptions s ON s.id = sp.subscription_id
+             WHERE sp.company_id = $1 AND sp.status = 'open'`,
+            [input.companyId]
+          )
+        ).rows[0];
+        if (
+          existing &&
+          existing.unexpired &&
+          ctx.sourceSubscriptionId !== null &&
+          existing.replaces_subscription_id === ctx.sourceSubscriptionId &&
+          existing.plan === input.plan &&
+          existing.billing_interval === input.interval
+        ) {
+          return { kind: 'replayed', purchaseId: existing.id };
+        }
+        throw new PurchaseError(409, 'PURCHASE_CONFLICT', 'Another checkout for this company is in progress. Refresh and try again.');
+      }
       const existing = (
         await pool.query(
           `SELECT sp.id, s.plan, s.billing_interval, (clock_timestamp() < sp.expires_at) AS unexpired
@@ -377,6 +475,135 @@ export async function confirmPurchase(pool: Connectable, input: ConfirmPurchaseI
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stage B8 — confirm, upgrade mode (design v4 §8.3). Caller holds
+// companies FOR UPDATE and has an open transaction; this function COMMITs on
+// success and throws (the caller ROLLBACKs) on every rejection, so every
+// rejection performs zero writes. Order: company (held) -> fresh live-row read
+// -> open purchase lock + clock read -> SOURCE lock -> context check -> rules
+// 1-4 -> [void chain] -> pending sub -> invoice -> purchase.
+// ---------------------------------------------------------------------------
+const UUID_TEXT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuidText(value: unknown): value is string {
+  return typeof value === 'string' && UUID_TEXT_RE.test(value);
+}
+
+async function confirmUpgradeLocked(
+  client: Queryable,
+  input: ConfirmPurchaseInput,
+  company: { id: string; plan: string; subscription_status: string },
+  ctx: ConfirmContext
+): Promise<ConfirmPurchaseResult> {
+  const notEligible = () =>
+    new PurchaseError(409, 'NOT_ELIGIBLE', 'Self-service upgrades are available only for active paid subscriptions.');
+
+  if (company.subscription_status !== 'active') throw notEligible();
+  // Fresh statement after the company lock (READ COMMITTED lesson from B2).
+  const liveRows = (
+    await client.query(
+      `SELECT id, plan, status, billing_interval FROM subscriptions WHERE company_id = $1 AND status IN ('active','past_due')`,
+      [input.companyId]
+    )
+  ).rows;
+  if (liveRows.length !== 1 || liveRows[0].status !== 'active') throw notEligible();
+  const sourceId: string = liveRows[0].id;
+
+  const open = await lockOpenPurchase(client, input.companyId);
+
+  // Source lock: subscriptions (source row) after subscription_purchases.
+  const source = (
+    await client.query(
+      `SELECT id, company_id, plan, status, billing_interval FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [sourceId, input.companyId]
+    )
+  ).rows[0];
+  if (!source || source.status !== 'active') throw notEligible();
+  ctx.sourceSubscriptionId = source.id;
+
+  // Optimistic-concurrency assertion: string comparison only, never SQL.
+  if (
+    input.expectedSourceSubscriptionId === undefined ||
+    input.expectedSourceSubscriptionId.toLowerCase() !== String(source.id).toLowerCase()
+  ) {
+    throw staleContext();
+  }
+
+  // Rule 1 — NOT_ELIGIBLE: an Enterprise (or unknown) source, or entitlement
+  // out of step with the live row.
+  if (source.plan === 'enterprise' || !(source.plan in PLAN_LEVEL) || company.plan !== source.plan) throw notEligible();
+  // Rule 2 — NOT_AN_UPGRADE: strictly higher PLAN_LEVEL only (includes the
+  // same plan at any interval, and every downgrade).
+  if (!(PLAN_LEVEL[input.plan] > PLAN_LEVEL[source.plan])) {
+    throw new PurchaseError(409, 'NOT_AN_UPGRADE', 'Self-service changes are available for upgrades to a higher plan only.');
+  }
+  // Rule 3 — O4: the target interval must equal the source interval.
+  if (input.interval !== source.billing_interval) {
+    throw new PurchaseError(
+      409,
+      'INTERVAL_CHANGE_NOT_SUPPORTED',
+      'Changing the billing cycle is not available yet. Upgrades keep your current billing cycle.'
+    );
+  }
+  // Rule 4 — O7: no issued (unpaid) invoice on the source. A non-locking fresh
+  // read is sufficient (design v4 §8.3 step 8): a new issued source invoice
+  // needs the company lock held here, and an existing one can only become
+  // 'paid' concurrently, never the reverse.
+  const unpaid = await client.query(
+    `SELECT EXISTS (SELECT 1 FROM invoices WHERE subscription_id = $1 AND status = 'issued') AS has_unpaid`,
+    [source.id]
+  );
+  if (unpaid.rows[0]?.has_unpaid === true) {
+    throw new PurchaseError(409, 'UNPAID_INVOICE', 'Your current subscription has an unpaid invoice. Please contact us before upgrading.');
+  }
+
+  let voided: VoidSnapshot | null = null;
+  if (open) {
+    const openReplaces = (
+      await client.query(`SELECT replaces_subscription_id FROM subscription_purchases WHERE id = $1`, [open.id])
+    ).rows[0]?.replaces_subscription_id ?? null;
+    // B8-R1: open.unexpired was read BEFORE the source lock; the replay/void
+    // decision and the void reason use only this post-source-lock read.
+    const unexpiredNow = await purchaseUnexpiredNow(client, open.id);
+    if (
+      unexpiredNow &&
+      open.target_plan === input.plan &&
+      open.target_interval === input.interval &&
+      openReplaces === source.id
+    ) {
+      await client.query('COMMIT');
+      return { kind: 'replayed', purchaseId: open.id };
+    }
+    voided = await voidPurchaseChain(client, open.id, unexpiredNow ? 'superseded' : 'expired_superseded');
+  }
+
+  const sub = await insertPendingSubscription(client, input);
+  const invoice = await insertInvoiceForPending(client, sub.id);
+  const purchase = expectOneRow(
+    await client.query(
+      `INSERT INTO subscription_purchases
+         (company_id, subscription_id, invoice_id, replaces_subscription_id, created_at, expires_at)
+       SELECT s.company_id, s.id, $2::uuid, $4::uuid, s.current_period_start,
+              s.current_period_start + make_interval(mins => $3::int)
+       FROM subscriptions s WHERE s.id = $1
+       RETURNING id`,
+      [sub.id, invoice.id, CHECKOUT_WINDOW_MINUTES, source.id]
+    ),
+    'upgrade purchase insert'
+  );
+
+  await client.query('COMMIT');
+  return {
+    kind: 'created',
+    purchaseId: purchase.id,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoice_number,
+    subscriptionId: sub.id,
+    voided,
+    upgrade: { replacesSubscriptionId: source.id, fromPlan: source.plan },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +759,9 @@ export interface PurchaseSummary {
   invoice_status: string;
   latest_attempt_status: string | null;
   latest_session_status: string | null;
+  // Stage B8 — historical context only; never describes current state.
+  kind: 'new_subscription' | 'upgrade';
+  replaces: { plan: string; billing_interval: string } | null;
 }
 
 const SUMMARY_SQL = `
@@ -541,10 +771,12 @@ const SUMMARY_SQL = `
          CASE WHEN s.currency = 'KWD' THEN s.period_amount::text ELSE round(s.period_amount, 2)::text END AS amount,
          s.current_period_start, s.current_period_end,
          i.id AS invoice_id, i.invoice_number, i.status AS invoice_status,
-         la.status AS latest_attempt_status, pcs.status AS latest_session_status
+         la.status AS latest_attempt_status, pcs.status AS latest_session_status,
+         sp.replaces_subscription_id, src.plan AS replaces_plan, src.billing_interval AS replaces_interval
   FROM subscription_purchases sp
   JOIN subscriptions s ON s.id = sp.subscription_id
   JOIN invoices i ON i.id = sp.invoice_id
+  LEFT JOIN subscriptions src ON src.id = sp.replaces_subscription_id
   LEFT JOIN LATERAL (
     SELECT pa.id, pa.status FROM payment_attempts pa
     WHERE pa.invoice_id = sp.invoice_id
@@ -571,6 +803,8 @@ function shapeSummary(row: any): PurchaseSummary {
     invoice_status: row.invoice_status,
     latest_attempt_status: row.latest_attempt_status ?? null,
     latest_session_status: row.latest_session_status ?? null,
+    kind: row.replaces_subscription_id ? 'upgrade' : 'new_subscription',
+    replaces: row.replaces_subscription_id ? { plan: row.replaces_plan, billing_interval: row.replaces_interval } : null,
   };
 }
 
@@ -594,8 +828,11 @@ export async function getOpenPurchaseSummary(db: Queryable, companyId: string): 
 // ---------------------------------------------------------------------------
 export interface LockedPurchaseChain {
   company: { id: string; plan: string; subscription_status: string };
-  purchase: { id: string; status: string; subscription_id: string; invoice_id: string };
-  pendingSub: { id: string; status: string; plan: string };
+  purchase: { id: string; status: string; subscription_id: string; invoice_id: string; replaces_subscription_id?: string | null };
+  // Stage B8 — the locked source (replaced) subscription; present only when
+  // purchase.replaces_subscription_id is non-NULL.
+  source?: { id: string; company_id: string; plan: string; status: string; billing_interval: string } | null;
+  pendingSub: { id: string; status: string; plan: string; billing_interval?: string };
   attempt: { id: string };
   session: { id: string };
   invoice: { id: string };
@@ -611,12 +848,19 @@ export interface AppliedPurchase {
   current_period_start: string | null;
   current_period_end: string | null;
   completed_at: string | null;
+  // Stage B8 — present only when an upgrade superseded a paid subscription.
+  superseded_subscription_id?: string;
 }
 
 export async function applyPurchaseOnTrustedSuccess(
   client: Queryable,
   locked: LockedPurchaseChain
 ): Promise<{ settle: SettleOutcomeResult; applied: AppliedPurchase }> {
+  // Stage B8: an upgrade purchase takes its own apply path; a B7 purchase
+  // (replaces_subscription_id IS NULL) continues exactly as before.
+  if (locked.purchase.replaces_subscription_id) {
+    return applyUpgradeOnTrustedSuccess(client, locked);
+  }
   // Integrity assertions. §9.7 makes a violation unreachable; if one ever
   // happens anyway, throw (ROLLBACK, 500, loud log) — never silently apply,
   // never silently drop.
@@ -677,6 +921,95 @@ export async function applyPurchaseOnTrustedSuccess(
       current_period_start: toIsoOrNull(activated.current_period_start),
       current_period_end: toIsoOrNull(activated.current_period_end),
       completed_at: toIsoOrNull(completed.completed_at),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stage B8 — apply an upgrade on trusted success (design v4 §8.4). Called
+// only through applyPurchaseOnTrustedSuccess from resolvePurchaseLinkedSession,
+// inside its open transaction, with company -> purchase -> SOURCE -> pending ->
+// invoice -> attempt -> session all locked and the simulator gate passed.
+// Takes NO clock input and makes NO expiry decision.
+// ---------------------------------------------------------------------------
+export async function applyUpgradeOnTrustedSuccess(
+  client: Queryable,
+  locked: LockedPurchaseChain
+): Promise<{ settle: SettleOutcomeResult; applied: AppliedPurchase }> {
+  const fail = (why: string): never => {
+    throw new Error(`applyUpgradeOnTrustedSuccess: purchase ${locked.purchase.id}: ${why}`);
+  };
+  const source = locked.source;
+  // Integrity assertions — unreachable by the confirm rules and the admin
+  // guards; if one ever fails: throw (ROLLBACK, 500, loud log), never
+  // silently apply and never silently drop.
+  if (locked.purchase.status !== 'open') fail(`purchase is '${locked.purchase.status}'`);
+  if (locked.pendingSub.status !== 'pending_payment') fail(`pending subscription is '${locked.pendingSub.status}'`);
+  if (!source || source.id !== locked.purchase.replaces_subscription_id) fail('source subscription was not locked');
+  if (source!.status !== 'active') fail(`source subscription is '${source!.status}'`);
+  if (source!.company_id !== locked.company.id) fail('source subscription belongs to another company');
+  if (locked.company.subscription_status !== 'active') fail(`company is '${locked.company.subscription_status}'`);
+  if (locked.company.plan !== source!.plan) fail('company plan differs from the source subscription plan');
+  if (!(PLAN_LEVEL[locked.pendingSub.plan] > PLAN_LEVEL[source!.plan])) fail('target plan is not higher than the source plan');
+  if (locked.pendingSub.billing_interval !== source!.billing_interval) fail('target interval differs from the source interval');
+  const otherLive = await client.query(
+    `SELECT EXISTS (SELECT 1 FROM subscriptions WHERE company_id = $1 AND status IN ('active','past_due') AND id <> $2) AS has_other`,
+    [locked.company.id, source!.id]
+  );
+  if (otherLive.rows[0]?.has_other === true) fail('company has another live subscription');
+
+  const settle = await settleOutcome(client as PoolClient, {
+    attempt: { id: locked.attempt.id },
+    session: { id: locked.session.id },
+    invoice: { id: locked.invoice.id },
+    outcome: 'succeeded',
+  });
+
+  // The source MUST leave 'active' before the pending row enters it:
+  // subscriptions_one_live_per_company is a non-deferrable partial unique
+  // index, checked per statement.
+  expectOneRow(
+    await client.query(`UPDATE subscriptions SET status = 'superseded' WHERE id = $1 AND status = 'active' RETURNING id`, [
+      source!.id,
+    ]),
+    'source subscription active -> superseded'
+  );
+  const activated = expectOneRow(
+    await client.query(
+      `UPDATE subscriptions SET status = 'active' WHERE id = $1 AND status = 'pending_payment'
+       RETURNING id, plan, billing_interval, current_period_start, current_period_end`,
+      [locked.pendingSub.id]
+    ),
+    'subscription pending_payment -> active'
+  );
+  expectOneRow(
+    await client.query(`UPDATE companies SET plan = $1 WHERE id = $2 AND subscription_status = 'active' RETURNING id`, [
+      activated.plan,
+      locked.company.id,
+    ]),
+    'company plan update'
+  );
+  const completed = expectOneRow(
+    await client.query(
+      `UPDATE subscription_purchases SET status = 'completed' WHERE id = $1 AND status = 'open' RETURNING completed_at`,
+      [locked.purchase.id]
+    ),
+    'purchase open -> completed'
+  );
+
+  return {
+    settle,
+    applied: {
+      purchase_id: locked.purchase.id,
+      company_id: locked.company.id,
+      subscription_id: activated.id,
+      old_values: { plan: source!.plan, subscription_status: locked.company.subscription_status },
+      new_values: { plan: activated.plan, subscription_status: 'active' },
+      billing_interval: activated.billing_interval,
+      current_period_start: toIsoOrNull(activated.current_period_start),
+      current_period_end: toIsoOrNull(activated.current_period_end),
+      completed_at: toIsoOrNull(completed.completed_at),
+      superseded_subscription_id: source!.id,
     },
   };
 }

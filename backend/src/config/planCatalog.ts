@@ -100,6 +100,18 @@ export function catalogPriceText(plan: StandardPlan, interval: BillingInterval):
   return text;
 }
 
+/**
+ * Stage B8 (design v4 §6.1) — the self-service plans a paid subscription on
+ * `sourcePlan` may upgrade to: strictly higher PLAN_LEVEL, self-service only.
+ * Enterprise, trial and unknown sources get none. The interval rule (same
+ * billing interval only, decision O4) is enforced by the purchase service.
+ */
+export function upgradeTargetsFor(sourcePlan: string): StandardPlan[] {
+  if (!isSelfServicePlan(sourcePlan)) return [];
+  const sourceLevel = PLAN_LEVEL[sourcePlan];
+  return SELF_SERVICE_PLANS.filter((p) => PLAN_LEVEL[p] > sourceLevel);
+}
+
 export function isSelfServicePlan(value: unknown): value is StandardPlan {
   return typeof value === 'string' && (SELF_SERVICE_PLANS as readonly string[]).includes(value);
 }

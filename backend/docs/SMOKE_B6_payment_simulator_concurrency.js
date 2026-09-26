@@ -482,7 +482,11 @@ async function main() {
     await setup.query(fs.readFileSync(migration085Path, 'utf8'));
     const migration086Path = path.resolve(__dirname, 'MIGRATION_086_subscription_purchase_foundation.sql');
     await setup.query(fs.readFileSync(migration086Path, 'utf8'));
-    console.log('Applied MIGRATION_084, MIGRATION_085 and MIGRATION_086 against the disposable database.');
+    // Stage B8: the current settlement code reads
+    // subscription_purchases.replaces_subscription_id — apply the REAL 087 too.
+    const migration087Path = path.resolve(__dirname, 'MIGRATION_087_subscription_upgrade_foundation.sql');
+    await setup.query(fs.readFileSync(migration087Path, 'utf8'));
+    console.log('Applied MIGRATION_084, MIGRATION_085, MIGRATION_086 and MIGRATION_087 against the disposable database.');
 
     const checks = [];
     function check(desc, pass) { checks.push([desc, pass]); console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${desc}`); }

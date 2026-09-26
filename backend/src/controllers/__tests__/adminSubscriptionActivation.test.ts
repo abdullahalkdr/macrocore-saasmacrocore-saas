@@ -469,3 +469,33 @@ describe('activateSubscription() — Stage B7 open customer purchase', () => {
     expect(mocks.enqueueEmail).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage B8 — T-ADM-2: a PAID company with an expired UPGRADE purchase. The
+// company always has a live row, so activation always hits the live-row
+// conflict: the void runs inside the transaction and is rolled back with it.
+// This path therefore never cleans up an upgrade chain (design v4 §8.6).
+// ---------------------------------------------------------------------------
+describe('activateSubscription() — Stage B8 expired upgrade purchase on a paid company', () => {
+  it('void -> 23505 one_live_per_company -> ROLLBACK -> 409; no COMMIT, no void audit, no email, no source write', async () => {
+    const conflictErr: any = new Error('duplicate key value violates unique constraint "subscriptions_one_live_per_company"');
+    conflictErr.code = '23505';
+    conflictErr.constraint = 'subscriptions_one_live_per_company';
+    const events = b7ActivationFlow({ unexpired: false, insertError: conflictErr });
+    mocks.poolQuery.mockResolvedValue({ rows: [SUBSCRIPTION_ROW] });
+
+    const res = makeRes();
+    await activateSubscription(makeReq({ id: 'company-1' }, { plan: 'gold', billing_interval: 'monthly', currency: 'USD', period_amount: 67 }), res, NOOP_NEXT);
+
+    expect(res.statusCode).toBe(409);
+    const voidAt = events.indexOf("UPDATE subscription_purchases SET status = 'void' WHERE id = $1 AND status = 'open' RETURNING id");
+    const rollbackAt = events.indexOf('ROLLBACK');
+    expect(voidAt).toBeGreaterThan(-1);
+    expect(rollbackAt).toBeGreaterThan(voidAt);
+    expect(events).not.toContain('COMMIT');
+    expect(mocks.logAudit).not.toHaveBeenCalled();
+    expect(mocks.enqueueEmail).not.toHaveBeenCalled();
+    const sql = mocks.clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sql.some((q) => q.includes("'superseded'"))).toBe(false);
+  });
+});

@@ -88,7 +88,9 @@ export async function settleOutcome(client: PoolClient, params: SettleOutcomePar
       throw new Error('settleOutcome: invoice is required when outcome is "succeeded"');
     }
     const invoiceResult = await client.query(
-      `UPDATE invoices SET status = 'paid', payment_date = now() WHERE id = $1
+      // Stage B8 (design v4 §8.7): clock_timestamp(), not transaction-start
+      // now(), so payment_date is taken after every lock the caller holds.
+      `UPDATE invoices SET status = 'paid', payment_date = clock_timestamp() WHERE id = $1
        RETURNING id, status, payment_date`,
       [invoice.id]
     );
@@ -324,7 +326,7 @@ async function resolvePurchaseLinkedSession(
     ).rows[0];
     const purchaseRow = (
       await client.query(
-        `SELECT id, company_id, subscription_id, invoice_id, status FROM subscription_purchases WHERE id = $1 FOR UPDATE`,
+        `SELECT id, company_id, subscription_id, invoice_id, status, replaces_subscription_id FROM subscription_purchases WHERE id = $1 FOR UPDATE`,
         [routingRow.purchase_id]
       )
     ).rows[0];
@@ -332,8 +334,23 @@ async function resolvePurchaseLinkedSession(
       await client.query('ROLLBACK');
       return { kind: 'not_found' };
     }
+    // Stage B8: an upgrade purchase locks its SOURCE subscription next —
+    // subscriptions source row before the pending row (design v4 §8.1).
+    let sourceRow: { id: string; company_id: string; plan: string; status: string; billing_interval: string } | null = null;
+    if (purchaseRow.replaces_subscription_id) {
+      sourceRow =
+        (
+          await client.query(`SELECT id, company_id, plan, status, billing_interval FROM subscriptions WHERE id = $1 FOR UPDATE`, [
+            purchaseRow.replaces_subscription_id,
+          ])
+        ).rows[0] ?? null;
+      if (!sourceRow) {
+        await client.query('ROLLBACK');
+        return { kind: 'not_found' };
+      }
+    }
     const pendingSubRow = (
-      await client.query(`SELECT id, status, plan FROM subscriptions WHERE id = $1 FOR UPDATE`, [purchaseRow.subscription_id])
+      await client.query(`SELECT id, status, plan, billing_interval FROM subscriptions WHERE id = $1 FOR UPDATE`, [purchaseRow.subscription_id])
     ).rows[0];
     const invoiceRow = (await client.query(`SELECT * FROM invoices WHERE id = $1 FOR UPDATE`, [routingRow.invoice_id])).rows[0];
     if (!pendingSubRow || !invoiceRow) {
@@ -405,6 +422,7 @@ async function resolvePurchaseLinkedSession(
     const { settle, applied } = await applyPurchaseOnTrustedSuccess(client, {
       company: companyRow,
       purchase: purchaseRow,
+      source: sourceRow,
       pendingSub: pendingSubRow,
       attempt: { id: attemptRow.id },
       session: { id: sessionRow.id },
@@ -435,7 +453,9 @@ export function buildAuditPayloadForPurchaseApplied(applied: AppliedPurchase) {
     action: 'subscription_purchase_applied',
     entityType: 'subscription_purchases',
     entityId: applied.purchase_id,
-    oldValues: applied.old_values,
+    oldValues: applied.superseded_subscription_id
+      ? { ...applied.old_values, subscription_id: applied.superseded_subscription_id }
+      : applied.old_values,
     newValues: {
       ...applied.new_values,
       subscription_id: applied.subscription_id,
@@ -443,6 +463,7 @@ export function buildAuditPayloadForPurchaseApplied(applied: AppliedPurchase) {
       current_period_start: applied.current_period_start,
       current_period_end: applied.current_period_end,
       completed_at: applied.completed_at,
+      ...(applied.superseded_subscription_id ? { superseded_subscription_id: applied.superseded_subscription_id } : {}),
     },
   };
 }

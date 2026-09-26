@@ -47,6 +47,9 @@ import { resolveBillingRecipients } from '../utils/billingRecipients';
 import {
   handleOpenPurchaseForAdminAction,
   cancelTrialLifecycleEmails,
+  lockOpenPurchase,
+  purchaseUnexpiredNow,
+  voidPurchaseChain,
   VoidSnapshot,
 } from '../services/subscriptionPurchase';
 
@@ -55,7 +58,11 @@ import {
 // SIMULATOR-STAGE RULE ONLY: see services/subscriptionPurchase.ts's
 // handleOpenPurchaseForAdminAction header — must be redesigned before any
 // real payment provider exists.
-async function logExpiredPurchaseVoidAudit(req: Request, snapshot: VoidSnapshot, adminAction: 'activate_subscription' | 'update_company') {
+async function logExpiredPurchaseVoidAudit(
+  req: Request,
+  snapshot: VoidSnapshot,
+  adminAction: 'activate_subscription' | 'update_company' | 'create_subscription_invoice'
+) {
   try {
     await logAudit({
       companyId: snapshot.company_id,
@@ -724,6 +731,7 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
   // activateSubscription time.
   const client = await pool.connect();
   let invoiceRow: Record<string, unknown> | undefined;
+  let voidedPurchase: VoidSnapshot | null = null;
 
   try {
     await client.query('BEGIN');
@@ -738,6 +746,13 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
       await client.query('ROLLBACK');
       throw new AppError(404, 'Company not found');
     }
+
+    // Stage B8 (design v4 §8.6): lock any open customer purchase NEXT —
+    // companies -> subscription_purchases -> subscriptions (the active source
+    // row, below) -> [expired-chain void: pending -> invoice -> attempts ->
+    // sessions], the global order with no exception. The decision is taken
+    // only after the source lock is held.
+    const openPurchase = await lockOpenPurchase(client, id);
 
     // Eligibility is based on the commercial subscription row, never
     // `companies.subscription_status` (locked rules #1/#3) — only
@@ -765,6 +780,21 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
         success: false,
         error: 'Company has no active commercial subscription to invoice',
       });
+    }
+
+    // Stage B8: an unexpired open purchase blocks invoice issuance (409, zero
+    // writes); an expired one is voided here, in this transaction, and the
+    // invoice is issued with one COMMIT. If the INSERT below then hits
+    // invoices_one_invoice_per_period, the ROLLBACK undoes the void too.
+    // SIMULATOR-STAGE RULE ONLY (B7 release-owner clarification #2).
+    if (openPurchase) {
+      // B8-R1: openPurchase.unexpired was read BEFORE the source lock above;
+      // the block-vs-void decision uses only this post-source-lock read.
+      if (await purchaseUnexpiredNow(client, openPurchase.id)) {
+        await client.query('ROLLBACK');
+        return openCustomerPurchaseConflict(res, openPurchase.id, openPurchase.expires_at);
+      }
+      voidedPurchase = await voidPurchaseChain(client, openPurchase.id, 'expired_admin_action');
     }
 
     // due_date equals issue_date exactly (locked rule #5) — generated from
@@ -894,6 +924,11 @@ export const createSubscriptionInvoice = asyncHandler(async (req: Request, res: 
   } catch {
     console.error('[billing email] invoice-issued recipient resolution failed — the invoice itself is unaffected');
   }
+
+  // Stage B8: the invoice-issued email flow above runs first (unchanged);
+  // the expired-purchase void audit (when applicable) follows, then the
+  // existing invoice audit.
+  if (voidedPurchase) await logExpiredPurchaseVoidAudit(req, voidedPurchase, 'create_subscription_invoice');
 
   // Best-effort, after COMMIT — same non-transactional pattern as B2's
   // activateSubscription/updateCompany. logAudit() catches its own errors

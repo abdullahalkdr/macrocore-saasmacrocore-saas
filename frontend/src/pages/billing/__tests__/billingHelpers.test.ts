@@ -194,3 +194,147 @@ describe('approved disclosure and feature wording (A2 + D9, A6 with R4 edits)', 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage B8 — upgrade helpers (design v4 §5, §9.3; tests T-FE-1 … T-FE-4).
+// ---------------------------------------------------------------------------
+import {
+  normalizeIntervalParam,
+  returnView,
+  shouldRefetchPlans,
+  upgradeBlockKey,
+  upgradeIntervalFor,
+} from '../billingHelpers';
+
+function plansWith(overrides: Partial<PlansResponse> = {}): PlansResponse {
+  return {
+    success: true, currency: 'USD', intervals: ['monthly', 'annual'], trial_level: 2, plans: [], features: [],
+    checkout_window_minutes: 30,
+    current: { plan: 'bronze', subscription_status: 'active', trial_end_date: null,
+      live_subscription: { id: 'src-1', plan: 'bronze', status: 'active', billing_interval: 'monthly', current_period_end: '2026-10-24T08:00:00.000Z' } },
+    self_service_checkout_available: true, can_purchase: false, purchase_block_reason: 'NOT_ELIGIBLE', open_purchase: null,
+    upgrade: { available: true, block_reason: null, source_subscription_id: 'src-1', interval: 'monthly', targets: ['silver', 'gold'] },
+    ...overrides,
+  };
+}
+
+describe('Stage B8 — planCta in upgrade mode (T-FE-1)', () => {
+  it('current / upgrade / lower / contact_sales / ask_admin', () => {
+    const p = plansWith();
+    expect(planCta('bronze', true, p)).toBe('current');
+    expect(planCta('silver', true, p)).toBe('upgrade');
+    expect(planCta('gold', true, p)).toBe('upgrade');
+    expect(planCta('enterprise', true, p)).toBe('contact_sales');
+    expect(planCta('silver', false, p)).toBe('ask_admin');
+    const silver = plansWith({
+      current: { ...p.current, plan: 'silver', live_subscription: { ...p.current.live_subscription!, plan: 'silver' } },
+      upgrade: { ...p.upgrade!, targets: ['gold'] },
+    });
+    expect(planCta('bronze', true, silver)).toBe('lower');
+    expect(planCta('silver', true, silver)).toBe('current');
+    expect(planCta('gold', true, silver)).toBe('upgrade');
+  });
+
+  it('without an upgrade object (trial, or a B7 backend — C4) "upgrade" is never offered', () => {
+    for (const p of [plansWith({ upgrade: null }), plansWith({ upgrade: undefined })]) {
+      for (const k of ['bronze', 'silver', 'gold']) expect(planCta(k, true, p)).not.toBe('upgrade');
+    }
+  });
+});
+
+describe('Stage B8 — error keys, refetch and the locked interval (T-FE-2)', () => {
+  it('maps the new server codes', () => {
+    expect(billingErrorKey('UPGRADE_CONTEXT_STALE')).toBe('upgradeContextStale');
+    expect(billingErrorKey('NOT_AN_UPGRADE')).toBe('notAnUpgrade');
+    expect(billingErrorKey('INTERVAL_CHANGE_NOT_SUPPORTED')).toBe('intervalChangeNotSupported');
+    expect(billingErrorKey('UNPAID_INVOICE')).toBe('unpaidInvoice');
+    const en = getDictionary('en').billing.errors;
+    const ar = getDictionary('ar').billing.errors;
+    for (const k of ['upgradeContextStale', 'notAnUpgrade', 'intervalChangeNotSupported', 'unpaidInvoice'] as const) {
+      expect(en[k]).toBeTruthy();
+      expect(ar[k]).toBeTruthy();
+    }
+  });
+
+  it('only a stale context triggers the re-render-before-confirm refetch', () => {
+    expect(shouldRefetchPlans('UPGRADE_CONTEXT_STALE')).toBe(true);
+    for (const c of ['NOT_AN_UPGRADE', 'UNPAID_INVOICE', 'PURCHASE_CONFLICT', undefined, null]) expect(shouldRefetchPlans(c)).toBe(false);
+  });
+
+  it('upgrade mode forces the source interval; otherwise the query value applies', () => {
+    const monthly = plansWith();
+    expect(upgradeIntervalFor(monthly)).toBe('monthly');
+    expect(normalizeIntervalParam('annual', monthly)).toBe('monthly');
+    const annual = plansWith({ upgrade: { ...monthly.upgrade!, interval: 'annual' } });
+    expect(normalizeIntervalParam('monthly', annual)).toBe('annual');
+    expect(upgradeIntervalFor(plansWith({ upgrade: null }))).toBeNull();
+    expect(normalizeIntervalParam('monthly', plansWith({ upgrade: null }))).toBe('monthly');
+    expect(normalizeIntervalParam(null, null)).toBe('annual');
+  });
+
+  it('maps upgrade block reasons', () => {
+    expect(upgradeBlockKey('UNPAID_INVOICE')).toBe('unpaidInvoice');
+    expect(upgradeBlockKey('NO_UPGRADE_AVAILABLE')).toBe('noUpgradeAvailable');
+    expect(upgradeBlockKey('NOT_ELIGIBLE')).toBe('notEligible');
+    expect(upgradeBlockKey(null)).toBeNull();
+  });
+
+  it('the approved disclosure is verbatim in both languages', () => {
+    const en = getDictionary('en').billing.confirm.upgradeRule('Bronze', 'Gold', '24 October 2026', '$67.00');
+    expect(en).toBe(
+      'Confirming the order does not change your current plan (Bronze); it stays active until payment succeeds. If payment succeeds, Gold activates immediately and your current plan ends at the same moment. Any remaining days on it (until 24 October 2026) are forfeited, with no refund or credit. You pay the full Gold price ($67.00), and the new subscription period is measured from order confirmation.'
+    );
+    const ar = getDictionary('ar').billing.confirm.upgradeRule('Bronze', 'Gold', '٢٤ أكتوبر ٢٠٢٦', '$67.00');
+    expect(ar).toBe(
+      'لن تتغير باقتك الحالية (Bronze) عند تأكيد الطلب، وتبقى فعّالة إلى أن ينجح الدفع. عند نجاح الدفع تتفعّل باقة Gold فورًا وتنتهي باقتك الحالية في نفس اللحظة، وتسقط أي أيام متبقية منها (حتى ٢٤ أكتوبر ٢٠٢٦) بدون استرداد أو رصيد. ستدفع السعر الكامل لباقة Gold ($67.00)، وتُحسب مدة الاشتراك الجديد من وقت تأكيد الطلب.'
+    );
+  });
+});
+
+describe('Stage B8 — return-page view (T-FE-3, T-FE-4)', () => {
+  const upgradePurchase = (overrides: Partial<PurchaseSummary> = {}) =>
+    purchase({ kind: 'upgrade', replaces: { plan: 'bronze', billing_interval: 'monthly' }, plan: 'silver', billing_interval: 'monthly', ...overrides });
+
+  it('completed upgrade -> orderUpgraded(target) + upgradeFrom(source); current line from the snapshot only', () => {
+    const v = returnView(upgradePurchase({ status: 'completed' }), { plan: 'gold', subscription_status: 'active' });
+    expect(v).toEqual({
+      state: 'success', kind: 'upgrade', orderLine: { key: 'orderUpgraded', plan: 'silver' }, upgradeFrom: 'bronze',
+      currentPlan: { plan: 'gold', status: 'active' },
+    });
+  });
+
+  it.each([
+    ['void', { status: 'void' as const }],
+    ['expired', { status: 'open' as const, checkout_open: false }],
+    ['failed', { latest_attempt_status: 'failed' }],
+    ['cancelled', { latest_attempt_status: 'cancelled' }],
+    ['pending', { latest_attempt_status: 'initiated' }],
+    ['not started', {}],
+  ])('%s upgrade -> orderDidNotChange', (_label, overrides) => {
+    expect(returnView(upgradePurchase(overrides), null).orderLine).toEqual({ key: 'orderDidNotChange' });
+  });
+
+  it('a null snapshot -> currentPlan null (renders currentPlanUnknown)', () => {
+    expect(returnView(upgradePurchase({ status: 'completed' }), null).currentPlan).toBeNull();
+  });
+
+  it('a B7 purchase (no kind, from a B7 backend too) keeps the B7 texts and no upgrade-from line', () => {
+    const v = returnView(purchase({ status: 'completed' }), { plan: 'silver', subscription_status: 'active' });
+    expect(v).toMatchObject({ kind: 'new_subscription', orderLine: { key: 'b7' }, upgradeFrom: null });
+  });
+
+  it('T-FE-4: an OLD void upgrade URL after a newer upgrade never claims the source is active or current', () => {
+    const v = returnView(upgradePurchase({ status: 'void' }), { plan: 'gold', subscription_status: 'active' });
+    expect(v.orderLine).toEqual({ key: 'orderDidNotChange' });
+    expect(v.upgradeFrom).toBe('bronze');
+    expect(v.currentPlan).toEqual({ plan: 'gold', status: 'active' });
+    // Rendered with the real dictionaries: no sentence pairs Bronze with "current"/"active".
+    for (const lang of ['en', 'ar'] as const) {
+      const d = getDictionary(lang).billing.returnPage;
+      const lines = [d.orderDidNotChange, d.upgradeFrom('Bronze'), d.currentPlanNow('Gold', 'Active')];
+      const bronzeLines = lines.filter((l) => l.includes('Bronze'));
+      expect(bronzeLines).toEqual([d.upgradeFrom('Bronze')]);
+      expect(d.currentPlanNow('Gold', 'Active')).not.toContain('Bronze');
+    }
+  });
+});
