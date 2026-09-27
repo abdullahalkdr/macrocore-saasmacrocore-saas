@@ -69,7 +69,7 @@ const SUBSCRIPTION_ROW = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.logAudit.mockResolvedValue(undefined);
+  mocks.logAudit.mockResolvedValue(true); // Stage B8.2: logAudit resolves a boolean
   mocks.resolveBillingRecipients.mockResolvedValue([]);
   mocks.enqueueEmail.mockResolvedValue({ jobId: 'job-1', deduped: false });
 });
@@ -324,12 +324,18 @@ function b7ActivationFlow(opts: { unexpired: boolean; insertError?: any; events?
     if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
       return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-invoice-1', status: 'open' }] };
     }
-    if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
-    if (sql.includes('SELECT id, invoice_number, status FROM invoices')) {
-      return { rows: [{ id: 'pending-invoice-1', invoice_number: 'MC-SUB-000042', status: 'issued' }] };
+    // Stage B8.2: the shared chain lock/validation reads status + company and
+    // the session provider (lockAndValidatePurchaseChain).
+    if (sql.includes('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE')) {
+      return { rows: [{ id: 'pending-sub-1', company_id: 'company-1', status: 'pending_payment' }] };
+    }
+    if (sql.includes('SELECT id, company_id, invoice_number, status FROM invoices')) {
+      return { rows: [{ id: 'pending-invoice-1', company_id: 'company-1', invoice_number: 'MC-SUB-000042', status: 'issued' }] };
     }
     if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [{ id: 'attempt-1', status: 'initiated' }] };
-    if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) return { rows: [{ id: 'session-1', status: 'pending' }] };
+    if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) {
+      return { rows: [{ id: 'session-1', status: 'pending', provider: 'simulated' }] };
+    }
     if (sql.includes('UPDATE payment_attempts SET status')) {
       return { rows: [{ id: 'attempt-1', status: 'cancelled', failed_at: null, succeeded_at: null, cancelled_at: '2026-09-24T10:05:00.000Z' }] };
     }

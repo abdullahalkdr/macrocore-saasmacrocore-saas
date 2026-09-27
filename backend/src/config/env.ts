@@ -66,6 +66,13 @@ export const env = {
   // queues. Railway sets this to 'true' explicitly; no local .env should ever set it.
   ENABLE_BACKGROUND_SWEEPS: process.env.ENABLE_BACKGROUND_SWEEPS === 'true',
 
+  // Stage B8.2 — expired self-service purchase cleanup sweep (see
+  // claude/chat8c-b8-2-expired-purchase-cleanup-design-pass-v3-2026-09-27.md).
+  // Its OWN kill switch, default OFF: the sweep runs only when this is the exact
+  // string 'true' AND ENABLE_BACKGROUND_SWEEPS is 'true'. Any other value
+  // (unset, 'false', 'TRUE', '1', a typo) leaves it a no-op before any DB access.
+  ENABLE_EXPIRED_PURCHASE_CLEANUP: process.env.ENABLE_EXPIRED_PURCHASE_CLEANUP === 'true',
+
   // Stage B6 — Provider-Neutral Simulated Payment Flow (see
   // claude/chat6a-b6-payment-simulator-design-pass-v5-2026-09-17.md). Global
   // kill-switch: any value other than the exact string 'true' (unset,

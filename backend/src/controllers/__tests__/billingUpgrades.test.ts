@@ -101,8 +101,8 @@ function voidChain() {
   on('FROM subscription_purchases WHERE id = $1 FOR UPDATE', {
     rows: [{ id: 'old-purchase', company_id: COMPANY, subscription_id: 'old-sub', invoice_id: 'old-inv', status: 'open' }],
   });
-  on('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE', { rows: [{ id: 'old-sub' }] });
-  on('SELECT id, invoice_number, status FROM invoices', { rows: [{ id: 'old-inv', invoice_number: 'MC-SUB-000020', status: 'issued' }] });
+  on('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE', { rows: [{ id: 'old-sub', company_id: COMPANY, status: 'pending_payment' }] });
+  on('SELECT id, company_id, invoice_number, status FROM invoices', { rows: [{ id: 'old-inv', company_id: COMPANY, invoice_number: 'MC-SUB-000020', status: 'issued' }] });
   on('FROM payment_attempts WHERE invoice_id', { rows: [] });
   on("UPDATE invoices SET status = 'void'", { rows: [{ id: 'old-inv' }] });
   on("UPDATE subscriptions SET status = 'abandoned'", { rows: [{ id: 'old-sub' }] });

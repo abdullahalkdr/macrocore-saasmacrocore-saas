@@ -6,6 +6,7 @@ import {
   startCheckout,
   voidPurchaseChain,
   LockedPurchaseChain,
+  PurchaseChainAnomaly,
 } from '../subscriptionPurchase';
 import { CHECKOUT_WINDOW_MINUTES } from '../../config/billing';
 
@@ -98,10 +99,20 @@ function voidChainHandlers(attempts: { id: string; status: string }[] = []) {
   on('FROM subscription_purchases WHERE id = $1 FOR UPDATE', {
     rows: [{ id: 'old-purchase', company_id: COMPANY, subscription_id: 'old-sub', invoice_id: 'old-inv', status: 'open' }],
   });
-  on('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE', { rows: [{ id: 'old-sub' }] });
-  on('SELECT id, invoice_number, status FROM invoices', { rows: [{ id: 'old-inv', invoice_number: 'MC-SUB-000009', status: 'issued' }] });
+  // Stage B8.2: the chain lock/validation reads status + company and locks the
+  // session of EVERY attempt (provider included).
+  on('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE', {
+    rows: [{ id: 'old-sub', company_id: COMPANY, status: 'pending_payment' }],
+  });
+  on('SELECT id, company_id, invoice_number, status FROM invoices', {
+    rows: [{ id: 'old-inv', company_id: COMPANY, invoice_number: 'MC-SUB-000009', status: 'issued' }],
+  });
   on('FROM payment_attempts WHERE invoice_id', { rows: attempts });
-  on('FROM payment_checkout_sessions WHERE payment_attempt_id', { rows: [{ id: 'old-session', status: 'pending' }] });
+  // The initiated attempt has a pending simulator session; terminal attempts have none.
+  on('FROM payment_checkout_sessions WHERE payment_attempt_id', (_sql, params) => {
+    const attempt = attempts.find((a) => a.id === params[0]);
+    return { rows: attempt && attempt.status === 'initiated' ? [{ id: 'old-session', status: 'pending', provider: 'simulated' }] : [] };
+  });
   on('UPDATE payment_attempts SET status', { rows: [{ id: 'old-attempt', status: 'cancelled', cancelled_at: '2026-09-24T10:00:00Z' }] });
   on('UPDATE payment_checkout_sessions SET status', { rows: [{ id: 'old-session', status: 'cancelled', resolved_at: '2026-09-24T10:00:00Z' }] });
   on("UPDATE invoices SET status = 'void'", { rows: [{ id: 'old-inv' }] });
@@ -365,9 +376,10 @@ describe('voidPurchaseChain (design v3 §9.6)', () => {
     });
     const order = [
       idx('FROM subscription_purchases WHERE id = $1 FOR UPDATE'),
-      idx('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE'),
-      idx('SELECT id, invoice_number, status FROM invoices'),
+      idx('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE'),
+      idx('SELECT id, company_id, invoice_number, status FROM invoices'),
       idx('FROM payment_attempts WHERE invoice_id'),
+      idx('FROM payment_checkout_sessions WHERE payment_attempt_id'),
       idx('UPDATE payment_attempts SET status'),
       idx('UPDATE payment_checkout_sessions SET status'),
       idx("UPDATE invoices SET status = 'void'"),
@@ -476,11 +488,15 @@ describe('applyPurchaseOnTrustedSuccess (design v3 §9.5)', () => {
 import { createHash } from 'crypto';
 import { getPurchaseSummary } from '../subscriptionPurchase';
 
-describe('Stage B8 — the B7 trial confirm SQL is byte-identical (T-API-7)', () => {
+describe('Stage B8 — the plain B7 trial confirm SQL is byte-identical; the superseding flow is pinned to the B8.2 chain sequence (T-API-7)', () => {
   // sha256 of the full statement sequence ("\n---\n"-joined), recorded by
   // running the SAME scenario against the accepted B7 code (HEAD aadd332).
   const B7_PLAIN_SHA = '7f0ab5e1dede209018c0b14d3417b0c2a90cf54c8198b6e57f348ae367ecece1';
-  const B7_SUPERSEDE_SHA = '31f1e5551739b3844993347a9950aa1c274abf2cb4d583963edb97b3cef36906';
+  // The superseding flow runs the purchase-chain void, whose lock/validation
+  // sequence was intentionally changed by Stage B8.2 (design v3 §5.2). Its
+  // statement sequence is therefore pinned separately, as the approved B8.2
+  // sequence — NOT as byte-identical to B7.
+  const B8_2_SUPERSEDE_CHAIN_VALIDATION_SHA = 'b0af5575c9621d08d62349771284dc01efa0cafd90af1fbe065af88514ad2ff6';
   const shaOf = () => createHash('sha256').update(fake.calls.map((c) => c.sql).join('\n---\n')).digest('hex');
   function trialScenario(open: boolean) {
     on('FROM companies WHERE id = $1 FOR UPDATE', { rows: [{ id: 'c', plan: 'trial', subscription_status: 'trial' }] });
@@ -490,8 +506,8 @@ describe('Stage B8 — the B7 trial confirm SQL is byte-identical (T-API-7)', ()
     });
     on('AS unexpired', { rows: [{ unexpired: true }] });
     on('FROM subscription_purchases WHERE id = $1 FOR UPDATE', { rows: [{ id: 'op', company_id: 'c', subscription_id: 'os', invoice_id: 'oi', status: 'open' }] });
-    on('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE', { rows: [{ id: 'os' }] });
-    on('SELECT id, invoice_number, status FROM invoices', { rows: [{ id: 'oi', invoice_number: 'N', status: 'issued' }] });
+    on('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE', { rows: [{ id: 'os', company_id: 'c', status: 'pending_payment' }] });
+    on('SELECT id, company_id, invoice_number, status FROM invoices', { rows: [{ id: 'oi', company_id: 'c', invoice_number: 'N', status: 'issued' }] });
     on('FROM payment_attempts WHERE invoice_id', { rows: [] });
     on('UPDATE', { rows: [{ id: 'x' }] });
     on('INSERT INTO invoices', { rows: [{ id: 'ni', invoice_number: 'N2' }] });
@@ -505,10 +521,21 @@ describe('Stage B8 — the B7 trial confirm SQL is byte-identical (T-API-7)', ()
     expect(shaOf()).toBe(B7_PLAIN_SHA);
   });
 
-  it('a superseding trial confirm issues exactly the B7 statements', async () => {
+  it('a superseding trial confirm issues the approved B8.2 purchase-chain validation sequence', async () => {
     trialScenario(true);
     await confirmPurchase(makePool() as any, TRIAL_INPUT);
-    expect(shaOf()).toBe(B7_SUPERSEDE_SHA);
+    expect(shaOf()).toBe(B8_2_SUPERSEDE_CHAIN_VALIDATION_SHA);
+    // Direct assertions (the SHA is not the only protection): the company-
+    // scoped pending/invoice/attempt locks come before any void write.
+    const at = (s: string) => fake.calls.findIndex((c) => c.sql.includes(s));
+    const locks = [
+      at('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE'),
+      at('SELECT id, company_id, invoice_number, status FROM invoices WHERE id = $1 AND company_id = $2 FOR UPDATE'),
+      at('FROM payment_attempts WHERE invoice_id = $1 AND company_id = $2 ORDER BY created_at, id FOR UPDATE'),
+    ];
+    expect(locks.every((i) => i >= 0)).toBe(true);
+    expect([...locks].sort((a, b) => a - b)).toEqual(locks);
+    expect(locks[2]).toBeLessThan(at("UPDATE invoices SET status = 'void'"));
   });
 
   it('a trial company that sends the upgrade source field -> 409 UPGRADE_CONTEXT_STALE, zero writes', async () => {
@@ -560,7 +587,8 @@ describe('Stage B8 — voidPurchaseChain never touches the source of an upgrade 
     const subscriptionStatements = sqls().filter((s) => /subscriptions/.test(s) && !/subscription_purchases/.test(s));
     expect(subscriptionStatements.length).toBe(2); // pending lock + pending -> abandoned
     for (const call of fake.calls) {
-      if (/subscriptions/.test(call.sql) && !/subscription_purchases/.test(call.sql)) expect(call.params).toEqual(['old-sub']);
+      // Stage B8.2: the pending lock is also scoped to the purchase's company.
+      if (/subscriptions/.test(call.sql) && !/subscription_purchases/.test(call.sql)) expect(call.params[0]).toBe('old-sub');
     }
     expect(sqls().some((s) => s.includes("'superseded'") && s.startsWith('UPDATE subscriptions'))).toBe(false);
   });
@@ -581,5 +609,123 @@ describe('Stage B8 — startCheckout is byte-identical for every purchase kind (
     await startCheckout(makePool() as any, 'c', 'p');
     expect(createHash('sha256').update(fake.calls.map((c) => c.sql).join('\n---\n')).digest('hex')).toBe(B7_CHECKOUT_SHA);
     expect(sqls().some((s) => s.includes('replaces_subscription_id') || s.includes("'superseded'"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage B8.2 (design v3 §4.1 E3–E6, §4.3) — chain validation shared by every
+// void caller. Every rejection happens before any write.
+// ---------------------------------------------------------------------------
+describe('Stage B8.2 — lockAndValidatePurchaseChain via voidPurchaseChain', () => {
+  type Att = { id: string; status: string; session?: { status: string; provider?: string } | null };
+  function chain(opts: { pendingStatus?: string; invoiceStatus?: string; attempts?: Att[] } = {}) {
+    const attempts = opts.attempts ?? [];
+    on('FROM subscription_purchases WHERE id = $1 FOR UPDATE', {
+      rows: [{ id: 'old-purchase', company_id: COMPANY, subscription_id: 'old-sub', invoice_id: 'old-inv', status: 'open' }],
+    });
+    on('FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE', {
+      rows: [{ id: 'old-sub', company_id: COMPANY, status: opts.pendingStatus ?? 'pending_payment' }],
+    });
+    on('FROM invoices WHERE id = $1 AND company_id = $2 FOR UPDATE', {
+      rows: [{ id: 'old-inv', company_id: COMPANY, invoice_number: 'MC-SUB-000009', status: opts.invoiceStatus ?? 'issued' }],
+    });
+    on('FROM payment_attempts WHERE invoice_id', { rows: attempts.map((a) => ({ id: a.id, status: a.status })) });
+    on('FROM payment_checkout_sessions WHERE payment_attempt_id', (_sql, params) => {
+      const a = attempts.find((x) => x.id === params[0]);
+      return { rows: a && a.session ? [{ id: `${a.id}-s`, status: a.session.status, provider: a.session.provider ?? 'simulated' }] : [] };
+    });
+    on('UPDATE payment_attempts SET status', { rows: [{ id: 'x', status: 'cancelled', cancelled_at: '2026-09-27T00:00:00Z' }] });
+    on('UPDATE payment_checkout_sessions SET status', { rows: [{ id: 'x-s', status: 'cancelled', resolved_at: '2026-09-27T00:00:00Z' }] });
+    on('UPDATE', { rows: [{ id: 'x' }] });
+  }
+  async function expectAnomaly(cls: string) {
+    const err = await voidPurchaseChain(makePool().client as any, 'old-purchase', 'expired_cleanup').catch((e) => e);
+    expect(err).toBeInstanceOf(PurchaseChainAnomaly);
+    expect((err as PurchaseChainAnomaly).anomalyClass).toBe(cls);
+    expect(sqls().some(isWrite)).toBe(false);
+  }
+
+  it('locks the session of EVERY attempt (initiated, failed, cancelled), in attempt order, before any write', async () => {
+    chain({
+      attempts: [
+        { id: 'a1', status: 'failed', session: { status: 'failed' } },
+        { id: 'a2', status: 'cancelled', session: { status: 'cancelled' } },
+        { id: 'a3', status: 'initiated', session: { status: 'pending' } },
+      ],
+    });
+    const snapshot = await voidPurchaseChain(makePool().client as any, 'old-purchase', 'expired_cleanup');
+    expect(snapshot.cancelled_payment_attempt_ids).toEqual(['a3']);
+    expect(snapshot.reason).toBe('expired_cleanup');
+    const sessionLocks = fake.calls.filter((c) => c.sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id'));
+    expect(sessionLocks.map((c) => c.params[0])).toEqual(['a1', 'a2', 'a3']);
+    expect(sessionLocks.every((c) => c.sql.includes('provider') && c.sql.includes('FOR UPDATE'))).toBe(true);
+    const lastLock = Math.max(...fake.calls.map((c, i) => (/FOR UPDATE/.test(c.sql) ? i : -1)));
+    const firstWrite = fake.calls.findIndex((c) => isWrite(c.sql));
+    expect(lastLock).toBeLessThan(firstWrite);
+    // Only the initiated attempt and its pending session are written.
+    expect(fake.calls.filter((c) => c.sql.startsWith('UPDATE payment_attempts')).map((c) => c.params[0])).toEqual(['a3']);
+    expect(fake.calls.filter((c) => c.sql.startsWith('UPDATE payment_checkout_sessions')).map((c) => c.params[0])).toEqual(['a3-s']);
+  });
+
+  it('initiated with no session and terminal attempts with no session are valid', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'failed', session: null }, { id: 'a2', status: 'initiated', session: null }] });
+    const snapshot = await voidPurchaseChain(makePool().client as any, 'old-purchase', 'expired_cleanup');
+    expect(snapshot.cancelled_payment_attempt_ids).toEqual(['a2']);
+    expect(fake.calls.some((c) => c.sql.startsWith('UPDATE payment_checkout_sessions'))).toBe(false);
+  });
+
+  it('failed attempt + pending session -> anomaly_session, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'failed', session: { status: 'pending' } }] });
+    await expectAnomaly('anomaly_session');
+  });
+
+  it('cancelled attempt + failed session -> anomaly_session, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'cancelled', session: { status: 'failed' } }] });
+    await expectAnomaly('anomaly_session');
+  });
+
+  it('cancelled attempt + pending session -> anomaly_session, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'cancelled', session: { status: 'pending' } }] });
+    await expectAnomaly('anomaly_session');
+  });
+
+  it('initiated attempt + cancelled session -> anomaly_session, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'initiated', session: { status: 'cancelled' } }] });
+    await expectAnomaly('anomaly_session');
+  });
+
+  it('any succeeded attempt -> anomaly_attempt, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'succeeded', session: { status: 'succeeded' } }] });
+    await expectAnomaly('anomaly_attempt');
+  });
+
+  it('non-simulated session on a TERMINAL attempt -> provider_guard, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'failed', session: { status: 'failed', provider: 'myfatoorah' } }] });
+    await expectAnomaly('provider_guard');
+  });
+
+  it('non-simulated session on an initiated attempt -> provider_guard, zero writes', async () => {
+    chain({ attempts: [{ id: 'a1', status: 'initiated', session: { status: 'pending', provider: 'bede' } }] });
+    await expectAnomaly('provider_guard');
+  });
+
+  it('pending subscription not pending_payment -> anomaly_pending; invoice not issued -> anomaly_invoice', async () => {
+    chain({ pendingStatus: 'abandoned' });
+    await expectAnomaly('anomaly_pending');
+    fake = { calls: [], handlers: [], released: 0, poolCalls: [], poolHandler: null };
+    chain({ invoiceStatus: 'paid' });
+    await expectAnomaly('anomaly_invoice');
+  });
+
+  it('the lazy confirm path rejects a provider-guarded chain with a rollback and no writes', async () => {
+    eligibleCompany();
+    openPurchase({ plan: 'gold', interval: 'annual', unexpired: false });
+    chain({ attempts: [{ id: 'a1', status: 'initiated', session: { status: 'pending', provider: 'x' } }] });
+    creationHandlers();
+    const err = await confirmPurchase(makePool() as any, INPUT).catch((e) => e);
+    expect(err).toBeInstanceOf(PurchaseChainAnomaly);
+    expect(sqls()).toContain('ROLLBACK');
+    expect(sqls()).not.toContain('COMMIT');
+    expect(sqls().some(isWrite)).toBe(false);
   });
 });

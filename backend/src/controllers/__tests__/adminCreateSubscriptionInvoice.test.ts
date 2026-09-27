@@ -436,8 +436,13 @@ describe('createSubscriptionInvoice() — Stage B8 open customer purchase', () =
       if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
         return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-inv-1', status: 'open' }] };
       }
-      if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
-      if (sql.includes('SELECT id, invoice_number, status FROM invoices')) return { rows: [{ id: 'pending-inv-1', invoice_number: 'MC-SUB-000050', status: 'issued' }] };
+      // Stage B8.2: the shared chain lock/validation reads status + company.
+      if (sql.includes('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE')) {
+        return { rows: [{ id: 'pending-sub-1', company_id: 'company-1', status: 'pending_payment' }] };
+      }
+      if (sql.includes('SELECT id, company_id, invoice_number, status FROM invoices')) {
+        return { rows: [{ id: 'pending-inv-1', company_id: 'company-1', invoice_number: 'MC-SUB-000050', status: 'issued' }] };
+      }
       if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [] };
       if (sql.includes("UPDATE invoices SET status = 'void'")) return { rows: [{ id: 'pending-inv-1' }] };
       if (sql.includes("UPDATE subscriptions SET status = 'abandoned'")) return { rows: [{ id: 'pending-sub-1' }] };
@@ -480,8 +485,8 @@ describe('createSubscriptionInvoice() — Stage B8 open customer purchase', () =
       at("FROM subscriptions WHERE company_id = $1 AND status = 'active'"),
       events.map((e, i) => (e.includes('clock_timestamp() < expires_at') ? i : -1)).filter((i) => i >= 0).pop()!,
       at('FROM subscription_purchases WHERE id = $1 FOR UPDATE'),
-      at('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE'),
-      at('SELECT id, invoice_number, status FROM invoices'),
+      at('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE'),
+      at('SELECT id, company_id, invoice_number, status FROM invoices'),
       at("UPDATE subscription_purchases SET status = 'void'"),
       at('INSERT INTO invoices'),
       at('COMMIT'),

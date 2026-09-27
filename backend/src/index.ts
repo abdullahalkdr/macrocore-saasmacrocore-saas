@@ -4,6 +4,7 @@ import { sweepEmailQueue } from './utils/email';
 import { sweepApprovalSla } from './utils/approvalSla';
 import { sweepTicketSla } from './utils/ticketSla';
 import { sweepTrialLifecycleEmails } from './utils/trialLifecycleEmails';
+import { sweepExpiredPurchases } from './services/expiredPurchaseCleanup';
 
 app.listen(env.PORT, () => {
   console.log(`macrocore backend listening on port ${env.PORT} [${env.NODE_ENV}]`);
@@ -15,6 +16,12 @@ app.listen(env.PORT, () => {
     env.ENABLE_BACKGROUND_SWEEPS
       ? '[startup] Background sweeps (SLA reminder/breach + email queue) are ENABLED.'
       : '[startup] Background sweeps (SLA reminder/breach + email queue) are DISABLED — set ENABLE_BACKGROUND_SWEEPS=true to enable. This MUST be true on Railway. It must stay false/unset for any local process, especially one pointed at the production DATABASE_URL.'
+  );
+  // Stage B8.2 — the expired-purchase cleanup has its own default-off switch.
+  console.log(
+    env.ENABLE_BACKGROUND_SWEEPS && env.ENABLE_EXPIRED_PURCHASE_CLEANUP
+      ? '[startup] Expired purchase cleanup is ENABLED.'
+      : '[startup] Expired purchase cleanup is DISABLED (requires ENABLE_BACKGROUND_SWEEPS=true and ENABLE_EXPIRED_PURCHASE_CLEANUP=true).'
   );
 
   // Background sweeps — email delivery (the crash-safety/multi-instance-safety
@@ -46,6 +53,11 @@ app.listen(env.PORT, () => {
     // other sweep; the guard is what makes a disabled instance a no-op. No
     // new setInterval, no new timer, no new worker, no new queue.
     void sweepTrialLifecycleEmails().catch((err) => console.error('[trialLifecycleEmails] sweep failed', err));
+    // Stage B8.2 — expired self-service purchase cleanup, same isolated-catch
+    // shape. Self-guards on ENABLE_BACKGROUND_SWEEPS and its own
+    // ENABLE_EXPIRED_PURCHASE_CLEANUP (default off). The catch logs a fixed
+    // string only — never the raw error.
+    void sweepExpiredPurchases().catch(() => console.error('[expiredPurchaseCleanup] sweep failed'));
   };
   runSweeps(); // once right away — picks up anything left over from before a restart
   setInterval(runSweeps, 60_000);

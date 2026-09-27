@@ -111,4 +111,17 @@ describe('index.ts scheduler (round 2 review, point 6)', () => {
   it('runs the sweeps once immediately (startup) in addition to the interval', () => {
     expect(source).toContain('runSweeps(); // once right away');
   });
+
+  // Stage B8.2 (design v3 §12.5 L5) — the expired-purchase cleanup joins the
+  // SAME tick with its own isolated catch; no second timer; the four existing
+  // sweeps keep their own isolated catches.
+  it('the single interval task also calls sweepExpiredPurchases() with its own isolated catch', () => {
+    const body = source.match(/const runSweeps = \(\): void => \{[\s\S]*?\};/)![0];
+    expect(body).toMatch(/sweepExpiredPurchases\(\)\.catch\(/);
+    for (const existing of ['sweepEmailQueue', 'sweepApprovalSla', 'sweepTicketSla', 'sweepTrialLifecycleEmails']) {
+      expect(body).toMatch(new RegExp(`${existing}\\(\\)\\.catch\\(`));
+    }
+    expect((source.match(/setInterval\(/g) || []).length).toBe(1);
+    expect(source).toContain("import { sweepExpiredPurchases } from './services/expiredPurchaseCleanup';");
+  });
 });

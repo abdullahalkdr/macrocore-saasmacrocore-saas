@@ -217,9 +217,12 @@ function b7UpdateFlow(opts: { unexpired: boolean; managed?: boolean; before?: Re
     if (sql.includes('FROM subscription_purchases WHERE id = $1 FOR UPDATE')) {
       return { rows: [{ id: 'purchase-1', company_id: 'company-1', subscription_id: 'pending-sub-1', invoice_id: 'pending-invoice-1', status: 'open' }] };
     }
-    if (sql.includes('SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'pending-sub-1' }] };
-    if (sql.includes('SELECT id, invoice_number, status FROM invoices')) {
-      return { rows: [{ id: 'pending-invoice-1', invoice_number: 'MC-SUB-000077', status: 'issued' }] };
+    // Stage B8.2: the shared chain lock/validation reads status + company.
+    if (sql.includes('SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE')) {
+      return { rows: [{ id: 'pending-sub-1', company_id: 'company-1', status: 'pending_payment' }] };
+    }
+    if (sql.includes('SELECT id, company_id, invoice_number, status FROM invoices')) {
+      return { rows: [{ id: 'pending-invoice-1', company_id: 'company-1', invoice_number: 'MC-SUB-000077', status: 'issued' }] };
     }
     if (sql.includes('FROM payment_attempts WHERE invoice_id')) return { rows: [] };
     if (sql.includes("UPDATE invoices SET status = 'void'")) return { rows: [{ id: 'pending-invoice-1' }] };

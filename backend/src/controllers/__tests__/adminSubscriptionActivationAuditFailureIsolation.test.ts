@@ -101,6 +101,9 @@ describe('activateSubscription() + real logAudit() — audit_logs INSERT failure
     expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
     expect(mocks.clientRelease).toHaveBeenCalledTimes(1);
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith('audit log failed:', 'simulated audit_logs INSERT failure');
+    // Stage B8.2 (design v3 §11.2): sanitized — action (+ SQLSTATE when one
+    // exists) only, never the raw database error message.
+    expect(consoleErrorSpy).toHaveBeenCalledWith('audit log failed:', { action: expect.any(String) });
+    expect(JSON.stringify(consoleErrorSpy.mock.calls)).not.toContain('simulated audit_logs INSERT failure');
   });
 });

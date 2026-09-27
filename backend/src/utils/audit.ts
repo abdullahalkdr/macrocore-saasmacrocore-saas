@@ -8,7 +8,10 @@ interface AuditParams {
   action: string;
   entityType: string;
   entityId?: string | null;
-  req: Request;
+  // Optional since Stage B8.2 (design v3 §11.2): a system actor such as the
+  // expired-purchase cleanup sweep has no HTTP request; ip_address and
+  // user_agent are then stored as NULL. Every existing caller still passes it.
+  req?: Request;
   // Optional before/after snapshots. Populated by the handful of call sites that log
   // a SENSITIVE_ACTIONS entry (role changes, permission grants, employee/payroll
   // deletion, payroll amounts) — every other call site keeps working unmodified by
@@ -50,7 +53,11 @@ export async function logAudit({
   req,
   oldValues,
   newValues,
-}: AuditParams): Promise<void> {
+}: AuditParams): Promise<boolean> {
+  // Stage B8.2 (design v3 §11.2): resolves true once the audit_logs insert
+  // (and, for a SENSITIVE action, its field-change inserts) completed; false
+  // after an internally caught failure. Never throws. Existing callers may
+  // ignore the boolean.
   try {
     const result = await pool.query(
       `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, old_values, new_values, ip_address, user_agent)
@@ -64,8 +71,8 @@ export async function logAudit({
         entityId || null,
         oldValues ? JSON.stringify(oldValues) : null,
         newValues ? JSON.stringify(newValues) : null,
-        req.ip,
-        req.headers['user-agent'] || null,
+        req?.ip ?? null,
+        req?.headers['user-agent'] || null,
       ]
     );
 
@@ -99,10 +106,17 @@ export async function logAudit({
       ]);
       await sendWhatsAppAlert(companyId, buildSensitiveActionMessage({ action, actorLabel: actor, target, diffs }));
     }
+    return true;
   } catch (err) {
     // an audit-log failure should never fail the request it's logging.
-    // console for now, wire to real alerting once this matters in prod.
-    console.error('audit log failed:', (err as Error).message);
+    // Stage B8.2: never print the raw error message (a database error can echo
+    // row data) — only the action and a validated 5-character SQLSTATE.
+    const code = typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+    console.error('audit log failed:', {
+      action,
+      ...(typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? { pgCode: code } : {}),
+    });
+    return false;
   }
 }
 

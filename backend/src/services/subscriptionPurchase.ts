@@ -63,7 +63,30 @@ export class PurchaseError extends Error {
   }
 }
 
-export type VoidReason = 'superseded' | 'expired_superseded' | 'expired_admin_action';
+// Stage B8.2 adds 'expired_cleanup' (the periodic expired-purchase sweep,
+// services/expiredPurchaseCleanup.ts). Like the other reasons it is recorded
+// only in the post-commit audit row — never in the database.
+export type VoidReason = 'superseded' | 'expired_superseded' | 'expired_admin_action' | 'expired_cleanup';
+
+// Stage B8.2 (design v3 §4.1/§4.3) — a purchase chain that must NOT be voided.
+// Thrown by lockAndValidatePurchaseChain() before any write, so the caller's
+// transaction rolls back with zero writes. The message carries only the class
+// and the purchase UUID (no row data).
+export type PurchaseChainAnomalyClass =
+  | 'anomaly_pending'
+  | 'anomaly_invoice'
+  | 'anomaly_attempt'
+  | 'anomaly_session'
+  | 'provider_guard';
+
+export class PurchaseChainAnomaly extends Error {
+  anomalyClass: PurchaseChainAnomalyClass;
+  constructor(anomalyClass: PurchaseChainAnomalyClass, purchaseId: string) {
+    super(`purchase chain anomaly (${anomalyClass}) for purchase ${purchaseId}; nothing was voided`);
+    this.name = 'PurchaseChainAnomaly';
+    this.anomalyClass = anomalyClass;
+  }
+}
 
 export interface VoidSnapshot {
   purchase_id: string;
@@ -165,11 +188,147 @@ export async function purchaseUnexpiredNow(client: Queryable, purchaseId: string
 }
 
 // ---------------------------------------------------------------------------
-// voidPurchaseChain (design v3 §9.6) — the SINGLE void implementation.
-// Preconditions: the caller already holds companies FOR UPDATE and the
-// purchase's subscription_purchases row FOR UPDATE. Re-verifies status='open'
-// under that lock, then continues the global lock order.
+// Purchase-chain void (B7 design v3 §9.6; Stage B8.2 design v3 §4, §5.2).
+//
+// Split in two so the B8.2 cleanup can read the database clock AFTER every
+// chain lock and BEFORE any write:
+//   lockAndValidatePurchaseChain() — locks pending subscription -> invoice ->
+//     EVERY payment attempt (created_at, id) -> the session of EVERY attempt,
+//     then validates the whole chain. Throws PurchaseChainAnomaly (zero writes)
+//     on any inconsistency. Never writes.
+//   applyPurchaseVoid() — the writes only (the unchanged B7 writes), no new
+//     locks.
+// voidPurchaseChain() keeps its signature and composes the two, so every
+// existing caller (confirm, admin actions, admin invoice creation) gets the
+// same validation. The global lock order is unchanged.
 // ---------------------------------------------------------------------------
+export interface LockedVoidChain {
+  purchaseId: string;
+  companyId: string;
+  subscriptionId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  attempts: { id: string; status: string; session: { id: string; status: string; provider: string } | null }[];
+}
+
+// Allowed (attempt status -> session status) pairs (design v3 §4.3); null =
+// no session. Any other attempt status (incl. 'succeeded') is an anomaly.
+const ALLOWED_SESSION_FOR_ATTEMPT: Record<string, (string | null)[]> = {
+  initiated: [null, 'pending'],
+  failed: [null, 'failed'],
+  cancelled: [null, 'cancelled'],
+};
+
+export async function lockAndValidatePurchaseChain(
+  client: Queryable,
+  purchase: { id: string; company_id: string; subscription_id: string; invoice_id: string }
+): Promise<LockedVoidChain> {
+  // subscriptions (pending) -> invoices -> payment_attempts -> payment_checkout_sessions
+  const pending = (
+    await client.query(`SELECT id, company_id, status FROM subscriptions WHERE id = $1 AND company_id = $2 FOR UPDATE`, [
+      purchase.subscription_id,
+      purchase.company_id,
+    ])
+  ).rows[0];
+  if (!pending || pending.status !== 'pending_payment') throw new PurchaseChainAnomaly('anomaly_pending', purchase.id);
+  const invoice = (
+    await client.query(`SELECT id, company_id, invoice_number, status FROM invoices WHERE id = $1 AND company_id = $2 FOR UPDATE`, [
+      purchase.invoice_id,
+      purchase.company_id,
+    ])
+  ).rows[0];
+  if (!invoice || invoice.status !== 'issued') throw new PurchaseChainAnomaly('anomaly_invoice', purchase.id);
+  const attemptRows = (
+    await client.query(
+      `SELECT id, status FROM payment_attempts WHERE invoice_id = $1 AND company_id = $2 ORDER BY created_at, id FOR UPDATE`,
+      [purchase.invoice_id, purchase.company_id]
+    )
+  ).rows;
+  // The session of EVERY attempt, whatever its status, in attempt order.
+  const attempts: LockedVoidChain['attempts'] = [];
+  for (const attempt of attemptRows) {
+    const session = (
+      await client.query(`SELECT id, status, provider FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE`, [
+        attempt.id,
+      ])
+    ).rows[0];
+    attempts.push({
+      id: attempt.id,
+      status: attempt.status,
+      session: session ? { id: session.id, status: session.status, provider: session.provider } : null,
+    });
+  }
+
+  // Validation — every chain lock is held and nothing has been written.
+  // Provider tripwire first (fail-closed for any non-simulator session).
+  if (attempts.some((a) => a.session !== null && a.session.provider !== 'simulated')) {
+    throw new PurchaseChainAnomaly('provider_guard', purchase.id);
+  }
+  if (attempts.some((a) => !Object.prototype.hasOwnProperty.call(ALLOWED_SESSION_FOR_ATTEMPT, a.status))) {
+    throw new PurchaseChainAnomaly('anomaly_attempt', purchase.id);
+  }
+  if (attempts.some((a) => !ALLOWED_SESSION_FOR_ATTEMPT[a.status].includes(a.session ? a.session.status : null))) {
+    throw new PurchaseChainAnomaly('anomaly_session', purchase.id);
+  }
+
+  return {
+    purchaseId: purchase.id,
+    companyId: purchase.company_id,
+    subscriptionId: purchase.subscription_id,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoice_number,
+    attempts,
+  };
+}
+
+export async function applyPurchaseVoid(client: Queryable, chain: LockedVoidChain, reason: VoidReason): Promise<VoidSnapshot> {
+  const cancelled: string[] = [];
+  for (const attempt of chain.attempts) {
+    if (attempt.status !== 'initiated') continue;
+    // settleOutcome is the sole writer of terminal attempt/session status.
+    await settleOutcome(client as PoolClient, {
+      attempt: { id: attempt.id },
+      session: attempt.session ? { id: attempt.session.id } : null,
+      invoice: null,
+      outcome: 'cancelled',
+    });
+    cancelled.push(attempt.id);
+  }
+
+  expectOneRow(
+    await client.query(`UPDATE invoices SET status = 'void' WHERE id = $1 AND status = 'issued' RETURNING id`, [chain.invoiceId]),
+    'invoice issued -> void'
+  );
+  expectOneRow(
+    await client.query(
+      `UPDATE subscriptions SET status = 'abandoned' WHERE id = $1 AND status = 'pending_payment' RETURNING id`,
+      [chain.subscriptionId]
+    ),
+    'subscription pending_payment -> abandoned'
+  );
+  expectOneRow(
+    await client.query(
+      `UPDATE subscription_purchases SET status = 'void' WHERE id = $1 AND status = 'open' RETURNING id`,
+      [chain.purchaseId]
+    ),
+    'purchase open -> void'
+  );
+
+  return {
+    purchase_id: chain.purchaseId,
+    reason,
+    invoice_id: chain.invoiceId,
+    invoice_number: chain.invoiceNumber,
+    subscription_id: chain.subscriptionId,
+    company_id: chain.companyId,
+    cancelled_payment_attempt_ids: cancelled,
+  };
+}
+
+// voidPurchaseChain — the single void entry point for the existing callers.
+// Preconditions (unchanged): the caller already holds companies FOR UPDATE
+// and the purchase's subscription_purchases row FOR UPDATE. Re-verifies
+// status='open' under that lock, then continues the global lock order.
 export async function voidPurchaseChain(client: Queryable, purchaseId: string, reason: VoidReason): Promise<VoidSnapshot> {
   const purchase = (
     await client.query(
@@ -181,70 +340,8 @@ export async function voidPurchaseChain(client: Queryable, purchaseId: string, r
   if (purchase.status !== 'open') {
     throw new Error(`voidPurchaseChain: purchase ${purchaseId} is '${purchase.status}', not 'open'`);
   }
-
-  // subscriptions -> invoices -> payment_attempts -> payment_checkout_sessions
-  expectOneRow(
-    await client.query(`SELECT id FROM subscriptions WHERE id = $1 FOR UPDATE`, [purchase.subscription_id]),
-    'pending subscription lock'
-  );
-  const invoice = expectOneRow(
-    await client.query(`SELECT id, invoice_number, status FROM invoices WHERE id = $1 FOR UPDATE`, [purchase.invoice_id]),
-    'invoice lock'
-  );
-  const attempts = (
-    await client.query(
-      `SELECT id, status FROM payment_attempts WHERE invoice_id = $1 ORDER BY created_at, id FOR UPDATE`,
-      [purchase.invoice_id]
-    )
-  ).rows;
-
-  const cancelled: string[] = [];
-  for (const attempt of attempts) {
-    if (attempt.status !== 'initiated') continue;
-    const session = (
-      await client.query(
-        `SELECT id, status FROM payment_checkout_sessions WHERE payment_attempt_id = $1 FOR UPDATE`,
-        [attempt.id]
-      )
-    ).rows[0];
-    // settleOutcome is the sole writer of terminal attempt/session status.
-    await settleOutcome(client as PoolClient, {
-      attempt: { id: attempt.id },
-      session: session ? { id: session.id } : null,
-      invoice: null,
-      outcome: 'cancelled',
-    });
-    cancelled.push(attempt.id);
-  }
-
-  expectOneRow(
-    await client.query(`UPDATE invoices SET status = 'void' WHERE id = $1 AND status = 'issued' RETURNING id`, [invoice.id]),
-    'invoice issued -> void'
-  );
-  expectOneRow(
-    await client.query(
-      `UPDATE subscriptions SET status = 'abandoned' WHERE id = $1 AND status = 'pending_payment' RETURNING id`,
-      [purchase.subscription_id]
-    ),
-    'subscription pending_payment -> abandoned'
-  );
-  expectOneRow(
-    await client.query(
-      `UPDATE subscription_purchases SET status = 'void' WHERE id = $1 AND status = 'open' RETURNING id`,
-      [purchase.id]
-    ),
-    'purchase open -> void'
-  );
-
-  return {
-    purchase_id: purchase.id,
-    reason,
-    invoice_id: invoice.id,
-    invoice_number: invoice.invoice_number,
-    subscription_id: purchase.subscription_id,
-    company_id: purchase.company_id,
-    cancelled_payment_attempt_ids: cancelled,
-  };
+  const chain = await lockAndValidatePurchaseChain(client, purchase);
+  return applyPurchaseVoid(client, chain, reason);
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +354,8 @@ export async function voidPurchaseChain(client: Queryable, purchaseId: string, r
 // B6 simulator is the provider and cannot authorize success after expiry. A
 // real provider may authorize before expiry and deliver its verified callback
 // afterwards; before any real provider is added this rule MUST be redesigned
-// or reconciled with provider state.
+// or reconciled with provider state. Stage B8.2: lockAndValidatePurchaseChain()
+// now refuses (zero writes) to void any chain with a non-'simulated' session.
 // ---------------------------------------------------------------------------
 export type AdminOpenPurchaseOutcome =
   | { kind: 'none' }
