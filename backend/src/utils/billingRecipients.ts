@@ -74,11 +74,13 @@ function resolveLang(raw: string | null): EmailLang {
  *
  * Chat 4C, Stage B4B — additive `queryable` parameter, defaulting to the
  * plain `pool` (byte-identical behavior for every existing call site above,
- * which are all still strictly post-commit). trialLifecycleEmails.ts's own
- * per-company transaction (design v8 §2.2) is the only caller that ever
- * passes its own open transaction's client instead — so it resolves
- * recipients using the SAME client that holds its `companies FOR UPDATE`
- * lock, rather than a second, separate `pool` connection.
+ * which are all still strictly post-commit). Two callers pass their own
+ * open transaction's client instead: trialLifecycleEmails.ts's per-company
+ * transaction (design v8 §2.2), and — Stage B8.1 —
+ * services/purchaseConfirmationEmail.ts inside the self-service settlement
+ * transaction. Both resolve recipients on the SAME client that holds their
+ * `companies FOR UPDATE` lock, rather than a second, separate `pool`
+ * connection.
  */
 export async function resolveBillingRecipients(companyId: string, queryable: Queryable = pool): Promise<ResolvedBillingRecipient[]> {
   const result = await queryable.query<BillingCandidateRow>(

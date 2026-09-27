@@ -89,7 +89,9 @@
  * Genuine blocking is confirmed via pg_stat_activity/pg_locks whenever the
  * bias produces observable contention.
  *
- * Run with (bash):
+ * Run with (bash) — these two variables only; DATABASE_URL / JWT_SECRET are
+ * never read from the caller (the script sets them itself, pointed at its own
+ * disposable database, before loading the application module):
  *   SMOKE_CONCURRENCY_ADMIN_URL="postgres://pguser@127.0.0.1:55432/postgres" \
  *   SMOKE_CONFIRM_DISPOSABLE=yes \
  *     node docs/SMOKE_B6_payment_simulator_concurrency.js
@@ -103,8 +105,15 @@ const { parse: parseConnectionString } = require('pg-connection-string');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-require('ts-node/register/transpile-only');
-const { resolveCheckoutSessionCore } = require('../src/services/paymentSettlement');
+
+// The application module (services/paymentSettlement.ts, via ts-node) is NOT
+// loaded here: it transitively loads config/env.ts and db/pool.ts, which read
+// DATABASE_URL / JWT_SECRET at import time. It is loaded in main() by
+// loadSettlementModule(), only AFTER the explicit smoke URL has been
+// validated (localhost/127.0.0.1 only) and the disposable database has been
+// created — with DATABASE_URL pointed at that disposable database and a
+// clearly fake JWT_SECRET. The caller never supplies either variable.
+let resolveCheckoutSessionCore = null;
 
 const RAW_ADMIN_URL = process.env.SMOKE_CONCURRENCY_ADMIN_URL;
 const CONFIRM_DISPOSABLE = process.env.SMOKE_CONFIRM_DISPOSABLE;
@@ -173,6 +182,28 @@ let dbCreated = false;
 
 function clientConfig(dbName) {
   return { ...parsedConfig, host: effectiveHost, database: dbName };
+}
+
+// Stage B8.1 bootstrap (safe B7/B8 pattern). Called only from main(), after
+// the host checks above passed and DB_NAME was created. Never uses the admin
+// database, the caller's environment, or any unvalidated URL.
+let appPool = null;
+function loadSettlementModule() {
+  const port = parsedConfig.port || 5432;
+  const userPart = parsedConfig.user
+    ? `${encodeURIComponent(parsedConfig.user)}${parsedConfig.password ? `:${encodeURIComponent(parsedConfig.password)}` : ''}@`
+    : '';
+  process.env.DATABASE_URL = `postgres://${userPart}${effectiveHost}:${port}/${DB_NAME}`;
+  process.env.JWT_SECRET = 'smoke-b6-only-fake-jwt-secret-not-real';
+  process.env.ENABLE_BACKGROUND_SWEEPS = 'false';
+  process.env.RESEND_API_KEY = '';
+  process.env.NODE_ENV = 'test';
+  process.env.FRONTEND_URL = 'https://app.example.test';
+  require('ts-node/register/transpile-only');
+  ({ resolveCheckoutSessionCore } = require('../src/services/paymentSettlement'));
+  // Created (lazily, never connected by these B6 scenarios) by the module
+  // graph above; ended in the cleanup below.
+  ({ pool: appPool } = require('../src/db/pool'));
 }
 
 async function withTimeout(promise, ms, label) {
@@ -420,6 +451,7 @@ async function main() {
   } finally {
     await closeAndWait(admin, 'admin (create-database) connection');
   }
+  loadSettlementModule();
 
   let exitCode = 1;
   let cleanupFailed = false;
@@ -952,6 +984,7 @@ async function main() {
     console.log(`\n${checks.filter(([, p]) => p).length}/${checks.length} checks passed.`);
   } finally {
     for (const c of openClients) await closeAndWait(c, 'test connection');
+    if (appPool) await appPool.end().catch(() => {});
     if (dbCreated) {
       const cleanup = new Client(clientConfig(parsedConfig.database));
       try {

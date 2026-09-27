@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Stage B8.1 — spy on the two delivery entry points so every settlement test
+// can assert B8.1 never starts delivery (design v2 §4, T-SET-7).
+const deliverySpies = vi.hoisted(() => ({ attemptDeliverNow: vi.fn(), enqueueEmail: vi.fn() }));
+vi.mock('../../utils/email', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/email')>();
+  return { ...actual, attemptDeliverNow: deliverySpies.attemptDeliverNow, enqueueEmail: deliverySpies.enqueueEmail };
+});
 import {
   settleOutcome,
   buildAuditPayloadForResolve,
@@ -9,6 +17,50 @@ import {
 } from '../paymentSettlement';
 
 const FAILED_AT = '2026-09-17T11:00:00.000Z';
+
+// Stage B8.1 — answers for the confirmation-job statements the settlement now
+// issues between the apply and COMMIT. `fail` injects a failure at one step.
+type EmailFail = 'savepoint' | 'detail' | 'recipients' | 'insert' | 'rollbackTo' | 'releaseOk' | 'releaseRecovery';
+function emailSqlAnswer(sql: string, fail: EmailFail | undefined, state: { failed: boolean }) {
+  const boom = (code = '23514') => Object.assign(new Error('injected failure with a@example.com'), { code });
+  if (sql.startsWith('SAVEPOINT ')) {
+    if (fail === 'savepoint') throw boom('25P02');
+    return {};
+  }
+  if (sql.startsWith('ROLLBACK TO SAVEPOINT ')) {
+    if (fail === 'rollbackTo') throw boom('25P02');
+    state.failed = true;
+    return {};
+  }
+  if (sql.startsWith('RELEASE SAVEPOINT ')) {
+    if (state.failed && fail === 'releaseRecovery') throw boom('25P02');
+    if (!state.failed && fail === 'releaseOk') throw boom('25P02');
+    return {};
+  }
+  if (sql.includes('AS confirmed_at')) {
+    if (fail === 'detail') throw boom();
+    return {
+      rows: [{
+        company_name: 'Acme <b>Co</b>', invoice_number: 'MC-SUB-000042', amount_text: '32.00', currency: 'USD',
+        period_start: '2026-09-24T08:00:00.000000Z', period_end: '2026-10-24T08:00:00.000000Z', confirmed_at: '2026-09-24T09:00:00.000000Z',
+      }],
+    };
+  }
+  if (sql.includes('FROM users u')) {
+    if (fail === 'recipients') throw boom();
+    return {
+      rows: [
+        { id: 'user-1', email: 'Admin@Example.com', preferred_language: 'ar', company_timezone: 'Asia/Kuwait' },
+        { id: 'user-2', email: 'owner@example.com', preferred_language: 'en', company_timezone: 'Asia/Kuwait' },
+      ],
+    };
+  }
+  if (sql.includes('INSERT INTO email_jobs')) {
+    if (fail === 'insert') throw boom();
+    return { rows: [{ id: `job-${Math.random()}` }] };
+  }
+  return null;
+}
 const RESOLVED_AT = '2026-09-17T12:00:00.000Z';
 
 function makeClient() {
@@ -569,10 +621,14 @@ describe('resolveCheckoutSessionCore — Stage B7 purchase-linked sessions', () 
     companyStatus?: string;
     maySucceed?: boolean;
     hasLive?: boolean;
+    emailFail?: EmailFail;
   } = {}) {
     const calls: { sql: string; params: any[] }[] = [];
+    const emailState = { failed: false };
     const clientQuery = vi.fn(async (sql: string, params: any[] = []) => {
       calls.push({ sql, params });
+      const emailAnswer = emailSqlAnswer(sql, opts.emailFail, emailState);
+      if (emailAnswer) return emailAnswer;
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
       if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) {
         return { rows: [{ id: 'company-1', plan: 'trial', subscription_status: opts.companyStatus ?? 'trial' }] };
@@ -584,7 +640,7 @@ describe('resolveCheckoutSessionCore — Stage B7 purchase-linked sessions', () 
       if (sql.includes('FROM invoices WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'invoice-1', status: 'issued' }] };
       if (sql.includes('FROM payment_attempts WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'attempt-1', invoice_id: 'invoice-1', status: 'initiated' }] };
       if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) {
-        return { rows: [{ id: 'session-1', status: opts.sessionStatus ?? 'pending' }] };
+        return { rows: [{ id: 'session-1', status: opts.sessionStatus ?? 'pending', provider: 'simulated' }] };
       }
       if (sql.includes('AS may_succeed')) return { rows: [{ may_succeed: opts.maySucceed ?? true }] };
       if (sql.includes('AS has_live')) return { rows: [{ has_live: opts.hasLive ?? false }] };
@@ -701,6 +757,125 @@ describe('resolveCheckoutSessionCore — Stage B7 purchase-linked sessions', () 
     expect(result).toMatchObject({ kind: 'conflict', code: 'SESSION_EXPIRED' });
   });
 
+  // ---- Stage B8.1 (design v2 §4, §4.2; T-SET-1..7) ------------------------
+  it('B8.1 T-SET-1: succeeded -> apply, then SAVEPOINT … inserts … RELEASE, then COMMIT; nothing after COMMIT; result shape unchanged', async () => {
+    const { pool, calls, idx } = purchasePool();
+    deliverySpies.attemptDeliverNow.mockClear();
+    deliverySpies.enqueueEmail.mockClear();
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result.kind).toBe('ok');
+    expect(Object.keys(result).sort()).toEqual(['kind', 'purchaseApplied', 'purchaseId', 'result', 'session']);
+    const order = [
+      idx("UPDATE subscription_purchases SET status = 'completed'"),
+      idx('SAVEPOINT b8_1_purchase_confirmation'),
+      idx('AS confirmed_at'),
+      idx('FROM users u'),
+      idx('INSERT INTO email_jobs'),
+      idx('RELEASE SAVEPOINT b8_1_purchase_confirmation'),
+      idx('COMMIT'),
+    ];
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(calls[calls.length - 1].sql).toBe('COMMIT');
+    const inserts = calls.filter((c) => c.sql.includes('INSERT INTO email_jobs'));
+    expect(inserts).toHaveLength(2);
+    expect(inserts.map((c) => c.params[2])).toEqual([
+      'billing:purchase_confirmed:purchase-1:user-1',
+      'billing:purchase_confirmed:purchase-1:user-2',
+    ]);
+    for (const c of inserts) {
+      expect(c.params[0]).toBe('company-1');
+      expect(c.params[1]).toBe('billing');
+      expect(c.params[8]).toBe('subscription_purchases');
+      expect(c.params[9]).toBe('purchase-1');
+    }
+    expect(calls[idx('AS confirmed_at')].params).toEqual(['invoice-1', 'company-1']);
+    expect(calls[idx('FROM users u')].params).toEqual(['company-1']);
+    expect(deliverySpies.attemptDeliverNow).not.toHaveBeenCalled();
+    expect(deliverySpies.enqueueEmail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['failed', {}],
+    ['cancelled', {}],
+    ['succeeded', { maySucceed: false }],
+    ['succeeded', { sessionStatus: 'succeeded' }],
+    ['succeeded', { companyStatus: 'suspended' }],
+  ] as const)('B8.1 T-SET-2/4: %s %o -> no SAVEPOINT, no email_jobs INSERT', async (outcome, opts) => {
+    const { pool, idx } = purchasePool(opts as any);
+    await resolveCheckoutSessionCore(pool as any, 'session-1', outcome).catch(() => undefined);
+    expect(idx('SAVEPOINT')).toBe(-1);
+    expect(idx('INSERT INTO email_jobs')).toBe(-1);
+  });
+
+  it.each(['detail', 'recipients', 'insert'] as const)('B8.1 T-SET-5: an email-side %s failure with successful recovery -> ROLLBACK TO + RELEASE, settlement still COMMITs ok', async (emailFail) => {
+    const { pool, calls, idx } = purchasePool({ emailFail });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result.kind).toBe('ok');
+    expect(idx('ROLLBACK TO SAVEPOINT b8_1_purchase_confirmation')).toBeGreaterThan(idx('SAVEPOINT b8_1_purchase_confirmation'));
+    expect(calls.filter((c) => c.sql.startsWith('RELEASE SAVEPOINT'))).toHaveLength(1);
+    expect(calls[calls.length - 1].sql).toBe('COMMIT');
+    const logged = JSON.stringify(errSpy.mock.calls);
+    expect(logged).toContain('purchase-1');
+    expect(logged).not.toMatch(/@example\.com|injected|MC-SUB|<b>|session-1/);
+    errSpy.mockRestore();
+  });
+
+  it.each(['savepoint', 'releaseOk', 'rollbackTo', 'releaseRecovery'] as const)('B8.1 T-SET-6: a %s statement failure propagates -> outer ROLLBACK, no COMMIT', async (emailFail) => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // rollbackTo / releaseRecovery need an email-side failure first to enter recovery.
+    const target = emailFail === 'rollbackTo' || emailFail === 'releaseRecovery' ? recoveryPool(emailFail) : purchasePool({ emailFail });
+    await expect(resolveCheckoutSessionCore(target.pool as any, 'session-1', 'succeeded')).rejects.toBeTruthy();
+    const sqls = target.calls.map((c: { sql: string }) => c.sql);
+    expect(sqls).toContain('ROLLBACK');
+    expect(sqls).not.toContain('COMMIT');
+    if (emailFail === 'savepoint') expect(sqls.some((q: string) => q.startsWith('ROLLBACK TO SAVEPOINT'))).toBe(false);
+    if (emailFail === 'rollbackTo') expect(sqls.filter((q: string) => q.startsWith('RELEASE SAVEPOINT'))).toHaveLength(0);
+    errSpy.mockRestore();
+  });
+
+  // A pool whose job INSERT fails AND whose recovery statement then fails.
+  function recoveryPool(which: 'rollbackTo' | 'releaseRecovery') {
+    const base = purchasePool({ emailFail: 'insert' });
+    const inner = base.pool.connect;
+    const calls = base.calls;
+    const pool = {
+      query: base.pool.query,
+      connect: vi.fn(async () => {
+        const c = await inner();
+        return {
+          release: c.release,
+          query: async (sql: string, params?: any[]) => {
+            if (which === 'rollbackTo' && sql.startsWith('ROLLBACK TO SAVEPOINT')) {
+              calls.push({ sql, params: params ?? [] });
+              throw Object.assign(new Error('rollback-to failed'), { code: '25P02' });
+            }
+            if (which === 'releaseRecovery' && sql.startsWith('RELEASE SAVEPOINT') && calls.some((x) => x.sql.startsWith('ROLLBACK TO SAVEPOINT'))) {
+              calls.push({ sql, params: params ?? [] });
+              throw Object.assign(new Error('release failed'), { code: '25P02' });
+            }
+            return c.query(sql, params);
+          },
+        };
+      }),
+    };
+    return { pool, calls };
+  }
+
+  it('B8.1 T-SET-7: attemptDeliverNow / enqueueEmail are never called on any purchase-linked path', async () => {
+    deliverySpies.attemptDeliverNow.mockClear();
+    deliverySpies.enqueueEmail.mockClear();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const [outcome, opts] of [['succeeded', {}], ['succeeded', { emailFail: 'insert' }], ['failed', {}], ['cancelled', {}], ['succeeded', { maySucceed: false }]] as const) {
+      const { pool } = purchasePool(opts as any);
+      await resolveCheckoutSessionCore(pool as any, 'session-1', outcome).catch(() => undefined);
+    }
+    expect(deliverySpies.attemptDeliverNow).not.toHaveBeenCalled();
+    expect(deliverySpies.enqueueEmail).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('a non-purchase session keeps the exact B6 statement sequence (invoice -> attempt -> session, no company/purchase lock)', async () => {
     const seq: string[] = [];
     const clientQuery = vi.fn(async (sql: string, params: any[] = []) => {
@@ -777,10 +952,13 @@ describe('Stage B7 audit payload builders', () => {
 describe('resolveCheckoutSessionCore — Stage B8 upgrade purchases', () => {
   const ROUTING = { attempt_id: 'attempt-1', invoice_id: 'invoice-1', purchase_id: 'purchase-1', purchase_company_id: 'company-1' };
 
-  function upgradePool(opts: { maySucceed?: boolean; sourceStatus?: string; companyPlan?: string; sessionStatus?: string } = {}) {
+  function upgradePool(opts: { maySucceed?: boolean; sourceStatus?: string; companyPlan?: string; sessionStatus?: string; emailFail?: EmailFail } = {}) {
     const calls: { sql: string; params: any[] }[] = [];
+    const emailState = { failed: false };
     const clientQuery = vi.fn(async (sql: string, params: any[] = []) => {
       calls.push({ sql, params });
+      const emailAnswer = emailSqlAnswer(sql, opts.emailFail, emailState);
+      if (emailAnswer) return emailAnswer;
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
       if (sql.includes('FROM companies WHERE id = $1 FOR UPDATE')) {
         return { rows: [{ id: 'company-1', plan: opts.companyPlan ?? 'bronze', subscription_status: 'active' }] };
@@ -796,7 +974,7 @@ describe('resolveCheckoutSessionCore — Stage B8 upgrade purchases', () => {
       }
       if (sql.includes('FROM invoices WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'invoice-1', status: 'issued' }] };
       if (sql.includes('FROM payment_attempts WHERE id = $1 FOR UPDATE')) return { rows: [{ id: 'attempt-1', invoice_id: 'invoice-1', status: 'initiated' }] };
-      if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) return { rows: [{ id: 'session-1', status: opts.sessionStatus ?? 'pending' }] };
+      if (sql.includes('FROM payment_checkout_sessions WHERE payment_attempt_id')) return { rows: [{ id: 'session-1', status: opts.sessionStatus ?? 'pending', provider: 'simulated' }] };
       if (sql.includes('AS may_succeed')) return { rows: [{ may_succeed: opts.maySucceed ?? true }] };
       if (sql.includes('AS has_other')) return { rows: [{ has_other: false }] };
       if (sql.includes('UPDATE payment_attempts')) {
@@ -849,6 +1027,21 @@ describe('resolveCheckoutSessionCore — Stage B8 upgrade purchases', () => {
     expect(calls[idx('SELECT id, company_id, plan, status, billing_interval FROM subscriptions')].params).toEqual(['source-1']);
     expect(calls[idx("UPDATE invoices SET status = 'paid'")].sql).toContain('payment_date = clock_timestamp()');
     expect(calls.filter((c) => c.sql === 'COMMIT')).toHaveLength(1);
+  });
+
+  it('B8.1: an upgrade success inserts confirmation jobs after the apply, before COMMIT, with the upgrade kind', async () => {
+    const { pool, calls, idx } = upgradePool();
+    const result = await resolveCheckoutSessionCore(pool as any, 'session-1', 'succeeded');
+    expect(result.kind).toBe('ok');
+    expect(idx('SAVEPOINT b8_1_purchase_confirmation')).toBeGreaterThan(idx("UPDATE subscription_purchases SET status = 'completed'"));
+    expect(idx('RELEASE SAVEPOINT b8_1_purchase_confirmation')).toBeLessThan(idx('COMMIT'));
+    const inserts = calls.filter((c) => c.sql.includes('INSERT INTO email_jobs'));
+    expect(inserts).toHaveLength(2);
+    const enHtml = inserts.find((c) => c.params[4] === 'en')!.params[6] as string;
+    expect(enHtml).toContain('Previous plan');
+    expect(enHtml).toContain('Bronze');
+    expect(enHtml).toContain('Gold');
+    expect(inserts.find((c) => c.params[4] === 'en')!.params[5]).toBe('[Test] Your macrocore plan has been upgraded');
   });
 
   it('succeeded after the window -> 409 SESSION_EXPIRED, ROLLBACK, zero writes', async () => {

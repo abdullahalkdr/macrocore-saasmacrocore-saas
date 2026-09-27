@@ -189,6 +189,7 @@ export function buildAuditPayloadForMarkFailed(result: SettleOutcomeResult) {
 
 import { Pool } from 'pg';
 import { applyPurchaseOnTrustedSuccess, AppliedPurchase } from './subscriptionPurchase';
+import { insertPurchaseConfirmationJobs } from './purchaseConfirmationEmail';
 
 export type ResolveCoreResult =
   | { kind: 'not_found' }
@@ -427,6 +428,21 @@ async function resolvePurchaseLinkedSession(
       attempt: { id: attemptRow.id },
       session: { id: sessionRow.id },
       invoice: { id: invoiceRow.id },
+    });
+
+    // Stage B8.1 (design v2 §4) — confirmation email jobs, durably inserted in
+    // THIS transaction under a SAVEPOINT (email-side failures are isolated;
+    // savepoint-statement failures propagate to the catch below). No delivery
+    // is started here or after COMMIT: the periodic email sweep sends them.
+    await insertPurchaseConfirmationJobs(client, {
+      companyId: companyRow.id,
+      purchaseId: purchaseRow.id,
+      invoiceId: invoiceRow.id,
+      kind: purchaseRow.replaces_subscription_id ? 'upgrade' : 'purchase',
+      newPlan: applied.new_values.plan,
+      previousPlan: sourceRow ? sourceRow.plan : null,
+      billingInterval: applied.billing_interval,
+      provider: sessionRow.provider,
     });
 
     await client.query('COMMIT');

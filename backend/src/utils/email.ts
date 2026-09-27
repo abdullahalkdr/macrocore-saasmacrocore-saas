@@ -18,6 +18,11 @@ export type Queryable = Pick<Pool, 'query'> | PoolClient;
 // there is no circular import between the two files).
 export const TRIAL_ENDING_DEDUP_PREFIX = 'billing:trial_ending:';
 export const TRIAL_EXPIRED_DEDUP_PREFIX = 'billing:trial_expired:';
+// Stage B8.1 — self-service purchase/upgrade confirmation jobs
+// (services/purchaseConfirmationEmail.ts). Deliberately NOT one of the two
+// trial-lifecycle prefixes above, so isTrialLifecycleJob() is false for these
+// jobs and they are delivered through the ordinary deliverViaResend() path.
+export const PURCHASE_CONFIRMED_DEDUP_PREFIX = 'billing:purchase_confirmed:';
 
 export type EmailLang = 'ar' | 'en';
 
@@ -795,38 +800,21 @@ async function deliverClaimedJob(job: EmailJobRow): Promise<EmailJobStatus> {
   return await deliverViaResend(job, (patch) => finalizeJob(job.id, patch));
 }
 
-// Creates a durable job row and returns immediately — this is the "durable
-// delivery" half of the contract: the row exists (and is safely queryable/
-// retryable) the moment this resolves, regardless of whether Resend, the
-// network, or this very process is available a second later. Callers await
-// this (it's a fast single INSERT), but do NOT need to await actual delivery —
-// the immediate best-effort attempt below is fire-and-forget, and the periodic
-// sweep is the crash-safety net if this process dies before that attempt
-// finishes.
-//
-// dedup_key is UNIQUE — ON CONFLICT DO NOTHING makes a duplicate enqueue of the
-// same business event a true no-op (no new row, no new send), whether the
-// duplicate came from a retried HTTP request, a double form submit, or the
-// same scheduler tick running twice.
-//
-// Never throws: if email_jobs itself can't be written to (migration not run
-// yet, DB unreachable), the business action that called this must still
-// succeed — same contract the pre-existing sendEmail() always had.
-// Chat 4C, Stage B4B (design v8 §5) — the shared durable-insert primitive,
-// extracted out of enqueueEmail() below. Takes a `Queryable` (either the
-// plain `pool`, for every pre-existing post-commit call site, or an
-// already-open transaction's `client` — trialLifecycleEmails.ts's own
-// per-company transaction, §2.2, is the only caller that passes a client).
-// Deliberately NEVER triggers delivery on its own (no attemptDeliverNow()
-// call anywhere in this function) — that is exactly what keeps B4B's
-// insertion path durable-insert-only (§2.2, §11 item 3): trialLifecycleEmails.ts
-// calls this function directly, never enqueueEmail(), so a newly-inserted
-// trial-lifecycle job is picked up exclusively by the existing
-// sweepEmailQueue() on its normal cadence, never by an immediate fan-out.
-// Same INSERT statement, same ON CONFLICT (dedup_key) DO NOTHING semantics,
-// same "throws on a real DB error, never swallows it" contract as the
-// original inline code this was extracted from — enqueueEmail() below is the
-// one that adds the try/catch-and-swallow best-effort contract on top.
+// insertEmailJob — the shared durable-insert primitive (Chat 4C, Stage B4B,
+// design v8 §5).
+//   - Durable insert ONLY: one INSERT, never a delivery trigger (no
+//     attemptDeliverNow() call). Jobs it inserts are picked up by the periodic
+//     sweepEmailQueue() on its normal cadence.
+//   - dedup_key is UNIQUE: ON CONFLICT (dedup_key) DO NOTHING makes a duplicate
+//     of the same business event a no-op (inserted: false).
+//   - Real database errors PROPAGATE to the caller — this function never
+//     catches or swallows them.
+// Takes a `Queryable`: the plain `pool` (via enqueueEmail() below) or an
+// already-open transaction's `client`. Two callers pass a client and rely on
+// the propagating-error contract: trialLifecycleEmails.ts's per-company
+// transaction (§2.2), and — Stage B8.1 — services/purchaseConfirmationEmail.ts
+// inside the self-service settlement transaction
+// (paymentSettlement.ts::resolvePurchaseLinkedSession), under a SAVEPOINT.
 export async function insertEmailJob(queryable: Queryable, input: EnqueueEmailInput): Promise<{ jobId: string | null; inserted: boolean }> {
   const result = await queryable.query<{ id: string }>(
     `INSERT INTO email_jobs (company_id, category, dedup_key, recipient_email, lang, subject, html, reply_to, related_entity_type, related_entity_id)
@@ -849,6 +837,13 @@ export async function insertEmailJob(queryable: Queryable, input: EnqueueEmailIn
   return { jobId: result.rows[0]?.id ?? null, inserted: Boolean(result.rows[0]) };
 }
 
+// enqueueEmail — the post-commit convenience wrapper used by the existing
+// call sites (after their own business transaction has committed). It calls
+// insertEmailJob(pool, …), CATCHES any insert error (logs it and returns
+// { jobId: null } — the triggering business action must still succeed), and,
+// for a newly inserted row, makes the existing best-effort immediate delivery
+// attempt (fire-and-forget attemptDeliverNow()); the periodic sweep remains
+// the safety net if that attempt does not finish.
 export async function enqueueEmail(input: EnqueueEmailInput): Promise<{ jobId: string | null; deduped: boolean }> {
   try {
     const { jobId, inserted } = await insertEmailJob(pool, input);
@@ -2409,4 +2404,150 @@ export function subscriptionInvoiceIssuedEmailHtml(params: SubscriptionInvoiceIs
     lang
   );
   return { subject: `تم إصدار فاتورة جديدة — #${invoiceNumber}`, html };
+}
+
+// ============================================================================
+// Stage B8.1 — self-service subscription purchase / upgrade confirmation
+// (claude/chat8b-b8-1-subscription-confirmation-email-design-pass-v2-2026-09-27.md
+// §9-§11). Rendered once, inside the settlement transaction, from the rows
+// that transaction locked; the stored HTML is what every retry resends.
+// A "subscription confirmation" — never a receipt, never a tax invoice, and
+// never a statement that money was charged.
+// ============================================================================
+
+// Exact decimal display: the amount arrives as the SQL-produced text (the same
+// CASE expression as the B7/B8 purchase read model) and is shown verbatim —
+// never parsed into a JavaScript number. Anything that is not a plain decimal
+// string is rejected rather than rendered.
+const EXACT_DECIMAL_TEXT = /^\d+(\.\d+)?$/;
+export function formatExactMoneyForEmail(amountText: string, currency: string): string {
+  if (typeof amountText !== 'string' || !EXACT_DECIMAL_TEXT.test(amountText)) {
+    throw new Error('formatExactMoneyForEmail: amount must be an exact decimal string');
+  }
+  return `${amountText} ${currency}`;
+}
+
+export interface SubscriptionPurchaseConfirmedEmailParams {
+  lang: EmailLang;
+  timeZone: string;
+  kind: 'purchase' | 'upgrade';
+  // payment_checkout_sessions.provider === 'simulated' — adds the subject
+  // prefix and the no-real-charge banner.
+  testMode: boolean;
+  // companies.name — free text, always escaped below.
+  companyName: string;
+  newPlan: string;
+  // The superseded source subscription's plan; upgrades only.
+  previousPlan?: string | null;
+  billingInterval: string;
+  // Exact SQL-produced decimal text, e.g. '660.00' (USD) or '12.345' (KWD).
+  amountText: string;
+  currency: string;
+  // Server-generated formatted code (MC-SUB-NNNNNN). Still escaped.
+  invoiceNumber: string;
+  periodStart: Date | string;
+  periodEnd: Date | string;
+  confirmedAt: Date | string;
+  link: string;
+}
+
+// Rows are [label, pre-escaped value HTML]; labels are escaped here.
+function purchaseSummaryTable(rows: Array<[string, string]>, lang: EmailLang): string {
+  const align = lang === 'en' ? 'right' : 'left';
+  const cells = rows
+    .map(
+      ([label, valueHtml], i) => `
+        <tr>
+          <td style="padding: 6px 0; color: #78716c;${i > 0 ? ' border-top: 1px solid #f5f5f4;' : ''}">${escapeHtml(label)}</td>
+          <td style="padding: 6px 0; text-align: ${align}; font-weight: 600;${i > 0 ? ' border-top: 1px solid #f5f5f4;' : ''}">${valueHtml}</td>
+        </tr>`
+    )
+    .join('');
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin: 16px 0; font-size: 13px; color: #44403c;">${cells}</table>`;
+}
+
+function testModeBanner(lang: EmailLang): string {
+  const text = lang === 'en' ? 'Test confirmation — no real amount was charged.' : 'رسالة تأكيد تجريبية — لم يتم خصم أي مبلغ حقيقي.';
+  return `<div style="margin: 0 0 18px; padding: 12px 14px; border-radius: 10px; background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; font-size: 14px; font-weight: 700; text-align: center;">${escapeHtml(text)}</div>`;
+}
+
+export function subscriptionPurchaseConfirmedEmailHtml(params: SubscriptionPurchaseConfirmedEmailParams): { subject: string; html: string } {
+  const { lang, timeZone, kind, testMode, companyName, newPlan, previousPlan, billingInterval, amountText, currency, invoiceNumber, periodStart, periodEnd, confirmedAt, link } = params;
+  const isUpgrade = kind === 'upgrade';
+  const safeCompany = escapeHtml(companyName);
+  const esc = (value: string) => escapeHtml(value);
+  const amountHtml = `<bdi dir="ltr">${esc(formatExactMoneyForEmail(amountText, currency))}</bdi>`;
+  const periodHtml = esc(`${formatDateForEmail(periodStart, lang, timeZone)} → ${formatDateForEmail(periodEnd, lang, timeZone)}`);
+  const dateHtml = esc(formatDateForEmail(confirmedAt, lang, timeZone));
+  const invoiceHtml = esc(`#${invoiceNumber}`);
+  const intervalHtml = esc(labelOrRaw(BILLING_INTERVAL_LABEL, billingInterval, lang));
+  const newPlanHtml = esc(labelOrRaw(PLAN_LABEL, newPlan, lang));
+  const previousPlanHtml = esc(labelOrRaw(PLAN_LABEL, previousPlan ?? '', lang));
+  const banner = testMode ? testModeBanner(lang) : '';
+
+  if (lang === 'en') {
+    const planRows: Array<[string, string]> = isUpgrade
+      ? [['Previous plan', previousPlanHtml], ['New plan', newPlanHtml]]
+      : [['Plan', newPlanHtml]];
+    const html = emailShell(
+      `
+        ${banner}
+        <p style="font-size: 15px; margin: 0 0 4px;">${isUpgrade ? 'Plan upgraded ✅' : 'Subscription confirmed ✅'}</p>
+        <p style="font-size: 14px; line-height: 1.8; color: #44403c;">${
+          isUpgrade
+            ? `The macrocore subscription for <strong>${safeCompany}</strong> has been upgraded, and the new features are available now.`
+            : `The macrocore subscription for <strong>${safeCompany}</strong> is now active, and your new plan's features are available.`
+        }</p>
+        ${purchaseSummaryTable(
+          [
+            ...planRows,
+            ['Billing interval', intervalHtml],
+            ['Subscription price', amountHtml],
+            ['Invoice number', invoiceHtml],
+            ['Subscription period', periodHtml],
+            ['Confirmation date', dateHtml],
+          ],
+          lang
+        )}
+        ${ctaButton(link, 'View billing', lang)}
+        <p style="font-size: 13px; line-height: 1.8; color: #44403c;">Questions? Reply to this email or contact support@macrocore.io.</p>
+        <p style="font-size: 12px; line-height: 1.7; color: #78716c;">This message confirms your subscription. It is not a payment receipt or a tax invoice.</p>
+      `,
+      lang
+    );
+    const subject = isUpgrade ? 'Your macrocore plan has been upgraded' : 'Your macrocore subscription is confirmed';
+    return { subject: testMode ? `[Test] ${subject}` : subject, html };
+  }
+
+  const planRows: Array<[string, string]> = isUpgrade
+    ? [['المستوى السابق', previousPlanHtml], ['المستوى الجديد', newPlanHtml]]
+    : [['المستوى', newPlanHtml]];
+  const html = emailShell(
+    `
+      ${banner}
+      <p style="font-size: 15px; margin: 0 0 4px;">${isUpgrade ? 'تمت ترقية باقتك ✅' : 'تم تأكيد اشتراكك ✅'}</p>
+      <p style="font-size: 14px; line-height: 1.8; color: #44403c;">${
+        isUpgrade
+          ? `تمت ترقية اشتراك <strong>${safeCompany}</strong> في macrocore، والمزايا الجديدة متاحة الآن.`
+          : `تم تفعيل اشتراك <strong>${safeCompany}</strong> في macrocore، ويمكنك الآن استخدام مزايا باقتك الجديدة.`
+      }</p>
+      ${purchaseSummaryTable(
+        [
+          ...planRows,
+          ['دورة الفوترة', intervalHtml],
+          ['قيمة الاشتراك', amountHtml],
+          ['رقم الفاتورة', invoiceHtml],
+          ['فترة الاشتراك', periodHtml],
+          ['تاريخ التأكيد', dateHtml],
+        ],
+        lang
+      )}
+      ${ctaButton(link, 'عرض الفوترة', lang)}
+      <p style="font-size: 13px; line-height: 1.8; color: #44403c;">لأي استفسار، ردّ على هذه الرسالة أو راسلنا على support@macrocore.io.</p>
+      <p style="font-size: 12px; line-height: 1.7; color: #78716c;">هذه الرسالة تأكيد للاشتراك فقط، وليست إيصال دفع أو فاتورة ضريبية.</p>
+    `,
+    lang
+  );
+  const subject = isUpgrade ? 'تمت ترقية اشتراكك في macrocore' : 'تم تأكيد اشتراكك في macrocore';
+  return { subject: testMode ? `[تجريبي] ${subject}` : subject, html };
 }
