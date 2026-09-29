@@ -43,6 +43,11 @@
   --surface: #fff;
   --surface-alt: var(--stone-50);
   --input-bg: var(--stone-50);
+  /* Focus ring: amber-600 on light surfaces (3.19:1 vs white, passes WCAG 1.4.11);
+     amber-500 on dark surfaces. Motion curves per the Emil design-eng defaults. */
+  --focus-ring: var(--amber-600);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   font-family: 'Tajawal', 'Tahoma', 'Segoe UI', sans-serif;
 }
@@ -59,6 +64,7 @@
   --surface: var(--stone-800);
   --surface-alt: var(--stone-700);
   --input-bg: var(--stone-700);
+  --focus-ring: var(--amber-500);
 }
 
 /* NotificationsBell.tsx's unread-count badge — a quick pop-in when the count first
@@ -140,7 +146,7 @@ select { font-family: inherit; font-weight: 700; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: start; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .num { text-align: left; direction: ltr; }
-th { color: var(--stone-400); font-weight: 700; font-size: 11px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 700; font-size: 11px; border-bottom: 1px solid var(--border); }
 tr:hover td { background: var(--surface-alt); }
 
 .btn {
@@ -148,17 +154,20 @@ tr:hover td { background: var(--surface-alt); }
   align-items: center;
   gap: 6px;
   background: var(--amber-500);
-  color: #fff;
+  /* stone-900 on amber-500 = 8.14:1 (was #fff = 2.15:1, failed WCAG AA). */
+  color: var(--stone-900);
   border: none;
   border-radius: 10px;
   padding: 9px 16px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-  transition: opacity .15s;
+  transition: opacity .15s, transform 160ms var(--ease-out);
 }
 .btn:hover { opacity: .88; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+/* Press feedback: the button visibly acknowledges the tap/click. */
+.btn:active:not(:disabled) { transform: scale(0.97); }
 .btn.secondary { background: var(--surface-alt); color: var(--text); }
 .btn.danger { background: var(--red-50); color: var(--red-600); }
 
@@ -188,8 +197,8 @@ textarea {
 input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):focus,
 select:focus,
 textarea:focus {
-  border-color: var(--amber-400);
-  box-shadow: 0 0 0 2px rgba(251, 191, 36, .25);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
 .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -351,7 +360,7 @@ textarea:focus {
 .muted { color: var(--muted); font-size: 12px; }
 .hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 
-.btn-primary { background: var(--amber-500); color: #fff; }
+.btn-primary { background: var(--amber-500); color: var(--stone-900); }
 .btn-secondary { background: var(--surface-alt); color: var(--text); }
 .btn-danger { background: var(--red-50); color: var(--red-600); }
 .btn-sm { padding: 6px 11px; font-size: 12px; }
@@ -820,4 +829,22 @@ tr:hover .print-btn { opacity: 1; }
   /* Keep feature names readable: the table scrolls sideways inside
      .table-wrap instead of squeezing the first column. */
   .billing-compare th:first-child, .billing-compare td:first-child { min-width: 150px; }
+}
+
+/* Design polish batch 1 (2026-09-30) -- keyboard focus + reduced motion.
+   :where() keeps specificity at zero so any component-specific focus style
+   (e.g. .billing-segment) still wins. Mouse clicks don't trigger :focus-visible. */
+:where(a, button, [role='button'], [tabindex]:not([tabindex='-1']), summary):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Remove movement, keep opacity/color feedback. */
+  .btn:active:not(:disabled) { transform: none; }
+  .sidebar { transition: none; }
+  @keyframes notif-badge-pop {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
 }
