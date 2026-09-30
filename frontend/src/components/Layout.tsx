@@ -30,6 +30,7 @@ import {
   IconSun,
   IconMoon,
 } from './Icon';
+import { onKeyActivate } from '../utils/keyActivate';
 
 type IconType = ComponentType<{ size?: number }>;
 interface NavItem {
@@ -663,6 +664,9 @@ export default function Layout() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 4px' }}>
           <div
             onClick={() => navigate('/account')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={onKeyActivate(() => navigate('/account'))}
             title={t.account.title}
             style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '10px 8px', borderRadius: 10 }}
           >

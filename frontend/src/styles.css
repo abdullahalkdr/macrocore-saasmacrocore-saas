@@ -543,7 +543,9 @@ table.data-table th { font-size: var(--fs-2xs); }
 .icon-btn {
   background: none;
   border: none;
-  color: var(--stone-400);
+  /* --muted: stone-500 in light (4.8:1 on white), stone-400 in dark (6.0:1 on stone-800).
+     Was stone-400 in both (2.5:1 on white, below WCAG 1.4.11). Polish Batch 6. */
+  color: var(--muted);
   padding: 5px;
   border-radius: 6px;
   display: inline-flex;
@@ -791,7 +793,7 @@ tr:hover .print-btn { opacity: 1; }
   padding: 6px 14px; font-size: var(--fs-xs); font-weight: 700; cursor: pointer; font-family: inherit;
 }
 .billing-segment button[aria-pressed='true'] { background: var(--stone-800); color: #fff; }
-.billing-segment button:focus-visible, .billing-plan-card:focus-within { outline: 2px solid var(--amber-500); outline-offset: 2px; }
+.billing-segment button:focus-visible, .billing-plan-card:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .billing-feature-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .billing-feature-list li { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-sm); line-height: 1.5; }
 .billing-check { color: var(--success); font-weight: 900; flex-shrink: 0; }
@@ -877,3 +879,14 @@ tr:hover .print-btn { opacity: 1; }
 .tag svg { vertical-align: -2px; margin-inline-end: 4px; }
 .section-card-icon svg { display: block; }
 .section-card-icon { color: var(--amber-600); flex-shrink: 0; padding-top: 2px; }
+
+/* Polish Batch 6 -- keyboard focus for native form widgets. Text inputs, textarea and
+   select keep their existing :focus ring (Chrome matches :focus-visible on a mouse click
+   for them too, so an outline there would change mouse behaviour). */
+:where(input[type='checkbox'], input[type='radio'], input[type='range'], input[type='color'], input[type='file']):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* The notifications list scrolls (overflow: auto), which clips an outside ring;
+   draw it inside the item instead. */
+.notif-item:focus-visible { outline-offset: -2px; }

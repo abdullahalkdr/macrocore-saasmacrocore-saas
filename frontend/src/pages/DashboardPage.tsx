@@ -7,6 +7,7 @@ import { planLevelOf } from '../planLevels';
 import PageHeader from '../components/PageHeader';
 import StatCard from '../components/StatCard';
 import { IconPlus, IconExpense, IconAttendance, IconReports } from '../components/Icon';
+import { onKeyActivate } from '../utils/keyActivate';
 
 interface CompanyMe {
   id: string;
@@ -124,6 +125,9 @@ export default function DashboardPage() {
                     <div
                       style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
                       onClick={() => navigate('/inventory')}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={onKeyActivate(() => navigate('/inventory'))}
                     >
                       <span>{t.dashboard.inventoryAlertLowStock(invAlerts.lowStock)}</span>
                       <span className="tag red">!</span>
@@ -133,6 +137,9 @@ export default function DashboardPage() {
                     <div
                       style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
                       onClick={() => navigate('/raw-material-batches')}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={onKeyActivate(() => navigate('/raw-material-batches'))}
                     >
                       <span>{t.dashboard.inventoryAlertExpiring(invAlerts.expiringBatches)}</span>
                       <span className="tag amber">!</span>

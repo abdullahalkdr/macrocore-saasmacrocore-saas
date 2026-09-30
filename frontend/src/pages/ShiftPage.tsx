@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
 import { IconPlus, IconEdit, IconTrash, IconCheck } from '../components/Icon';
+import { onKeyActivate } from '../utils/keyActivate';
 
 const CHANNELS = ['cash', 'knet', 'jahez', 'vthru'];
 const DELIVERY_CHANNELS = ['jahez', 'vthru'];
@@ -536,6 +537,9 @@ export default function ShiftPage() {
           <div
             key={s.id}
             onClick={() => enterSell(s.id)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={onKeyActivate(() => enterSell(s.id))}
             style={{
               display: 'flex',
               alignItems: 'center',

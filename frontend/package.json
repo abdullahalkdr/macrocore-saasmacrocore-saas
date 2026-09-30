@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run --exclude tests/e2e/**",
     "test:watch": "vitest --exclude tests/e2e/**",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:fonts": "node scripts/check-fonts.mjs"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.5",

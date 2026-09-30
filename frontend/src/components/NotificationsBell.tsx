@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
 import { IconBell, IconApproval, IconTrash, IconUnlock } from './Icon';
+import { onKeyActivate } from '../utils/keyActivate';
 
 interface NotificationItem {
   id: string;
@@ -177,6 +178,10 @@ export default function NotificationsBell() {
                 <div
                   key={n.id}
                   onClick={() => handleClick(n)}
+                  className="notif-item"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={onKeyActivate(() => handleClick(n))}
                   style={{
                     display: 'flex',
                     alignItems: 'flex-start',
