@@ -6,7 +6,7 @@ import { useT } from '../i18n';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Avatar from '../components/Avatar';
-import { IconPlus, IconTrash } from '../components/Icon';
+import { IconPlus, IconTrash, IconEdit, IconKey } from '../components/Icon';
 import { canModifyUserRow, assignableRoleOptions, type UserRole } from '../utils/userRoleGuards';
 
 const PASSWORD_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -302,10 +302,10 @@ export default function UsersPage() {
                       title={!canModifyRow(u) ? t.users.managerCannotModify : t.users.editItem}
                       disabled={!canModifyRow(u)}
                     >
-                      ✎
+                      <IconEdit />
                     </button>
                     {isAdmin && u.id !== currentUser?.id && (
-                      <button className="icon-btn" onClick={() => openReset(u)} title={t.users.resetPassword}>🔑</button>
+                      <button className="icon-btn" onClick={() => openReset(u)} title={t.users.resetPassword} aria-label={t.users.resetPassword}><IconKey /></button>
                     )}
                     {u.id !== currentUser?.id && (
                       <button className="icon-btn" onClick={() => removeUser(u.id)} title={t.common.delete}>

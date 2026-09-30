@@ -4,7 +4,7 @@ import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash } from '../components/Icon';
 
 type Category = 'license' | 'contract' | 'certificate' | 'other';
 
@@ -207,7 +207,7 @@ export default function CompanyFilesPage() {
                       <td>
                         <button className="btn btn-sm" onClick={() => handleDownload(f)}>{t.companyFiles.download}</button>{' '}
                         <button className="btn btn-sm" onClick={() => openEdit(f)}>{t.companyFiles.edit}</button>{' '}
-                        <button className="icon-btn" onClick={() => handleDelete(f.id)}>🗑</button>
+                        <button className="icon-btn" onClick={() => handleDelete(f.id)} title={t.common.delete} aria-label={t.common.delete}><IconTrash /></button>
                       </td>
                     </tr>
                   ))}
@@ -241,7 +241,7 @@ export default function CompanyFilesPage() {
                   <td>
                     <button className="btn btn-sm" onClick={() => handleDownload(f)}>{t.companyFiles.download}</button>{' '}
                     <button className="btn btn-sm" onClick={() => openEdit(f)}>{t.companyFiles.edit}</button>{' '}
-                    <button className="icon-btn" onClick={() => handleDelete(f.id)}>🗑</button>
+                    <button className="icon-btn" onClick={() => handleDelete(f.id)} title={t.common.delete} aria-label={t.common.delete}><IconTrash /></button>
                   </td>
                 </tr>
               ))}

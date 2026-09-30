@@ -27,6 +27,8 @@ import {
   IconMenu,
   IconClose,
   IconApproval,
+  IconSun,
+  IconMoon,
 } from './Icon';
 
 type IconType = ComponentType<{ size?: number }>;
@@ -655,7 +657,7 @@ export default function Layout() {
             onClick={toggleTheme}
             title={theme === 'dark' ? t.common.lightMode : t.common.darkMode}
           >
-            {theme === 'dark' ? '☀️' : '🌙'}
+            {theme === 'dark' ? <IconSun /> : <IconMoon />}
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 4px' }}>

@@ -195,3 +195,95 @@ export const IconApproval = ({ size = 16 }: IconProps) => (
     <path d="M9 12l2 2 4-4" />
   </svg>
 );
+
+// Polish Batch 4 — stroke icons replacing the emoji that were used as icons.
+// Same lucide-style 24px stroke set as above; aria-hidden because every use is
+// decorative (the button/label next to it carries the accessible name).
+const deco = { 'aria-hidden': true, focusable: false } as const;
+
+export const IconSun = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round">
+    <circle cx={12} cy={12} r={4} />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+  </svg>
+);
+
+export const IconMoon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3a6 6 0 009 9 9 9 0 11-9-9z" />
+  </svg>
+);
+
+export const IconKey = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx={7.5} cy={15.5} r={5.5} />
+    <path d="M21 2l-9.6 9.6M15.5 7.5l3 3L22 7l-3-3" />
+  </svg>
+);
+
+export const IconStore = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l1.5-5h15L21 9M3 9h18M4 9v11a1 1 0 001 1h14a1 1 0 001-1V9M9 21v-6h6v6" />
+  </svg>
+);
+
+export const IconUsers = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx={9} cy={7} r={4} />
+    <path d="M2 21v-2a4 4 0 014-4h6a4 4 0 014 4v2M16 3.13a4 4 0 010 7.75M22 21v-2a4 4 0 00-3-3.87" />
+  </svg>
+);
+
+export const IconCard = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round">
+    <rect x={2} y={5} width={20} height={14} rx={2} />
+    <path d="M2 10h20M6 15h4" />
+  </svg>
+);
+
+export const IconMail = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <rect x={2} y={4} width={20} height={16} rx={2} />
+    <path d="M22 7l-10 6L2 7" />
+  </svg>
+);
+
+export const IconReceipt = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z" />
+    <path d="M8 8h8M8 12h8M8 16h5" />
+  </svg>
+);
+
+export const IconRepeat = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 2l4 4-4 4M3 11v-1a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 01-4 4H3" />
+  </svg>
+);
+
+// Directional: mirrors under dir="rtl" via .icon-flip-rtl (styles.css) so the
+// "go back" arrow points toward the reading start in both languages.
+export const IconUndo = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} className="icon-flip-rtl" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 010 11H11" />
+  </svg>
+);
+
+export const IconCheck = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6L9 17l-5-5" />
+  </svg>
+);
+
+export const IconClock = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx={12} cy={12} r={9} />
+    <path d="M12 7v5l3 3" />
+  </svg>
+);
+
+export const IconMinus = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)} {...deco} strokeLinecap="round">
+    <path d="M5 12h14" />
+  </svg>
+);

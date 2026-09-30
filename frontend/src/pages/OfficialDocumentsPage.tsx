@@ -4,7 +4,7 @@ import { useT } from '../i18n';
 import { useLangStore } from '../store/langStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { IconPlus } from '../components/Icon';
+import { IconPlus, IconTrash, IconEdit } from '../components/Icon';
 
 type DocType = 'letter' | 'salary_certificate' | 'experience_certificate' | 'receipt' | 'other';
 
@@ -235,8 +235,8 @@ export default function OfficialDocumentsPage() {
                   <td>{addresseeLabel(d)}</td>
                   <td>{fmtDate(d.document_date)}</td>
                   <td>
-                    <button className="icon-btn" onClick={() => handleDelete(d.id)} title={t.officialDocuments.delete}>🗑</button>
-                    <button className="icon-btn" onClick={() => openEdit(d)} title={t.officialDocuments.edit}>✎</button>
+                    <button className="icon-btn" onClick={() => handleDelete(d.id)} title={t.officialDocuments.delete} aria-label={t.officialDocuments.delete}><IconTrash /></button>
+                    <button className="icon-btn" onClick={() => openEdit(d)} title={t.officialDocuments.edit} aria-label={t.officialDocuments.edit}><IconEdit /></button>
                   </td>
                 </tr>
               ))}
