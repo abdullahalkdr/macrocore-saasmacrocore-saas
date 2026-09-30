@@ -8,11 +8,12 @@
 // a thin renderer: order-scoped copy is HISTORICAL ("this order did / did not
 // change your subscription"), and the "current plan" line comes only from
 // the controller's fresh /company/me snapshot — never from the purchase.
-import { useEffect, useMemo, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { fetchCompanySnapshot, fetchPurchase, startPurchaseCheckout } from '../../api/billing';
 import { useT } from '../../i18n';
+import { IconCheck, IconWarning, IconClose, IconClock, IconMinus } from '../../components/Icon';
 import { useAuthStore } from '../../store/authStore';
 import { BillingShell } from './PlanCheckoutPage';
 import { billingErrorKey, formatMoney, ReturnState } from './billingHelpers';
@@ -114,14 +115,14 @@ export default function CheckoutReturnPage() {
       expired: t.billing.returnPage.expiredBody,
       closed: t.billing.returnPage.closedBody,
     };
-    const head: Record<ReturnState, { icon: string; tone: 'ok' | 'warn' | 'bad'; title: string }> = {
-      success: { icon: '✓', tone: 'ok', title: t.billing.returnPage.success },
-      failed: { icon: '!', tone: 'bad', title: t.billing.returnPage.failed },
-      cancelled: { icon: '×', tone: 'warn', title: t.billing.returnPage.cancelled },
-      pending: { icon: '…', tone: 'warn', title: t.billing.returnPage.pending },
-      notStarted: { icon: '…', tone: 'warn', title: t.billing.returnPage.notStarted },
-      expired: { icon: '⏱', tone: 'warn', title: t.billing.returnPage.expired },
-      closed: { icon: '—', tone: 'warn', title: t.billing.returnPage.closed },
+    const head: Record<ReturnState, { icon: ReactNode; tone: 'ok' | 'warn' | 'bad'; title: string }> = {
+      success: { icon: <IconCheck size={26} />, tone: 'ok', title: t.billing.returnPage.success },
+      failed: { icon: <IconWarning size={26} />, tone: 'bad', title: t.billing.returnPage.failed },
+      cancelled: { icon: <IconClose size={26} />, tone: 'warn', title: t.billing.returnPage.cancelled },
+      pending: { icon: <IconClock size={26} />, tone: 'warn', title: t.billing.returnPage.pending },
+      notStarted: { icon: <IconClock size={26} />, tone: 'warn', title: t.billing.returnPage.notStarted },
+      expired: { icon: <IconClock size={26} />, tone: 'warn', title: t.billing.returnPage.expired },
+      closed: { icon: <IconMinus size={26} />, tone: 'warn', title: t.billing.returnPage.closed },
     };
     const h = head[state];
     const orderText =

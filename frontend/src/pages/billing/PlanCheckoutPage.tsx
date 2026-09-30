@@ -16,7 +16,7 @@ import { createPurchase, fetchBillingPlans, PlansResponse, startPurchaseCheckout
 import { useT } from '../../i18n';
 import { useLangStore } from '../../store/langStore';
 import { useThemeStore } from '../../store/themeStore';
-import { IconBuilding } from '../../components/Icon';
+import { IconBuilding, IconCheck } from '../../components/Icon';
 import { SALES_EMAIL } from '../../pricingData';
 import {
   billingErrorKey,
@@ -270,7 +270,7 @@ export default function PlanCheckoutPage() {
               .filter((f) => featureIncluded(f.min_level, plan.level))
               .map((f) => (
                 <li key={f.key}>
-                  <span className="billing-check" aria-hidden="true">✓</span>
+                  <span className="billing-check" aria-hidden="true"><IconCheck /></span>
                   <span>
                     {t.billing.features[f.key] ?? f.key}
                     {f.requires_inventory && <span className="billing-footnote"> *</span>}
@@ -440,7 +440,7 @@ export default function PlanCheckoutPage() {
                     return (
                       <td key={p.key} className={`plan-col${p.key === plan.key ? ' is-selected' : ''}`}>
                         {yes ? (
-                          <span className="billing-check" aria-label="✓">✓</span>
+                          <span className="billing-check" aria-label="✓"><IconCheck /></span>
                         ) : (
                           <span className="billing-dash" aria-label="—">—</span>
                         )}

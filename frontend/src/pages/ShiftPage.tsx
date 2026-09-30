@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Tag from '../components/Tag';
-import { IconPlus, IconEdit, IconTrash } from '../components/Icon';
+import { IconPlus, IconEdit, IconTrash, IconCheck } from '../components/Icon';
 
 const CHANNELS = ['cash', 'knet', 'jahez', 'vthru'];
 const DELIVERY_CHANNELS = ['jahez', 'vthru'];
@@ -504,7 +504,7 @@ export default function ShiftPage() {
             <div className="stat-value">{Number(expectedCashLive).toFixed(3)} KD</div>
           </div>
         </div>
-        <div style={{ marginTop: 10 }}>{matchLive ? <Tag color="green">{t.shift.matchFull}</Tag> : <Tag color="red">{t.shift.matchMismatch}</Tag>}</div>
+        <div style={{ marginTop: 10 }}>{matchLive ? <Tag color="green"><IconCheck size={12} />{t.shift.matchFull}</Tag> : <Tag color="red">{t.shift.matchMismatch}</Tag>}</div>
 
         <div className="field" style={{ marginTop: 16 }}>
           <label>{t.shift.closingNotes}</label>
