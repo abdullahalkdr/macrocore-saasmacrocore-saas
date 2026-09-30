@@ -602,7 +602,7 @@ export default function Layout() {
           return (
             <div key={group.key ?? group.label ?? gi} style={{ padding: '10px 10px 4px' }}>
               {!group.accordion && group.label && (
-                <div style={{ fontSize: 10, color: '#6b6560', fontWeight: 700, padding: '8px 8px 4px', letterSpacing: '.03em' }}>
+                <div style={{ fontSize: 10, color: 'var(--stone-400)', fontWeight: 700, padding: '8px 8px 4px' }}>
                   {group.label}
                 </div>
               )}

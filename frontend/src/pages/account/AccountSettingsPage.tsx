@@ -121,7 +121,7 @@ export default function AccountSettingsPage() {
     if (links.length === 0) return null;
     return (
       <div style={{ marginBottom: 28 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', letterSpacing: '.03em', marginBottom: 10 }}>{label}</div>
+        <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', marginBottom: 10 }}>{label}</div>
         <div className="field-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
           {links.map((l) => (
             <button

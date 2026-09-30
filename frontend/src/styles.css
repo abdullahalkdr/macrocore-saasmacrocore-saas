@@ -115,7 +115,8 @@ select { font-family: inherit; font-weight: 700; }
   transition: background .15s, color .15s;
 }
 .sidebar nav a.active { background: var(--amber-500); color: var(--stone-900); }
-.sidebar nav a:hover { background: var(--stone-800); color: #fff; }
+/* :not(.active) so hovering the current page keeps its amber highlight (Polish Batch 3). */
+.sidebar nav a:not(.active):hover { background: var(--stone-800); color: #fff; }
 .sidebar .logout {
   margin-top: auto;
   padding: 14px 18px;
