@@ -97,6 +97,7 @@
 
 * { box-sizing: border-box; }
 
+html, body { overflow-x: clip; }
 body {
   margin: 0;
   background: var(--bg);
@@ -528,10 +529,11 @@ p { text-wrap: pretty; }
 .mk-support-list .mk-btn { grid-column: 2; grid-row: 1 / span 2; }
 
 /* ---------- Closing CTA ---------- */
-.mk-cta-banner { background: var(--inverse-bg); padding: 72px 0; }
+/* Follows the page theme (no dark band inside a light page). */
+.mk-cta-banner { background: var(--accent-soft); border-top: 1px solid var(--accent-soft-border); padding: 72px 0; }
 .mk-cta-banner-inner { display: flex; align-items: center; justify-content: space-between; gap: 32px; flex-wrap: wrap; }
-.mk-cta-banner h2 { color: var(--inverse-text); font-size: 32px; }
-.mk-cta-banner p { color: var(--inverse-muted); margin: 10px 0 0; font-size: 16px; }
+.mk-cta-banner h2 { font-size: 32px; }
+.mk-cta-banner p { color: var(--muted); margin: 10px 0 0; font-size: 16px; }
 
 /* ---------- Scroll reveal (JS adds .mk-js; without JS nothing is hidden) ---------- */
 @media (prefers-reduced-motion: no-preference) {
@@ -596,26 +598,26 @@ p { text-wrap: pretty; }
 .mk-faq-answer { font-size: 14px; color: var(--muted); line-height: 1.8; padding: 0 0 18px; margin: 0; }
 
 /* ---------- Footer ---------- */
-.mk-footer { background: var(--inverse-bg); border-top: 1px solid rgba(255, 255, 255, 0.06); padding: 56px 0 0; }
+.mk-footer { background: var(--bg-alt); border-top: 1px solid var(--border); padding: 56px 0 0; }
 .mk-footer-inner { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 30px; padding-bottom: 40px; }
-.mk-footer-inner p { color: var(--inverse-muted); font-size: 14px; line-height: 1.7; margin-top: 12px; max-width: 30em; }
-.mk-footer-inner h4 { color: var(--inverse-text); font-size: 13px; margin-bottom: 14px; }
-.mk-logo-footer { color: var(--inverse-text); }
+.mk-footer-inner p { color: var(--muted); font-size: 14px; line-height: 1.7; margin-top: 12px; max-width: 30em; }
+.mk-footer-inner h4 { color: var(--text-strong); font-size: 13px; margin-bottom: 14px; }
+.mk-logo-footer { color: var(--text-strong); }
 .mk-footer-inner a, .mk-footer-inner button {
   display: block;
   background: none;
   border: none;
   text-align: inherit;
   font: inherit;
-  color: var(--stone-300);
+  color: var(--text);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
   padding: 6px 0;
   cursor: pointer;
 }
-.mk-footer-inner a:hover, .mk-footer-inner button:hover { color: var(--amber-400); }
-.mk-footer-bottom { border-top: 1px solid rgba(255, 255, 255, 0.08); padding: 18px 24px; color: var(--inverse-muted); font-size: 13px; text-align: center; }
+.mk-footer-inner a:hover, .mk-footer-inner button:hover { color: var(--accent-text); }
+.mk-footer-bottom { border-top: 1px solid var(--border); padding: 18px 24px; color: var(--muted); font-size: 13px; text-align: center; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
@@ -644,6 +646,12 @@ p { text-wrap: pretty; }
   .mk-support-list li { grid-template-columns: 1fr; }
   .mk-support-list .mk-btn { grid-column: 1; grid-row: auto; justify-self: start; }
   .mk-header-actions .mk-btn-ghost { display: none; }
-  .mk-header-actions .mk-btn-primary { padding: 9px 14px; font-size: 13px; }
+  .mk-header-inner { gap: 10px; }
+  .mk-header-actions { gap: 6px; }
+  .mk-logo { font-size: 0; gap: 0; } /* mark only on phones; wordmark hidden */
+  .mk-logo svg { width: 28px; height: 28px; }
+  .mk-lang-toggle { padding: 8px 9px; font-size: 12px; }
+  .mk-theme-toggle { width: 34px; }
+  .mk-header-actions .mk-btn-primary { padding: 9px 12px; font-size: 12.5px; }
   .mk-footer-inner { grid-template-columns: 1fr; }
 }
