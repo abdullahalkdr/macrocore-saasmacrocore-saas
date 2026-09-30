@@ -309,8 +309,8 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
           ApprovalsInboxPage's eye icon. */}
       {!loading && (detailLines.length > 0 || (summary?.record_detail.length ?? 0) > 0) && (
         <>
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)', marginBottom: 8 }}>{t.approvalWorkflow.detailsTitle}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', marginBottom: 18, fontSize: 13 }}>
+          <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)', marginBottom: 8 }}>{t.approvalWorkflow.detailsTitle}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', marginBottom: 18, fontSize: 'var(--fs-sm)' }}>
             {detailLines.length > 0
               ? detailLines.map((d) => (
                   <div key={d.label} style={{ display: 'contents' }}>
@@ -333,7 +333,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
       {!loading && summary && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.approvalWorkflow.timelineTitle}</span>
+            <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.approvalWorkflow.timelineTitle}</span>
             {outcomeTag(summary.status)}
           </div>
           <div>
@@ -354,15 +354,15 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                   {i < timelineNodes.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 22, background: '#e7e5e4' }} />}
                 </div>
                 <div style={{ paddingBottom: 16 }}>
-                  <div style={{ fontSize: 13, fontWeight: node.state === 'current' ? 800 : 600 }}>{node.label}</div>
+                  <div style={{ fontSize: 'var(--fs-sm)', fontWeight: node.state === 'current' ? 800 : 600 }}>{node.label}</div>
                   {node.meta && (
-                    <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                    <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 2 }}>
                       {node.meta}
                     </div>
                   )}
                   {node.attachments && node.attachments.length > 0 && <AttachmentGallery attachments={node.attachments} />}
                   {node.state === 'current' && (
-                    <div style={{ fontSize: 11, color: '#b45309', marginTop: 2, fontWeight: 700 }}>{t.approvalWorkflow.waitingOnLabel}</div>
+                    <div style={{ fontSize: 'var(--fs-2xs)', color: '#b45309', marginTop: 2, fontWeight: 700 }}>{t.approvalWorkflow.waitingOnLabel}</div>
                   )}
                 </div>
               </div>
@@ -372,7 +372,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
           {summary.status === 'pending' && summary.is_pending_approver && (
             <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
               {actionError && <div className="error-banner">{actionError}</div>}
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 }}>{t.approvalWorkflow.yourTurnLabel}</div>
+              <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: '#b45309', marginBottom: 8 }}>{t.approvalWorkflow.yourTurnLabel}</div>
               {!approving && !modifying ? (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary btn-sm" type="button" disabled={acting} onClick={() => setApproving(true)}>
@@ -405,7 +405,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                 </div>
               ) : (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>{t.approvals.modifyConfirmTitle}</div>
+                  <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, marginBottom: 8 }}>{t.approvals.modifyConfirmTitle}</div>
                   <div className="field">
                     <label>{t.approvals.modifyCommentLabel}</label>
                     <textarea
@@ -413,7 +413,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                       value={modifyComment}
                       onChange={(e) => setModifyComment(e.target.value)}
                       placeholder={t.approvals.modifyCommentPlaceholder}
-                      style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+                      style={{ fontSize: 'var(--fs-base)', lineHeight: 1.5, padding: 10 }}
                     />
                   </div>
                   <div className="field">
@@ -425,7 +425,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                     {modifyFiles.length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                         {modifyFiles.map((f, i) => (
-                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                             <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeModifyFile(i)}>
                               <IconClose size={14} />
@@ -477,8 +477,8 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                   marginBottom: 12,
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
-                <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
+                <div style={{ fontSize: 'var(--fs-md)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                   {[...summary.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
                 </div>
                 {(() => {
@@ -500,7 +500,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                       value={resubmitComment}
                       onChange={(e) => setResubmitComment(e.target.value)}
                       placeholder={t.approvals.resubmitCommentPlaceholder}
-                      style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+                      style={{ fontSize: 'var(--fs-base)', lineHeight: 1.5, padding: 10 }}
                     />
                   </div>
                   <div className="field">
@@ -512,7 +512,7 @@ export default function ApprovalWorkflowModal({ moduleType, referenceId, detailL
                     {resubmitFiles.length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                         {resubmitFiles.map((f, i) => (
-                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                             <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeResubmitFile(i)}>
                               <IconClose size={14} />

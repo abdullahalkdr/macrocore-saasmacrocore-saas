@@ -352,7 +352,7 @@ export default function RawMaterialBatchesPage() {
 
             {editingId && (
               <div className="field" style={{ gridColumn: '1 / -1' }}>
-                <p className="muted" style={{ fontSize: 12 }}>{t.rawMaterialBatches.editHint}</p>
+                <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.rawMaterialBatches.editHint}</p>
               </div>
             )}
 
@@ -366,7 +366,7 @@ export default function RawMaterialBatchesPage() {
                 {t.rawMaterialBatches.qtyPurchased} * {selectedMaterialUnit && `(${selectedMaterialUnit})`}
               </label>
               <input type="number" step="0.001" value={qtyPurchased} onChange={(e) => setQtyPurchased(e.target.value)} required />
-              {selectedMaterialUnit && <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.rawMaterialBatches.unitHint(selectedMaterialUnit)}</p>}
+              {selectedMaterialUnit && <p className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.rawMaterialBatches.unitHint(selectedMaterialUnit)}</p>}
             </div>
 
             {editingId && (

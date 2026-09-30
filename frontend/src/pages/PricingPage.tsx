@@ -55,8 +55,8 @@ export default function PricingPage() {
             </div>
             <strong>{t.brand}</strong>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 13 }}>
-            <button type="button" onClick={toggleLang} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 'var(--fs-sm)' }}>
+            <button type="button" onClick={toggleLang} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 'var(--fs-sm)' }}>
               {lang === 'ar' ? 'English' : 'العربية'}
             </button>
             <span className="muted">{t.pricing.haveAccount}</span>
@@ -67,8 +67,8 @@ export default function PricingPage() {
         </div>
 
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <h1 style={{ fontSize: 32, marginBottom: 8 }}>{t.pricing.title}</h1>
-          <p className="muted" style={{ fontSize: 15 }}>{t.pricing.subtitle}</p>
+          <h1 style={{ fontSize: 'var(--fs-4xl)', marginBottom: 8 }}>{t.pricing.title}</h1>
+          <p className="muted" style={{ fontSize: 'var(--fs-md)' }}>{t.pricing.subtitle}</p>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
@@ -102,7 +102,7 @@ export default function PricingPage() {
           </div>
         </div>
         {annual && (
-          <p className="muted" style={{ textAlign: 'center', fontSize: 12, marginBottom: 28 }}>
+          <p className="muted" style={{ textAlign: 'center', fontSize: 'var(--fs-xs)', marginBottom: 28 }}>
             {t.pricing.annualNote}
           </p>
         )}
@@ -131,7 +131,7 @@ export default function PricingPage() {
                       transform: 'translateX(50%)',
                       background: 'var(--amber-500)',
                       color: '#fff',
-                      fontSize: 11,
+                      fontSize: 'var(--fs-2xs)',
                       fontWeight: 700,
                       padding: '3px 10px',
                       borderRadius: 999,
@@ -141,29 +141,29 @@ export default function PricingPage() {
                     {t.pricing.mostPopular}
                   </span>
                 )}
-                <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>{plan.name}</div>
-                <p className="muted" style={{ fontSize: 12.5, minHeight: 36, marginBottom: 14 }}>
+                <div style={{ fontWeight: 800, fontSize: 'var(--fs-xl)', marginBottom: 6 }}>{plan.name}</div>
+                <p className="muted" style={{ fontSize: 'var(--fs-sm)', minHeight: 36, marginBottom: 14 }}>
                   {planTagline[plan.key]}
                 </p>
 
                 {plan.contactSales ? (
                   <div style={{ minHeight: 62, display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-                    <div style={{ fontWeight: 800, fontSize: 16 }}>{t.pricing.ctaContactSales}</div>
+                    <div style={{ fontWeight: 800, fontSize: 'var(--fs-lg)' }}>{t.pricing.ctaContactSales}</div>
                   </div>
                 ) : (
                   <div style={{ minHeight: 62, marginBottom: 14 }}>
                     <div>
-                      <span style={{ fontWeight: 800, fontSize: 26 }}>${usdPrice}</span>
-                      <span className="muted" style={{ fontSize: 13 }}> {t.pricing.perMonth}</span>
+                      <span style={{ fontWeight: 800, fontSize: 'var(--fs-3xl)' }}>${usdPrice}</span>
+                      <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}> {t.pricing.perMonth}</span>
                     </div>
                     {annual && plan.monthlyUsd !== usdPrice && (
-                      <span className="muted" style={{ fontSize: 13, textDecoration: 'line-through' }}>${plan.monthlyUsd}</span>
+                      <span className="muted" style={{ fontSize: 'var(--fs-sm)', textDecoration: 'line-through' }}>${plan.monthlyUsd}</span>
                     )}
-                    <div className="muted" style={{ fontSize: 12 }}>
+                    <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                       {t.pricing.approx} {kdPrice?.toFixed(3)} KD
                     </div>
                     {annual && plan.annualMonthlyUsd !== null && (
-                      <div className="muted" style={{ fontSize: 12 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                         {t.pricing.annualBilledTotal(plan.annualMonthlyUsd * 12)}
                       </div>
                     )}
@@ -188,13 +188,13 @@ export default function PricingPage() {
           })}
         </div>
 
-        <p className="muted" style={{ textAlign: 'center', fontSize: 11.5, marginBottom: 56 }}>
+        <p className="muted" style={{ textAlign: 'center', fontSize: 'var(--fs-xs)', marginBottom: 56 }}>
           {t.pricing.currencyNote}
         </p>
 
         <div style={{ marginBottom: 12 }}>
-          <h2 style={{ fontSize: 22, marginBottom: 4 }}>{t.pricing.addonsTitle}</h2>
-          <p className="muted" style={{ fontSize: 13 }}>{t.pricing.addonsSubtitle}</p>
+          <h2 style={{ fontSize: 'var(--fs-2xl)', marginBottom: 4 }}>{t.pricing.addonsTitle}</h2>
+          <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{t.pricing.addonsSubtitle}</p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           {ADDONS.map((addon) => {
@@ -202,14 +202,14 @@ export default function PricingPage() {
             const kdPrice = annual ? addon.annualKd : addon.monthlyKd;
             return (
               <div key={addon.key} className="card" style={{ padding: 20 }}>
-                <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 6 }}>{addonTitle[addon.key]}</div>
-                <p className="muted" style={{ fontSize: 12.5, minHeight: 36, marginBottom: 14 }}>
+                <div style={{ fontWeight: 800, fontSize: 'var(--fs-md)', marginBottom: 6 }}>{addonTitle[addon.key]}</div>
+                <p className="muted" style={{ fontSize: 'var(--fs-sm)', minHeight: 36, marginBottom: 14 }}>
                   {addonDesc[addon.key]}
                 </p>
                 <div style={{ marginBottom: 14 }}>
-                  <span style={{ fontWeight: 800, fontSize: 22 }}>${usdPrice}</span>
-                  <span className="muted" style={{ fontSize: 13 }}> {annual ? t.pricing.perYear : t.pricing.perMonth}</span>
-                  <div className="muted" style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 800, fontSize: 'var(--fs-2xl)' }}>${usdPrice}</span>
+                  <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}> {annual ? t.pricing.perYear : t.pricing.perMonth}</span>
+                  <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                     {t.pricing.approx} {kdPrice.toFixed(3)} KD
                   </div>
                 </div>

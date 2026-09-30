@@ -497,14 +497,14 @@ export default function LeaveRequestsPage() {
             <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeYear(-1)}>
               {t.leaveRequests.prevMonth}
             </button>
-            <span style={{ alignSelf: 'center', fontWeight: 700, fontSize: 13 }}>{calYear}</span>
+            <span style={{ alignSelf: 'center', fontWeight: 700, fontSize: 'var(--fs-sm)' }}>{calYear}</span>
             <button className="btn btn-secondary btn-sm" type="button" onClick={() => changeYear(1)}>
               {t.leaveRequests.nextMonth}
             </button>
           </div>
         </div>
         <div className="card-body">
-          <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 'var(--fs-xs)', flexWrap: 'wrap' }}>
             {[...LEAVE_TYPES, 'permission'].map((ty) => (
               <div key={ty} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: TYPE_COLOR[ty], display: 'inline-block' }} />
@@ -517,7 +517,7 @@ export default function LeaveRequestsPage() {
               const { cells, dayMap } = monthGrid(month);
               return (
                 <div key={month} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 8 }}>
-                  <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 6, textAlign: 'center' }}>
+                  <div style={{ fontWeight: 800, fontSize: 'var(--fs-xs)', marginBottom: 6, textAlign: 'center' }}>
                     {monthFormatter.format(new Date(calYear, month - 1, 1))} {calYear}
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
@@ -530,7 +530,7 @@ export default function LeaveRequestsPage() {
                         style={{
                           minHeight: 20,
                           borderRadius: 3,
-                          fontSize: 9,
+                          fontSize: 'var(--fs-micro)',
                           textAlign: 'center',
                           padding: 1,
                           background: day && (dayMap[day] || []).length > 0 ? TYPE_COLOR[dayMap[day][0].type] || '#999' : 'transparent',

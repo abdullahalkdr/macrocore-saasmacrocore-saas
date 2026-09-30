@@ -563,14 +563,14 @@ export default function EmployeesPage() {
                   type="file"
                   accept="image/*"
                   onChange={(e) => handlePhotoChange(e.target.files?.[0])}
-                  style={{ maxWidth: 150, fontSize: 11 }}
+                  style={{ maxWidth: 150, fontSize: 'var(--fs-2xs)' }}
                 />
               </div>
             </div>
 
             <div className="hr" />
             <div className="section-title-row">
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.personalDataTitle}</span>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.personalDataTitle}</span>
             </div>
             <div className="field-grid">
               <div className="field">
@@ -627,7 +627,7 @@ export default function EmployeesPage() {
 
             <div className="hr" />
             <div className="section-title-row">
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.payInfoTitle}</span>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.payInfoTitle}</span>
             </div>
             <div className="field-grid">
               <div className="field">
@@ -659,7 +659,7 @@ export default function EmployeesPage() {
             </div>
 
             <div className="section-title-row" style={{ marginTop: 10 }}>
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                 {t.employees.allowancesTitle} — {t.employees.allowancesTotal(allowancesTotal.toFixed(3))}
               </span>
               <button className="btn btn-secondary btn-sm" type="button" onClick={addAllowance}>
@@ -700,13 +700,13 @@ export default function EmployeesPage() {
                 <input type="time" value={form.shiftStartTime} onChange={(e) => setForm({ ...form, shiftStartTime: e.target.value })} />
               </div>
             </div>
-            <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>
               {t.employees.schedulingNote}
             </p>
 
             <div className="hr" />
             <div className="section-title-row">
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.hrSectionTitle}</span>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.hrSectionTitle}</span>
             </div>
             <div className="field-grid">
               <div className="field">
@@ -737,7 +737,7 @@ export default function EmployeesPage() {
 
             <div className="hr" />
             <div className="section-title-row">
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.emergencyContactTitle}</span>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.emergencyContactTitle}</span>
             </div>
             <div className="field-grid">
               <div className="field">
@@ -752,7 +752,7 @@ export default function EmployeesPage() {
 
             <div className="hr" />
             <div className="section-title-row">
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.certificatesTitle}</span>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.employees.certificatesTitle}</span>
               <button className="btn btn-secondary btn-sm" type="button" onClick={addCertificate}>
                 <IconPlus /> {t.employees.addCertificate}
               </button>

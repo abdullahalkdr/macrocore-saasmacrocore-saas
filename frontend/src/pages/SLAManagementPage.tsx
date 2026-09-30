@@ -111,7 +111,7 @@ export default function SLAManagementPage() {
                   <td style={{ fontWeight: 700 }}>
                     {priorityLabel(p)}
                     {!configured.has(p) && (
-                      <div className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-2xs)', fontWeight: 400 }}>
                         {t.sla.notConfigured}
                       </div>
                     )}

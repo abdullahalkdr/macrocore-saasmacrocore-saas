@@ -669,7 +669,7 @@ export default function SupportTicketsPage() {
                 <tr key={tk.id} onClick={() => openTicket(tk.id)} style={{ cursor: 'pointer' }}>
                   <td style={{ fontWeight: 700 }}>
                     {tk.ticket_number && (
-                      <span className="muted" style={{ fontWeight: 400, fontSize: 11, display: 'block' }}>
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 'var(--fs-2xs)', display: 'block' }}>
                         {tk.ticket_number}
                       </span>
                     )}
@@ -680,7 +680,7 @@ export default function SupportTicketsPage() {
                   <td className="muted">
                     {ticketTypeLabel(tk)}
                     {isManager && departmentLabelFor(resolvedDepartmentId(tk)) && (
-                      <span style={{ display: 'block', fontSize: 11 }}>{departmentLabelFor(resolvedDepartmentId(tk))}</span>
+                      <span style={{ display: 'block', fontSize: 'var(--fs-2xs)' }}>{departmentLabelFor(resolvedDepartmentId(tk))}</span>
                     )}
                   </td>
                   <td>
@@ -710,7 +710,7 @@ export default function SupportTicketsPage() {
           <div className="card-head">
             <h2>
               {detail.ticket_number && (
-                <span className="muted" style={{ fontWeight: 500, fontSize: 13, marginInlineEnd: 8 }}>
+                <span className="muted" style={{ fontWeight: 500, fontSize: 'var(--fs-sm)', marginInlineEnd: 8 }}>
                   {detail.ticket_number}
                 </span>
               )}
@@ -726,14 +726,14 @@ export default function SupportTicketsPage() {
                 the page (past the approval block), easy to miss entirely. */}
             <div className="card" style={{ background: 'var(--surface-alt)', border: '1px solid var(--border)', marginBottom: 14 }}>
               <div className="card-body" style={{ padding: 14 }}>
-                <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                <div className="muted" style={{ fontSize: 'var(--fs-2xs)', fontWeight: 700, marginBottom: 8 }}>
                   {t.support.description}
                 </div>
                 <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'break-word', lineHeight: 1.6 }}>
                   {detail.description || <span className="muted">{t.support.noDescription}</span>}
                 </div>
                 <AttachmentGallery attachments={detail.attachments} />
-                <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 10 }}>
                   {t.support.requestType}: {ticketTypeLabel(detail)}
                   {isManager && departmentLabelFor(resolvedDepartmentId(detail)) && (
                     <> · {t.support.responsibleDepartment}: {departmentLabelFor(resolvedDepartmentId(detail))}</>
@@ -749,7 +749,7 @@ export default function SupportTicketsPage() {
               <div className="card" style={{ background: 'var(--surface-alt)', marginBottom: 14 }}>
                 <div className="card-body" style={{ padding: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontWeight: 800, fontSize: 13 }}>{t.support.approvalTitle}</span>
+                    <span style={{ fontWeight: 800, fontSize: 'var(--fs-sm)' }}>{t.support.approvalTitle}</span>
                     {approvalStatusTag(detail.approval.status)}
                   </div>
 
@@ -759,7 +759,7 @@ export default function SupportTicketsPage() {
                       if (!step) return null;
                       const stepLabel = lang === 'ar' ? step.step_label : step.step_label_en || step.step_label;
                       return (
-                        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                        <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8 }}>
                           {t.support.approvalStepOf(detail.approval!.current_step, detail.approval!.total_steps)} — {stepLabel}
                         </div>
                       );
@@ -767,12 +767,12 @@ export default function SupportTicketsPage() {
 
                   {detail.approval.log.length > 0 && (
                     <div style={{ marginBottom: detail.approval.is_pending_approver ? 10 : 0 }}>
-                      <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-2xs)', fontWeight: 700, marginBottom: 4 }}>
                         {t.support.approvalHistoryTitle}
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         {detail.approval.log.map((entry, i) => (
-                          <div key={i} className="muted" style={{ fontSize: 12 }}>
+                          <div key={i} className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                             {entry.approver_name || '—'} — {approvalStatusTag(entry.action)}
                             {entry.comments && <span> — {entry.comments}</span>}
                             {entry.attachments && entry.attachments.length > 0 && <AttachmentGallery attachments={entry.attachments} />}
@@ -784,7 +784,7 @@ export default function SupportTicketsPage() {
 
                   {detail.approval.status === 'pending' && detail.approval.is_pending_approver && (
                     <>
-                      <div className="muted" style={{ fontSize: 12, marginBottom: 8, fontWeight: 600 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8, fontWeight: 600 }}>
                         {t.support.approvalYourTurn}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -833,8 +833,8 @@ export default function SupportTicketsPage() {
                           marginBottom: 12,
                         }}
                       >
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
-                        <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                        <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: '#b45309', marginBottom: 8 }}>{t.approvals.returnedBannerLabel}</div>
+                        <div style={{ fontSize: 'var(--fs-md)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
                           {[...detail.approval.log].reverse().find((l) => l.action === 'returned')?.comments || t.approvals.returnedBannerFallback}
                         </div>
                         {(() => {
@@ -865,7 +865,7 @@ export default function SupportTicketsPage() {
             {Object.keys(detail.dynamic_data || {}).length > 0 && (
               <div className="card" style={{ background: 'var(--surface-alt)', marginBottom: 14 }}>
                 <div className="card-body" style={{ padding: 12 }}>
-                  <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                  <div className="muted" style={{ fontSize: 'var(--fs-2xs)', fontWeight: 700, marginBottom: 8 }}>
                     {t.support.additionalDetails}
                   </div>
                   <div className="field-grid">
@@ -874,7 +874,7 @@ export default function SupportTicketsPage() {
                       const label = def ? (lang === 'ar' ? def.field_label : def.field_label_en || def.field_label) : key;
                       return (
                         <div key={key}>
-                          <div className="muted" style={{ fontSize: 11 }}>
+                          <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>
                             {label}
                           </div>
                           <div style={{ fontWeight: 600 }}>{String(value)}</div>
@@ -969,7 +969,7 @@ export default function SupportTicketsPage() {
                   className={r.is_internal_note ? 'reply-internal-note' : undefined}
                   style={{ padding: '8px 0', borderBottom: r.is_internal_note ? 'none' : '1px solid var(--stone-100)' }}
                 >
-                  <div className="muted" style={{ fontSize: 11, marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>
                       {r.is_admin_reply ? t.support.supportSide : t.support.youSide} — {new Date(r.created_at).toLocaleString()}
                     </span>
@@ -1005,7 +1005,7 @@ export default function SupportTicketsPage() {
               {replyFiles.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                   {replyFiles.map((f, i) => (
-                    <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                    <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                       <button type="button" className="icon-btn" title={t.support.removeAttachment} onClick={() => removeReplyFile(i)}>
                         <IconClose size={14} />
@@ -1017,8 +1017,8 @@ export default function SupportTicketsPage() {
               {isManager && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 8 }}>
                   <input type="checkbox" checked={markInternal} onChange={(e) => setMarkInternal(e.target.checked)} style={{ width: 'auto' }} />
-                  <span style={{ fontSize: 13 }}>{t.support.markAsInternalNote}</span>
-                  <span className="muted" style={{ fontSize: 11 }}>
+                  <span style={{ fontSize: 'var(--fs-sm)' }}>{t.support.markAsInternalNote}</span>
+                  <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>
                     {t.support.internalNoteHint}
                   </span>
                 </label>
@@ -1138,7 +1138,7 @@ export default function SupportTicketsPage() {
                 {newTicketFiles.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                     {newTicketFiles.map((f, i) => (
-                      <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                         <button type="button" className="icon-btn" title={t.support.removeAttachment} onClick={() => removeNewTicketFile(i)}>
                           <IconClose size={14} />
@@ -1157,7 +1157,7 @@ export default function SupportTicketsPage() {
               {fieldsForForm.length > 0 && (
                 <div style={{ gridColumn: '1 / -1' }}>
                   <div className="hr" style={{ margin: '4px 0 12px' }} />
-                  <div className="muted" style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+                  <div className="muted" style={{ fontSize: 'var(--fs-2xs)', fontWeight: 700, marginBottom: 8 }}>
                     {t.support.additionalDetails}
                   </div>
                 </div>
@@ -1242,7 +1242,7 @@ export default function SupportTicketsPage() {
               value={modifyComment}
               onChange={(e) => setModifyComment(e.target.value)}
               placeholder={t.approvals.modifyCommentPlaceholder}
-              style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+              style={{ fontSize: 'var(--fs-base)', lineHeight: 1.5, padding: 10 }}
             />
           </div>
           <div className="field">
@@ -1254,7 +1254,7 @@ export default function SupportTicketsPage() {
             {modifyFiles.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                 {modifyFiles.map((f, i) => (
-                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                     <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeModifyFile(i)}>
                       <IconClose size={14} />
@@ -1289,7 +1289,7 @@ export default function SupportTicketsPage() {
               value={resubmitComment}
               onChange={(e) => setResubmitComment(e.target.value)}
               placeholder={t.approvals.resubmitCommentPlaceholder}
-              style={{ fontSize: 14, lineHeight: 1.5, padding: 10 }}
+              style={{ fontSize: 'var(--fs-base)', lineHeight: 1.5, padding: 10 }}
             />
           </div>
           <div className="field">
@@ -1301,7 +1301,7 @@ export default function SupportTicketsPage() {
             {resubmitFiles.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
                 {resubmitFiles.map((f, i) => (
-                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-xs)' }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                     <button type="button" className="icon-btn" title={t.approvals.removeAttachment} onClick={() => removeResubmitFile(i)}>
                       <IconClose size={14} />

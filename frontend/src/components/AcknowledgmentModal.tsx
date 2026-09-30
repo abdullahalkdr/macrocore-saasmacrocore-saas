@@ -131,7 +131,7 @@ export default function AcknowledgmentModal() {
           )}
         </div>
         <div className="modal-body">
-          <div className="muted" style={{ marginBottom: 10, fontSize: 12 }}>
+          <div className="muted" style={{ marginBottom: 10, fontSize: 'var(--fs-xs)' }}>
             {t.policies.acknowledgeIntro}
             {pending.length > 1 && ` (${pending.length} ${t.policies.acknowledgeRemaining})`}
           </div>
@@ -152,7 +152,7 @@ export default function AcknowledgmentModal() {
           >
             {displayContent}
           </div>
-          {!hasReadToEnd && <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>{t.policies.scrollToContinue}</div>}
+          {!hasReadToEnd && <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 8 }}>{t.policies.scrollToContinue}</div>}
           {error && <div className="error-banner" style={{ marginTop: 10 }}>{error}</div>}
         </div>
         <div className="modal-actions">

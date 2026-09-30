@@ -103,7 +103,7 @@ export default function LoginPage() {
             <IconBuilding size={26} />
           </div>
           <h1 style={{ marginBottom: 2 }}>{t.brand}</h1>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.auth.loginSubtitle}</div>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>{t.auth.loginSubtitle}</div>
         </div>
         {!error && expired && <div className="error-banner">{t.auth.sessionExpired}</div>}
         {error && <div className="error-banner">{error}</div>}
@@ -115,7 +115,7 @@ export default function LoginPage() {
           <div className="field">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <label style={{ marginBottom: 0 }}>{t.auth.password}</label>
-              <Link to="/forgot-password" style={{ fontSize: 12, color: 'var(--amber-600)', fontWeight: 700 }}>
+              <Link to="/forgot-password" style={{ fontSize: 'var(--fs-xs)', color: 'var(--amber-600)', fontWeight: 700 }}>
                 {t.auth.forgotPasswordLink}
               </Link>
             </div>
@@ -169,7 +169,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={toggleLang}
-            style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: 12, cursor: 'pointer' }}
+            style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: 'var(--fs-xs)', cursor: 'pointer' }}
           >
             {lang === 'ar' ? 'English' : 'العربية'}
           </button>

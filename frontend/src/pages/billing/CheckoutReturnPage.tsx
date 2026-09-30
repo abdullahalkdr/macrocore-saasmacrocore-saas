@@ -135,9 +135,9 @@ export default function CheckoutReturnPage() {
     body = (
       <div className="card billing-result" aria-live="polite">
         <div className={`billing-status-icon ${h.tone}`} aria-hidden="true">{h.icon}</div>
-        <h1 style={{ fontSize: 20 }}>{h.title}</h1>
-        <p className="muted" style={{ fontSize: 13 }}>{orderText}</p>
-        <p style={{ fontSize: 13, margin: '10px 0 0' }}>
+        <h1 style={{ fontSize: 'var(--fs-xl)' }}>{h.title}</h1>
+        <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{orderText}</p>
+        <p style={{ fontSize: 'var(--fs-sm)', margin: '10px 0 0' }}>
           <strong>{planName(purchase.plan)}</strong> ·{' '}
           {purchase.billing_interval === 'annual' ? t.billing.annual : t.billing.monthly} ·{' '}
           <bdi dir="ltr" className="billing-amount">{formatMoney(purchase.amount, purchase.currency)}</bdi>
@@ -147,12 +147,12 @@ export default function CheckoutReturnPage() {
         )}
         <p className="billing-footnote">{t.billing.returnPage.invoice(purchase.invoice_number)}</p>
         {snap?.companyStatus === 'ok' && view.currentPlan && (
-          <p style={{ fontSize: 13, margin: '6px 0 0' }}>
+          <p style={{ fontSize: 'var(--fs-sm)', margin: '6px 0 0' }}>
             {t.billing.returnPage.currentPlanNow(planName(view.currentPlan.plan), statusName(view.currentPlan.status))}
           </p>
         )}
         {snap?.companyStatus === 'failed' && (
-          <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>{t.billing.returnPage.currentPlanUnknown}</p>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', margin: '6px 0 0' }}>{t.billing.returnPage.currentPlanUnknown}</p>
         )}
         {actionError && <div className="error-banner" role="alert">{actionError}</div>}
         <div className="actions">

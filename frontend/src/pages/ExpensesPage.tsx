@@ -392,7 +392,7 @@ export default function ExpensesPage() {
                 <Fragment key={g.key}>
                   <tr>
 
-                    <td colSpan={colCount} style={{ background: 'var(--surface-alt)', fontWeight: 800, fontSize: 12 }}>
+                    <td colSpan={colCount} style={{ background: 'var(--surface-alt)', fontWeight: 800, fontSize: 'var(--fs-xs)' }}>
                       {dateFormatter.format(new Date(g.key))}
                     </td>
                   </tr>
@@ -447,7 +447,7 @@ export default function ExpensesPage() {
                             still the backend (expenses.controller.ts's update()) —
                             this only decides what's shown. */}
                         {isAwaitingDecision(x) ? (
-                          <span className="muted" style={{ fontSize: 12 }}>{t.expenses.pendingApprovalNote}</span>
+                          <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.expenses.pendingApprovalNote}</span>
                         ) : isManager ? (
                           <div style={{ display: 'flex', gap: 4 }}>
                             <button className="icon-btn" title={t.expenses.editItem} onClick={() => openEdit(x)}>
@@ -496,7 +496,7 @@ export default function ExpensesPage() {
             </>
           )}
         >
-          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.expenses.pendingApprovalNote}</p>}
+          {editingRecordPending && <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8 }}>{t.expenses.pendingApprovalNote}</p>}
           <form id="expense-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.expenses.location}</label>
@@ -549,8 +549,8 @@ export default function ExpensesPage() {
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>{t.expenses.receiptImage}</label>
               <input type="file" accept="image/*" onChange={(e) => handleFileChange(e.target.files?.[0])} />
-              {receiptFileName && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{receiptFileName}</div>}
-              {editingId && !receiptFileName && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.expenses.receiptReplaceHint}</div>}
+              {receiptFileName && <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{receiptFileName}</div>}
+              {editingId && !receiptFileName && <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.expenses.receiptReplaceHint}</div>}
             </div>
           </form>
         </Modal>

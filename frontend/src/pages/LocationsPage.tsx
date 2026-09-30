@@ -151,7 +151,7 @@ export default function LocationsPage() {
                         style={{
                           padding: '2px 10px',
                           borderRadius: 999,
-                          fontSize: 12,
+                          fontSize: 'var(--fs-xs)',
                           fontWeight: 700,
                           backgroundColor: typeColor.bg,
                           color: typeColor.fg,
@@ -163,7 +163,7 @@ export default function LocationsPage() {
                     <td>{l.manager_name || '—'}</td>
                     <td>{l.area || '—'}</td>
                     <td>{l.address || '—'}</td>
-                    <td style={{ fontSize: 12, color: status === 'safe' ? 'var(--muted)' : statusColor(status), whiteSpace: 'nowrap' }}>
+                    <td style={{ fontSize: 'var(--fs-xs)', color: status === 'safe' ? 'var(--muted)' : statusColor(status), whiteSpace: 'nowrap' }}>
                       {licenseStatus !== 'safe' && (
                         <div>
                           {t.locations.licenseLabel}: {formatDate(l.license_expiry_date)}

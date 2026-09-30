@@ -194,7 +194,7 @@ export default function AuditLogPage() {
             onChange={(e) => setSensitiveOnly(e.target.checked)}
             style={{ width: 'auto' }}
           />
-          <span style={{ fontSize: 13 }}>{t.auditLog.sensitiveOnly}</span>
+          <span style={{ fontSize: 'var(--fs-sm)' }}>{t.auditLog.sensitiveOnly}</span>
         </label>
       </div>
 
@@ -234,7 +234,7 @@ export default function AuditLogPage() {
                           onClick={() => toggleDetails(entry.id)}
                           style={{
                             marginInlineStart: 8,
-                            fontSize: 12,
+                            fontSize: 'var(--fs-xs)',
                             fontWeight: 400,
                             background: 'none',
                             border: 'none',
@@ -261,7 +261,7 @@ export default function AuditLogPage() {
                         <span className="muted">{t.auditLog.noChanges}</span>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600 }}>
+                          <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 600 }}>
                             {changeTarget?.label
                               ? t.auditLog.changesFor(changeTarget.label)
                               : t.auditLog.changesForUnknown}
@@ -274,7 +274,7 @@ export default function AuditLogPage() {
                               // which reads as "new -> old" on screen even though old_value/
                               // new_value are correctly ordered in the data and in the DOM. Same
                               // fix already used for value columns in PayrollPage/ReportsPage.
-                              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 13, direction: 'ltr' }}>
+                              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 'var(--fs-sm)', direction: 'ltr' }}>
                                 <span style={{ fontWeight: 600, minWidth: 140 }}>{humanize(c.field_name)}</span>
                                 <span className="muted">{c.old_value ?? '—'}</span>
                                 <span>→</span>

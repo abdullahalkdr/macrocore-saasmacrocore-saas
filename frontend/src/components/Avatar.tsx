@@ -11,7 +11,7 @@ export default function Avatar({ name, color = 'var(--amber-100)', textColor = '
         alignItems: 'center',
         justifyContent: 'center',
         fontWeight: 800,
-        fontSize: 14,
+        fontSize: 'var(--fs-base)',
         flexShrink: 0,
       }}
     >

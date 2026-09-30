@@ -53,7 +53,7 @@ export default function DocumentPreview({
       <div className="doc-paper-head">
         <div className="doc-company">
           {company?.name || 'macrocore'}
-          <div className="muted" style={{ fontSize: 12 }}>{t.salesDocs.kuwait}</div>
+          <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.salesDocs.kuwait}</div>
         </div>
         <div style={{ textAlign: 'end' }}>
           <div className="doc-paper-title">{docTypeLabel}</div>
@@ -64,7 +64,7 @@ export default function DocumentPreview({
         </div>
       </div>
 
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{t.salesDocs.billTo}</div>
+      <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 4 }}>{t.salesDocs.billTo}</div>
       <div style={{ fontWeight: 700 }}>{customerName || t.salesDocs.noCustomer}</div>
 
       <table className="data-table">
@@ -112,8 +112,8 @@ export default function DocumentPreview({
 
       {notes && (
         <div style={{ marginTop: 20 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{t.salesDocs.notes}</div>
-          <div style={{ fontSize: 13 }}>{notes}</div>
+          <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 4 }}>{t.salesDocs.notes}</div>
+          <div style={{ fontSize: 'var(--fs-sm)' }}>{notes}</div>
         </div>
       )}
     </div>

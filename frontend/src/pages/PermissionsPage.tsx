@@ -367,7 +367,7 @@ export default function PermissionsPage() {
                                     </span>
                                   )}
                                 </div>
-                                {emp.full_name && <div className="muted" style={{ fontSize: 11 }}>{emp.email}</div>}
+                                {emp.full_name && <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{emp.email}</div>}
                               </div>
                             ))}
                           </div>

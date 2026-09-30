@@ -122,7 +122,7 @@ export default function AccountSettingsPage() {
     if (links.length === 0) return null;
     return (
       <div style={{ marginBottom: 28 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', marginBottom: 10 }}>{label}</div>
+        <div style={{ fontSize: 'var(--fs-2xs)', fontWeight: 800, color: 'var(--muted)', marginBottom: 10 }}>{label}</div>
         <div className="field-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
           {links.map((l) => (
             <button
@@ -134,8 +134,8 @@ export default function AccountSettingsPage() {
               <div className="card-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <span className="section-card-icon">{l.icon}</span>
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--stone-900)' }}>{l.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{l.desc}</div>
+                  <div style={{ fontWeight: 700, fontSize: 'var(--fs-base)', color: 'var(--text)' }}>{l.title}</div>
+                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', marginTop: 2 }}>{l.desc}</div>
                 </div>
               </div>
             </button>
@@ -148,7 +148,7 @@ export default function AccountSettingsPage() {
   if (active !== 'index') {
     return (
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-xs)', color: 'var(--muted)', marginBottom: 10 }}>
           <button className="icon-btn" onClick={goToIndex} style={{ fontWeight: 700 }}>
             {t.account.backToSettings}
           </button>

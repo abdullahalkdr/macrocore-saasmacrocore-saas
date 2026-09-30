@@ -319,7 +319,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
                   {expandedId === o.id && (
                     <tr>
                       <td colSpan={7} style={{ backgroundColor: '#fafaf9', padding: '12px 16px' }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>{t.performance.keyResultsTitle}</div>
+                        <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, marginBottom: 8 }}>{t.performance.keyResultsTitle}</div>
                         {o.key_results.length > 0 && (
                           <table className="data-table" style={{ marginBottom: 10 }}>
                             <thead>
@@ -503,7 +503,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
 
           <div className="hr" />
           <div className="section-title-row">
-            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.keyResultsTitle}</span>
+            <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.keyResultsTitle}</span>
             <button className="btn btn-secondary btn-sm" type="button" onClick={addNewKr}>
               <IconPlus /> {t.performance.addKeyResult}
             </button>
@@ -551,7 +551,7 @@ function OkrTab({ employees, setPageError }: { employees: EmployeeOption[]; setP
               </div>
             </div>
           ))}
-          {newKrs.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{t.performance.noKeyResultsYetHint}</p>}
+          {newKrs.length === 0 && <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.performance.noKeyResultsYetHint}</p>}
         </Modal>
       )}
     </div>
@@ -734,7 +734,7 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
                   {expandedFormId === f.id && (
                     <tr>
                       <td colSpan={3} style={{ backgroundColor: '#fafaf9', padding: '12px 16px' }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>{t.performance.questionsTitle}</div>
+                        <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, marginBottom: 8 }}>{t.performance.questionsTitle}</div>
                         {(questionsByForm[f.id] ?? []).length > 0 && (
                           <table className="data-table" style={{ marginBottom: 10 }}>
                             <thead>
@@ -874,7 +874,7 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
 
           <div className="hr" />
           <div className="section-title-row">
-            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.questionsTitle}</span>
+            <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.performance.questionsTitle}</span>
             <button className="btn btn-secondary btn-sm" type="button" onClick={addNewQuestion}>
               <IconPlus /> {t.performance.addQuestion}
             </button>
@@ -916,7 +916,7 @@ function AppraisalsTab({ setPageError }: { setPageError: (e: string | null) => v
               </button>
             </div>
           ))}
-          {newQuestions.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{t.performance.noQuestionsYetHint}</p>}
+          {newQuestions.length === 0 && <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.performance.noQuestionsYetHint}</p>}
         </Modal>
       )}
     </div>
@@ -1127,7 +1127,7 @@ function FeedbackTab({ employees, setPageError }: { employees: EmployeeOption[];
       {assignCycle && (
         <Modal title={t.performance.assignReviewersTitle(assignCycle.name)} onClose={() => setAssignCycle(null)}>
           {requests.filter((r) => r.cycle_id === assignCycle.id).length > 0 && (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
               {t.performance.requestsForCycle(requests.filter((r) => r.cycle_id === assignCycle.id).length)}
             </p>
           )}
@@ -1416,7 +1416,7 @@ function ScoresTab({ employees, setPageError }: { employees: EmployeeOption[]; s
           )}
         >
           {finalizeError && <div className="error-banner">{finalizeError}</div>}
-          <p className="muted" style={{ fontSize: 13 }}>{t.performance.finalizeHint}</p>
+          <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{t.performance.finalizeHint}</p>
           <div className="field">
             <label>{t.performance.selectPayrollRecord}</label>
             <select value={selectedPayrollId} onChange={(e) => setSelectedPayrollId(e.target.value)}>
@@ -1428,7 +1428,7 @@ function ScoresTab({ employees, setPageError }: { employees: EmployeeOption[]; s
               ))}
             </select>
           </div>
-          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>{t.performance.finalizeSuccessNote}</p>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 8 }}>{t.performance.finalizeSuccessNote}</p>
         </Modal>
       )}
     </div>

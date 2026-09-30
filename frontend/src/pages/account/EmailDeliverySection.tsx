@@ -129,7 +129,7 @@ export default function EmailDeliverySection() {
           <h2>{t.account.sections.emailDeliveryTitle}</h2>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.emailDelivery.testHint}
           </p>
           {sendError && <div className="error-banner">{sendError}</div>}
@@ -168,7 +168,7 @@ export default function EmailDeliverySection() {
         <div className="card-body">
           {loadError && <div className="error-banner">{loadError}</div>}
           {jobs.length === 0 ? (
-            <p className="muted" style={{ fontSize: 13 }}>{t.account.emailDelivery.empty}</p>
+            <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{t.account.emailDelivery.empty}</p>
           ) : (
             <>
               <table className="table">
@@ -192,7 +192,7 @@ export default function EmailDeliverySection() {
                         <span className={`badge ${STATUS_BADGE_CLASS[job.status]}`}>{labels[job.status] ?? job.status}</span>
                       </td>
                       <td>{job.attempt_count}/{job.max_attempts}</td>
-                      <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--muted)' }} title={job.last_error ?? ''}>
+                      <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--fs-2xs)', color: 'var(--muted)' }} title={job.last_error ?? ''}>
                         {job.last_error ?? ''}
                       </td>
                       <td>{new Date(job.created_at).toLocaleString()}</td>
@@ -201,7 +201,7 @@ export default function EmailDeliverySection() {
                           (needsExplicitReviewConfirmation(job.status) ? (
                             confirmingReviewId === job.id ? (
                               <div className="email-review-confirm" style={{ minWidth: 200 }}>
-                                <p className="muted" style={{ fontSize: 11, margin: '0 0 6px' }}>
+                                <p className="muted" style={{ fontSize: 'var(--fs-2xs)', margin: '0 0 6px' }}>
                                   {t.account.emailDelivery.requiresReviewNotice}
                                 </p>
                                 <div style={{ display: 'flex', gap: 6 }}>

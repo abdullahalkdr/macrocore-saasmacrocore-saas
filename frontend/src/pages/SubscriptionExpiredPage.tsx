@@ -61,14 +61,14 @@ export default function SubscriptionExpiredPage() {
             <IconBuilding size={26} />
           </div>
           <h1 style={{ marginBottom: 2 }}>{t.subscriptionExpired.title}</h1>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>
             {isTrial ? t.subscriptionExpired.trialMessage : t.subscriptionExpired.inactiveMessage}
           </div>
         </div>
 
         {error && <div className="error-banner">{error}</div>}
 
-        <p className="muted" style={{ fontSize: 13, textAlign: 'center', marginBottom: 16 }}>
+        <p className="muted" style={{ fontSize: 'var(--fs-sm)', textAlign: 'center', marginBottom: 16 }}>
           {t.subscriptionExpired.body}
         </p>
 
@@ -76,17 +76,17 @@ export default function SubscriptionExpiredPage() {
           <div className="stat-grid" style={{ marginBottom: 16 }}>
             <div className="stat-card">
               <div className="stat-label">{t.subscriptionExpired.plan}</div>
-              <div className="stat-value" style={{ fontSize: 16 }}>{company.plan}</div>
+              <div className="stat-value" style={{ fontSize: 'var(--fs-lg)' }}>{company.plan}</div>
             </div>
             <div className="stat-card red">
               <div className="stat-label">{t.subscriptionExpired.status}</div>
-              <div className="stat-value" style={{ fontSize: 16 }}>{company.subscription_status}</div>
+              <div className="stat-value" style={{ fontSize: 'var(--fs-lg)' }}>{company.subscription_status}</div>
             </div>
           </div>
         )}
 
         {(company?.contact_email || company?.contact_phone) && (
-          <p className="muted" style={{ fontSize: 12, textAlign: 'center', marginBottom: 16 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', textAlign: 'center', marginBottom: 16 }}>
             {t.subscriptionExpired.contactUs}: {company.contact_email} {company.contact_phone}
           </p>
         )}

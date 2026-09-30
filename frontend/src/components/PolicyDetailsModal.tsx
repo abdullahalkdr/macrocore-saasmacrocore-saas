@@ -185,7 +185,7 @@ export default function PolicyDetailsModal({ policyId, onClose }: PolicyDetailsM
                 ))}
               </div>
               {rolesError && <div className="error-banner">{rolesError}</div>}
-              {checkedRoles.length === 0 && <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.policies.rolesRequireOne}</div>}
+              {checkedRoles.length === 0 && <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8 }}>{t.policies.rolesRequireOne}</div>}
               <button className="btn btn-primary btn-sm" type="button" disabled={rolesSaving || checkedRoles.length === 0} onClick={handleSaveRoles}>
                 {rolesSaving ? t.common.loading : t.policies.rolesSaveBtn}
               </button>
@@ -202,7 +202,7 @@ export default function PolicyDetailsModal({ policyId, onClose }: PolicyDetailsM
           {isManager && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>{t.policies.permissionGateTitle}</div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{t.policies.permissionGateHint}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 10 }}>{t.policies.permissionGateHint}</div>
               {gateError && <div className="error-banner">{gateError}</div>}
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input
@@ -214,7 +214,7 @@ export default function PolicyDetailsModal({ policyId, onClose }: PolicyDetailsM
                 {t.permissions.keys.view_audit_log}
               </label>
               {selected.status !== 'approved' && !selected.permission_gates.includes(PILOT_GATED_PERMISSION_KEY) && (
-                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.policies.permissionGateRequiresApproved}</div>
+                <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.policies.permissionGateRequiresApproved}</div>
               )}
             </div>
           )}

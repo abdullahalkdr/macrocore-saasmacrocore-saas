@@ -47,7 +47,7 @@ export default function ForgotPasswordPage() {
             <IconBuilding size={26} />
           </div>
           <h1 style={{ marginBottom: 2 }}>{t.auth.forgotPasswordTitle}</h1>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.auth.forgotPasswordSubtitle}</div>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>{t.auth.forgotPasswordSubtitle}</div>
         </div>
 
         {sent ? (

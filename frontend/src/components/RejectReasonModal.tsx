@@ -98,7 +98,7 @@ export default function RejectReasonModal({ onConfirm, onCancel }: RejectReasonM
               maxLength={REJECT_REASON_MAX_LENGTH}
             />
             {touched && !valid && (
-              <div className="muted" style={{ color: '#dc2626', fontSize: 12, marginTop: 4 }}>
+              <div className="muted" style={{ color: '#dc2626', fontSize: 'var(--fs-xs)', marginTop: 4 }}>
                 {t.approvals.rejectReasonRequired}
               </div>
             )}

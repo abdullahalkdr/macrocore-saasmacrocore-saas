@@ -339,7 +339,7 @@ export default function PurchaseOrdersPage() {
                             request's own number at all; the Approvals inbox already
                             showed it to the approver. */}
                         {po.approval_request_number && (
-                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                          <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 2 }}>
                             #{po.approval_request_number}
                           </div>
                         )}
@@ -354,7 +354,7 @@ export default function PurchaseOrdersPage() {
                         Edit/Send to Supplier/Delete entirely (prevent tampering while
                         pending, per spec) instead of just disabling them. */}
                     {po.status === 'draft' && po.approval_status === 'pending' && (
-                      <span className="muted" style={{ fontSize: 12 }}>{t.purchaseOrders.submittedForApproval}</span>
+                      <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.purchaseOrders.submittedForApproval}</span>
                     )}
                     {po.status === 'draft' && po.approval_status !== 'pending' && canApprovePO && (
                       <>
@@ -380,7 +380,7 @@ export default function PurchaseOrdersPage() {
                             {markingOrderedId === po.id ? t.common.loading : t.purchaseOrders.markOrdered}
                           </button>
                         ) : (
-                          <span className="muted" style={{ fontSize: 12 }}>{t.purchaseOrders.awaitingMakerConfirmation}</span>
+                          <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.purchaseOrders.awaitingMakerConfirmation}</span>
                         )}
                         <button className="icon-btn" title={t.common.delete} onClick={() => handleDelete(po.id)}>
                           <IconTrash />
@@ -427,7 +427,7 @@ export default function PurchaseOrdersPage() {
             </>
           )}
         >
-          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.purchaseOrders.submittedForApproval}</p>}
+          {editingRecordPending && <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8 }}>{t.purchaseOrders.submittedForApproval}</p>}
           <form id="po-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.purchaseOrders.supplier}</label>

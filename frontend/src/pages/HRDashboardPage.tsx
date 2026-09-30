@@ -82,7 +82,7 @@ export default function HRDashboardPage() {
 
       <div className="card">
         <div className="section-title-row">
-          <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.slaAlertsTitle}</span>
+          <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.slaAlertsTitle}</span>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -123,7 +123,7 @@ export default function HRDashboardPage() {
 
       <div className="card">
         <div className="section-title-row">
-          <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.okrProgressTitle}</span>
+          <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.okrProgressTitle}</span>
         </div>
         <div className="stat-grid">
           {byStatus.map(({ status, count, avg }) => (
@@ -139,7 +139,7 @@ export default function HRDashboardPage() {
 
       <div className="card">
         <div className="section-title-row">
-          <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.feedbackPendingTitle}</span>
+          <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.hrDashboard.feedbackPendingTitle}</span>
         </div>
         <div className="table-wrap">
           <table className="data-table">

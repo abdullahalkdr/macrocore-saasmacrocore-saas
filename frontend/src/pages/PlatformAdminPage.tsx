@@ -278,7 +278,7 @@ export default function PlatformAdminPage() {
               <IconBuilding size={26} />
             </div>
             <h1 style={{ marginBottom: 2 }}>macrocore — platform admin</h1>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Cross-tenant dashboard — not a company account.</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>Cross-tenant dashboard — not a company account.</div>
           </div>
           {error && <div className="error-banner">{error}</div>}
           <form onSubmit={handleKeySubmit}>
@@ -324,7 +324,7 @@ export default function PlatformAdminPage() {
           {stats.mrr_by_currency.length === 0 && (
             <div className="stat-card green">
               <div className="stat-label">MRR</div>
-              <div className="stat-value" style={{ fontSize: 14 }}>
+              <div className="stat-value" style={{ fontSize: 'var(--fs-base)' }}>
                 No active subscriptions yet
               </div>
             </div>
@@ -631,7 +631,7 @@ export default function PlatformAdminPage() {
                     {inv.amount !== undefined && inv.currency ? `${Number(inv.amount).toFixed(3)} ${inv.currency}` : '—'}
                   </td>
                   <td>{invoiceStatusLabel(inv.status)}</td>
-                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>
+                  <td style={{ whiteSpace: 'nowrap', fontSize: 'var(--fs-xs)' }}>
                     {inv.period_start ? new Date(inv.period_start).toLocaleDateString('en-GB') : '—'}
                     {' → '}
                     {inv.period_end ? new Date(inv.period_end).toLocaleDateString('en-GB') : '—'}

@@ -386,7 +386,7 @@ export default function DepartmentsPage() {
                 maxLength={10}
                 placeholder={t.departments.codePlaceholder}
               />
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>
                 {t.departments.codeHint}
               </span>
             </div>
@@ -589,7 +589,7 @@ function ManageRolesModal({
               onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: { ...draftFor(r.id), responsibilities: e.target.value } }))}
               placeholder={t.departments.responsibilitiesLabel}
               rows={2}
-              style={{ width: '100%', marginTop: 4, fontSize: 12, resize: 'vertical' }}
+              style={{ width: '100%', marginTop: 4, fontSize: 'var(--fs-xs)', resize: 'vertical' }}
             />
           </div>
         ))}
@@ -618,7 +618,7 @@ function ManageRolesModal({
             value={newRole.responsibilities}
             onChange={(e) => setNewRole((r) => ({ ...r, responsibilities: e.target.value }))}
             rows={2}
-            style={{ width: '100%', fontSize: 12, resize: 'vertical' }}
+            style={{ width: '100%', fontSize: 'var(--fs-xs)', resize: 'vertical' }}
           />
         </div>
       </form>

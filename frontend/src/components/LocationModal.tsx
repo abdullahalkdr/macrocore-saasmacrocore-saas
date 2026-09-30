@@ -194,7 +194,7 @@ export default function LocationModal({ location, onClose, onSaved }: LocationMo
                 </button>
               ))}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>{TYPE_HELPERS[type]}</div>
+            <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', marginTop: 6 }}>{TYPE_HELPERS[type]}</div>
           </div>
 
           <div className="field-grid" style={{ marginTop: 14 }}>

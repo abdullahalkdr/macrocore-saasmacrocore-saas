@@ -54,7 +54,7 @@ export default function DeveloperSection() {
       {error && <div className="error-banner">{error}</div>}
       <div className="card">
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.developer.hint}
           </p>
           <form onSubmit={handleCreate} className="form-row">
@@ -69,15 +69,15 @@ export default function DeveloperSection() {
           {justCreated && (
             <div className="success-banner">
               <div style={{ fontWeight: 700, marginBottom: 4 }}>{t.account.developer.keyCreatedTitle}</div>
-              <code style={{ display: 'block', background: '#fff', padding: '8px 10px', borderRadius: 8, fontSize: 13, wordBreak: 'break-all' }}>
+              <code style={{ display: 'block', background: '#fff', padding: '8px 10px', borderRadius: 8, fontSize: 'var(--fs-sm)', wordBreak: 'break-all' }}>
                 {justCreated}
               </code>
-              <div style={{ fontSize: 11, marginTop: 6 }}>{t.account.developer.keyCreatedHint}</div>
+              <div style={{ fontSize: 'var(--fs-2xs)', marginTop: 6 }}>{t.account.developer.keyCreatedHint}</div>
             </div>
           )}
 
           {keys.length === 0 ? (
-            <p className="muted" style={{ fontSize: 13, marginTop: 14 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-sm)', marginTop: 14 }}>
               {t.account.developer.empty}
             </p>
           ) : (
@@ -94,7 +94,7 @@ export default function DeveloperSection() {
                   <tr key={k.id}>
                     <td>
                       {k.name}
-                      <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)' }}>
                         <code>{k.key_prefix}••••</code>
                       </div>
                     </td>

@@ -222,7 +222,7 @@ export default function OfficialDocumentsPage() {
                       style={{
                         padding: '2px 10px',
                         borderRadius: 999,
-                        fontSize: 12,
+                        fontSize: 'var(--fs-xs)',
                         fontWeight: 700,
                         backgroundColor: '#fff4e5',
                         color: '#b45309',

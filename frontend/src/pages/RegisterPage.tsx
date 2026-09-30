@@ -233,7 +233,7 @@ export default function RegisterPage() {
       <div className="auth-page">
         <div className={`auth-box auth-box-wide`}>
           <h1>{t.auth.inviteResultsTitle}</h1>
-          <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: -6, marginBottom: 16 }}>{t.auth.inviteResultsHint}</p>
+          <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', marginTop: -6, marginBottom: 16 }}>{t.auth.inviteResultsHint}</p>
           {invitedResults.map((r) => (
             <div className="temp-cred-row" key={r.email}>
               <span>{r.email}</span>
@@ -281,7 +281,7 @@ export default function RegisterPage() {
         {step === 1 && (
           <>
             <h1 style={{ textAlign: 'center' }}>{t.auth.step1Title}</h1>
-            <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step1Subtitle}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step1Subtitle}</div>
             <form onSubmit={handleStep1Submit}>
               <div className="field">
                 <label>{t.auth.email}</label>
@@ -315,9 +315,9 @@ export default function RegisterPage() {
         {step === 2 && (
           <>
             <h1 style={{ textAlign: 'center' }}>{t.auth.step2Title}</h1>
-            <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step2Subtitle}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step2Subtitle}</div>
             {googleSignupToken && (
-              <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', textAlign: 'center', marginBottom: 12 }}>
                 {t.auth.googleConnectedAs(email)}
               </div>
             )}
@@ -374,7 +374,7 @@ export default function RegisterPage() {
         {step === 3 && (
           <>
             <h1 style={{ textAlign: 'center' }}>{t.auth.step3Title}</h1>
-            <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step3Subtitle}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', textAlign: 'center', marginBottom: 18 }}>{t.auth.step3Subtitle}</div>
             <form onSubmit={handleStep3Submit}>
               <div className="field">
                 <label>{t.auth.businessNameLabel}</label>
@@ -448,7 +448,7 @@ export default function RegisterPage() {
                     onBlur={addInviteFromInput}
                   />
                 )}
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.auth.inviteHint}</div>
+                <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', marginTop: 4 }}>{t.auth.inviteHint}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button className="btn btn-secondary" type="button" onClick={() => setStep(2)}>
@@ -459,7 +459,7 @@ export default function RegisterPage() {
                 </button>
               </div>
             </form>
-            <div className="switch" style={{ fontSize: 11 }}>
+            <div className="switch" style={{ fontSize: 'var(--fs-2xs)' }}>
               {/* Terms/Privacy pages live on the marketing site (macrocore.io), not this app — cross-domain link, not a router Link. */}
               {t.auth.legalNotePrefix}{' '}
               <a href="https://macrocore.io/terms" target="_blank" rel="noreferrer">

@@ -52,7 +52,7 @@ export function AttachmentGallery({ attachments }: { attachments: Attachment[] }
               borderRadius: 6,
               border: '1px solid var(--border)',
               background: 'var(--surface)',
-              fontSize: 12,
+              fontSize: 'var(--fs-xs)',
               maxWidth: 180,
               textDecoration: 'none',
               color: 'inherit',

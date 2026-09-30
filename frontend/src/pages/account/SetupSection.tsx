@@ -22,7 +22,7 @@ export default function SetupSection() {
           </button>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>
             {t.account.sections.branchesDesc}
           </p>
         </div>
@@ -36,7 +36,7 @@ export default function SetupSection() {
           </button>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>
             {t.account.sections.costCentersDesc}
           </p>
         </div>
@@ -50,7 +50,7 @@ export default function SetupSection() {
           </button>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>
             {t.account.sections.projectsDesc}
           </p>
         </div>
@@ -64,7 +64,7 @@ export default function SetupSection() {
           </button>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>
             {t.account.sections.periodStatusDesc}
           </p>
         </div>
@@ -74,12 +74,12 @@ export default function SetupSection() {
         {placeholders.map((p) => (
           <div className="card" key={p.title} style={{ opacity: 0.65 }}>
             <div className="card-body" style={{ display: 'flex', gap: 12 }}>
-              <span style={{ fontSize: 20 }}>{p.icon}</span>
+              <span style={{ fontSize: 'var(--fs-xl)' }}>{p.icon}</span>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>
+                <div style={{ fontWeight: 700, fontSize: 'var(--fs-sm)' }}>
                   {p.title} <span className="badge closed">{t.account.comingSoon}</span>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{p.desc}</div>
+                <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', marginTop: 2 }}>{p.desc}</div>
               </div>
             </div>
           </div>

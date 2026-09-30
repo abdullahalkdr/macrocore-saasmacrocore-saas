@@ -218,7 +218,7 @@ export default function PlanCheckoutPage() {
   return (
     <BillingShell>
       <h1>{t.billing.pageTitle}</h1>
-      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 'var(--fs-sm)', marginTop: 0 }}>
         {onTrial
           ? `${trialStillRunning ? t.billing.trialActive(formatDate(trialEndsIso, lang)) : t.billing.trialEnded} ${t.billing.trialIncludesSilver}`
           : current
@@ -230,7 +230,7 @@ export default function PlanCheckoutPage() {
         {/* Selected plan: price, cycle, features, limits */}
         <section className="card" aria-labelledby="billing-plan-title">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <h2 id="billing-plan-title" style={{ margin: 0, fontSize: 20, fontWeight: 900 }}>
+            <h2 id="billing-plan-title" style={{ margin: 0, fontSize: 'var(--fs-xl)', fontWeight: 900 }}>
               {planName(plan.key)}{' '}
               {current === plan.key && <span className="tag green">{t.billing.currentPlan}</span>}
             </h2>
@@ -260,11 +260,11 @@ export default function PlanCheckoutPage() {
               <div className="billing-footnote">{t.billing.usdNote}</div>
             </div>
           ) : (
-            <p className="muted" style={{ fontSize: 13 }}>{t.billing.enterpriseDesc}</p>
+            <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{t.billing.enterpriseDesc}</p>
           )}
 
           <hr className="hr" />
-          <h3 style={{ fontSize: 14, margin: '0 0 10px' }}>{t.billing.includes}</h3>
+          <h3 style={{ fontSize: 'var(--fs-base)', margin: '0 0 10px' }}>{t.billing.includes}</h3>
           <ul className="billing-feature-list">
             {data.features
               .filter((f) => featureIncluded(f.min_level, plan.level))
@@ -278,8 +278,8 @@ export default function PlanCheckoutPage() {
                 </li>
               ))}
           </ul>
-          <h3 style={{ fontSize: 14, margin: '16px 0 8px' }}>{t.billing.limits}</h3>
-          <div style={{ fontSize: 13 }}>
+          <h3 style={{ fontSize: 'var(--fs-base)', margin: '16px 0 8px' }}>{t.billing.limits}</h3>
+          <div style={{ fontSize: 'var(--fs-sm)' }}>
             {t.billing.locations}:{' '}
             <strong>{plan.limits.locations === null ? t.billing.unlimited : t.billing.locationsCount(plan.limits.locations)}</strong>
           </div>
@@ -288,13 +288,13 @@ export default function PlanCheckoutPage() {
 
         {/* Confirmation */}
         <section className="card" aria-labelledby="billing-confirm-title">
-          <h2 id="billing-confirm-title" style={{ marginTop: 0, fontSize: 16, fontWeight: 800 }}>
+          <h2 id="billing-confirm-title" style={{ marginTop: 0, fontSize: 'var(--fs-lg)', fontWeight: 800 }}>
             {plan.contact_sales ? t.billing.enterpriseTitle : t.billing.confirm.title}
           </h2>
 
           {plan.contact_sales ? (
             <>
-              <p className="muted" style={{ fontSize: 13 }}>{t.billing.enterpriseDesc}</p>
+              <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>{t.billing.enterpriseDesc}</p>
               <a className="btn btn-primary" href={`mailto:${SALES_EMAIL}?subject=${encodeURIComponent('Enterprise plan')}`}>
                 {t.billing.contactSales}
               </a>
@@ -333,8 +333,8 @@ export default function PlanCheckoutPage() {
                     price={price ? formatMoney(price.amount, data.currency) : ''}
                   />
                 </div>
-                <p className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</p>
-                <p className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.windowNote(data.checkout_window_minutes)}</p>
+                <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</p>
+                <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.billing.confirm.windowNote(data.checkout_window_minutes)}</p>
                 {actionError && <div className="error-banner" role="alert">{actionError}</div>}
                 <button
                   type="button"
@@ -367,7 +367,7 @@ export default function PlanCheckoutPage() {
                 <div className="info-banner">{t.billing.confirm.replacesOther(planName(data.open_purchase.plan))}</div>
               )}
               <div className="billing-disclosure">{t.billing.confirm.periodRule}</div>
-              <p className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.windowNote(data.checkout_window_minutes)}</p>
+              <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.billing.confirm.windowNote(data.checkout_window_minutes)}</p>
               {actionError && <div className="error-banner" role="alert">{actionError}</div>}
               <button
                 type="button"
@@ -398,7 +398,7 @@ export default function PlanCheckoutPage() {
               </button>
             </div>
           ) : (
-            <span className="muted" style={{ fontSize: 12 }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</span>
+            <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.billing.confirm.sameIntervalNote(intervalLabel)}</span>
           )}
         </div>
         <div className="table-wrap">
@@ -414,7 +414,7 @@ export default function PlanCheckoutPage() {
                         type="button"
                         className="link-button"
                         onClick={() => navigate(`/billing/plans/${p.key}?interval=${interval}`)}
-                        style={{ fontWeight: 800, fontSize: 13 }}
+                        style={{ fontWeight: 800, fontSize: 'var(--fs-sm)' }}
                       >
                         {planName(p.key)}
                       </button>

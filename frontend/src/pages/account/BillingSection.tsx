@@ -68,13 +68,13 @@ export default function BillingSection() {
           <div className="field-grid">
             <div className="stat-card">
               <div className="stat-label">{t.account.billing.currentPlan}</div>
-              <div className="stat-value" style={{ fontSize: 16 }}>
+              <div className="stat-value" style={{ fontSize: 'var(--fs-lg)' }}>
                 {data.plan}
               </div>
             </div>
             <div className="stat-card">
               <div className="stat-label">{t.account.billing.status}</div>
-              <div className="stat-value" style={{ fontSize: 14 }}>
+              <div className="stat-value" style={{ fontSize: 'var(--fs-base)' }}>
                 {statusLabel}
               </div>
             </div>
@@ -86,11 +86,11 @@ export default function BillingSection() {
 
           <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--stone-50)', borderRadius: 10 }}>
-              <span style={{ fontSize: 13 }}>{t.account.billing.advancedCustomization}</span>
+              <span style={{ fontSize: 'var(--fs-sm)' }}>{t.account.billing.advancedCustomization}</span>
               <ComingSoonBtn />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--stone-50)', borderRadius: 10 }}>
-              <span style={{ fontSize: 13 }}>{t.account.billing.revenueRecognition}</span>
+              <span style={{ fontSize: 'var(--fs-sm)' }}>{t.account.billing.revenueRecognition}</span>
               <ComingSoonBtn />
             </div>
           </div>
@@ -102,7 +102,7 @@ export default function BillingSection() {
           <h2>{t.account.billing.billingAccount}</h2>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.comingSoon} — {t.account.billing.paymentLinkHint}
           </p>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -113,7 +113,7 @@ export default function BillingSection() {
               {t.account.billing.getPaymentLink}
             </button>
           </div>
-          <div style={{ marginTop: 12, fontSize: 13 }}>
+          <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)' }}>
             {t.account.billing.balance}: <strong>0.00</strong>
           </div>
         </div>

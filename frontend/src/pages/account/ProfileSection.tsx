@@ -229,7 +229,7 @@ export default function ProfileSection() {
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.phoneHint}</div>
+              <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.phoneHint}</div>
             </div>
             <div className="field">
               <label>{t.account.profile.emailLanguage}</label>
@@ -241,7 +241,7 @@ export default function ProfileSection() {
                 <option value="ar">{t.account.profile.emailLanguageArabic}</option>
                 <option value="en">{t.account.profile.emailLanguageEnglish}</option>
               </select>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.emailLanguageHint}</div>
+              <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', marginTop: 4 }}>{t.account.profile.emailLanguageHint}</div>
             </div>
           </div>
 
@@ -273,7 +273,7 @@ export default function ProfileSection() {
               </form>
             )}
           </div>
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
+          <div style={{ marginTop: 12, fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>
             {t.account.profile.role}: {(authUser?.role && roleLabels[authUser.role]) || authUser?.role}
           </div>
         </div>
@@ -317,7 +317,7 @@ export default function ProfileSection() {
                   >
                     <div>
                       <div style={{ fontWeight: 700 }}>{displayName}</div>
-                      <div className="muted" style={{ fontSize: 12 }}>{t.account.policyGrants.activates(permLabel)}</div>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.account.policyGrants.activates(permLabel)}</div>
                     </div>
                     <button className="btn btn-primary btn-sm" type="button" onClick={() => setOpenGrant(g)}>
                       {t.account.policyGrants.viewButton}

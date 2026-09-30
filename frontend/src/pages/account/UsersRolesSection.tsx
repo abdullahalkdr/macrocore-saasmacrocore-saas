@@ -63,7 +63,7 @@ export default function UsersRolesSection() {
                   <tr key={u.id}>
                     <td>
                       {u.full_name || u.email} {u.id === authUser?.id && <span className="badge trial">{t.account.users.you}</span>}
-                      <div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.email}</div>
+                      <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)' }}>{u.email}</div>
                     </td>
                     <td>{u.role}</td>
                     <td>
@@ -82,13 +82,13 @@ export default function UsersRolesSection() {
           {roleCards.map((r) => (
             <div className="card" key={r.role}>
               <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h2 style={{ fontSize: 15 }}>{r.title}</h2>
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                <h2 style={{ fontSize: 'var(--fs-md)' }}>{r.title}</h2>
+                <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)' }}>
                   {t.account.users.usersCount(users.filter((u) => u.role === r.role).length)}
                 </span>
               </div>
               <div className="card-body">
-                <p style={{ fontSize: 13, color: 'var(--stone-700)', marginTop: 0 }}>{r.desc}</p>
+                <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--stone-700)', marginTop: 0 }}>{r.desc}</p>
                 <span className={`badge ${r.access === t.account.users.fullAccess ? 'open' : 'closed'}`}>{r.access}</span>
               </div>
             </div>

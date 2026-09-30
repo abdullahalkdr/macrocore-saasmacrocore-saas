@@ -124,7 +124,7 @@ export default function CustomizationsSection() {
                 <input value={footerText} onChange={(e) => setFooterText(e.target.value)} />
               </div>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', marginTop: 10 }}>
               <input type="checkbox" checked={showStamp} onChange={(e) => setShowStamp(e.target.checked)} />
               {t.account.customizations.showStamp}
             </label>
@@ -165,7 +165,7 @@ export default function CustomizationsSection() {
           </form>
 
           {fields.length === 0 ? (
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
               {t.account.customizations.empty}
             </p>
           ) : (

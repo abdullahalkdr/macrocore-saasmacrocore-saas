@@ -195,7 +195,7 @@ export default function WasteRecordsPage() {
                   <label>{t.waste.qty}</label>
                   <input type="number" step="0.001" value={qty} onChange={(e) => setQty(e.target.value)} required autoFocus />
                 </div>
-                <p className="muted" style={{ fontSize: 12, gridColumn: '1 / -1' }}>
+                <p className="muted" style={{ fontSize: 'var(--fs-xs)', gridColumn: '1 / -1' }}>
                   {t.waste.editQtyOnly}
                 </p>
               </>

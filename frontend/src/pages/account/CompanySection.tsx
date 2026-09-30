@@ -324,7 +324,7 @@ export default function CompanySection() {
               {t.account.company.uploadLogo}
               <input type="file" accept="image/*" onChange={handleStampChange} style={{ display: 'none' }} />
             </label>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, maxWidth: 420 }}>{t.account.company.stampHint}</div>
+            <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', marginTop: 6, maxWidth: 420 }}>{t.account.company.stampHint}</div>
           </div>
         </div>
       </div>
@@ -334,7 +334,7 @@ export default function CompanySection() {
           <h2>{t.account.company.whatsappAlerts}</h2>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.company.whatsappAlertsHint}
           </p>
           <form onSubmit={saveWhatsappNumber} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
@@ -353,7 +353,7 @@ export default function CompanySection() {
             </button>
           </form>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-            <span style={{ fontSize: 13 }}>{t.account.company.whatsappAlertsEnabled}</span>
+            <span style={{ fontSize: 'var(--fs-sm)' }}>{t.account.company.whatsappAlertsEnabled}</span>
             <button
               type="button"
               className={`badge ${data.whatsapp_alerts_enabled ? 'open' : 'closed'}`}
@@ -371,13 +371,13 @@ export default function CompanySection() {
           <h2>{t.account.company.preferences}</h2>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.company.preferencesHint}
           </p>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
             <div>
-              <div style={{ fontSize: 13 }}>{t.account.company.inventoryEnabled}</div>
-              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{t.account.company.inventoryEnabledHint}</div>
+              <div style={{ fontSize: 'var(--fs-sm)' }}>{t.account.company.inventoryEnabled}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 2 }}>{t.account.company.inventoryEnabledHint}</div>
             </div>
             <button
               type="button"
@@ -395,7 +395,7 @@ export default function CompanySection() {
             ] as const
           ).map(([key, label]) => (
             <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ fontSize: 13 }}>{label}</span>
+              <span style={{ fontSize: 'var(--fs-sm)' }}>{label}</span>
               <button
                 type="button"
                 className={`badge ${data[key] ? 'open' : 'closed'}`}
@@ -428,7 +428,7 @@ export default function CompanySection() {
           <h2 style={{ color: 'var(--red-600)' }}>{t.account.company.dangerZone}</h2>
         </div>
         <div className="card-body">
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
             {t.account.company.dangerHint}
           </p>
           <div className="field" style={{ maxWidth: 320 }}>

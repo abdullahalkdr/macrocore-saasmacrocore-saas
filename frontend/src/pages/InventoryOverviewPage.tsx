@@ -159,7 +159,7 @@ export default function InventoryOverviewPage() {
                 <tr key={m.raw_material_id}>
                   <td style={{ fontWeight: 700 }}>
                     {materialLabel(m)}
-                    <div className="muted" style={{ fontWeight: 400, fontSize: 11 }}>
+                    <div className="muted" style={{ fontWeight: 400, fontSize: 'var(--fs-2xs)' }}>
                       {m.min_stock_qty !== null ? t.inventory.reorderPoint(fmtQty(Number(m.min_stock_qty))) : t.inventory.noThreshold}
                     </div>
                   </td>

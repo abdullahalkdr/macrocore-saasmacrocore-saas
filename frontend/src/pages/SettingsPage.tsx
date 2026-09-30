@@ -100,7 +100,7 @@ export default function SettingsPage() {
             <h2>{t.settings.fixedCostsTitle}</h2>
           </div>
           <div className="card-body">
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
               {t.settings.fixedCostsHint}
             </p>
             {items.map((it, i) => (
@@ -137,7 +137,7 @@ export default function SettingsPage() {
             <h2>{t.settings.estimatedOrdersTitle}</h2>
           </div>
           <div className="card-body">
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
               {t.settings.estimatedOrdersHint}
             </p>
             <div className="field-grid">
@@ -162,7 +162,7 @@ export default function SettingsPage() {
             <h2>{t.settings.commissionsTitle}</h2>
           </div>
           <div className="card-body">
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
               {t.settings.commissionsHint}
             </p>
             <div className="field-grid">
@@ -183,7 +183,7 @@ export default function SettingsPage() {
             <h2>{t.settings.attendanceTitle}</h2>
           </div>
           <div className="card-body">
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
               {t.settings.attendanceHint}
             </p>
             <div className="field-grid">

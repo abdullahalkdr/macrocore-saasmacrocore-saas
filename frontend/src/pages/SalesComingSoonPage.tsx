@@ -29,10 +29,10 @@ export default function SalesComingSoonPage({ variant }: { variant: Variant }) {
         <div className="card-body" style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           <span style={{ color: 'var(--muted)', display: 'flex', flexShrink: 0 }} aria-hidden="true">{ICONS[variant]}</span>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 'var(--fs-base)' }}>
               {title} <span className="badge closed">{t.account.comingSoon}</span>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{t.salesDocs.comingSoonHint}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)', marginTop: 2 }}>{t.salesDocs.comingSoonHint}</div>
           </div>
         </div>
       </div>

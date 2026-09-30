@@ -90,7 +90,7 @@ export default function UpgradeModal() {
 
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
             {lockedInterval ? (
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                 {t.billing.confirm.sameIntervalNote(lockedInterval === 'annual' ? t.billing.annual : t.billing.monthly)}
               </span>
             ) : (
@@ -125,17 +125,17 @@ export default function UpgradeModal() {
                 return (
                   <div key={plan.key} className={`card billing-plan-card${isCurrent ? ' is-current' : ''}`}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                      <div style={{ fontWeight: 800, fontSize: 15 }}>{name}</div>
+                      <div style={{ fontWeight: 800, fontSize: 'var(--fs-md)' }}>{name}</div>
                       {isCurrent && <span className="tag green">{t.billing.currentPlan}</span>}
                     </div>
-                    <p className="muted" style={{ fontSize: 11.5, minHeight: 36, margin: 0 }}>
+                    <p className="muted" style={{ fontSize: 'var(--fs-xs)', minHeight: 36, margin: 0 }}>
                       {planTagline[plan.key]}
                     </p>
                     {price ? (
                       <div style={{ minHeight: 46 }}>
                         {price.monthlyEquivalent ? (
                           <>
-                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 20 }}>
+                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 'var(--fs-xl)' }}>
                               {formatMoney(price.monthlyEquivalent, plans.currency)}
                             </bdi>
                             <span className="muted"> {t.billing.perMonth}</span>
@@ -146,7 +146,7 @@ export default function UpgradeModal() {
                           </>
                         ) : (
                           <>
-                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 20 }}>
+                            <bdi dir="ltr" className="billing-amount" style={{ fontWeight: 800, fontSize: 'var(--fs-xl)' }}>
                               {formatMoney(price.amount, plans.currency)}
                             </bdi>
                             <span className="muted"> {t.billing.perMonth}</span>
@@ -154,7 +154,7 @@ export default function UpgradeModal() {
                         )}
                       </div>
                     ) : (
-                      <div style={{ minHeight: 46, display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: 13 }}>
+                      <div style={{ minHeight: 46, display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: 'var(--fs-sm)' }}>
                         {t.pricing.ctaContactSales}
                       </div>
                     )}
@@ -192,7 +192,7 @@ export default function UpgradeModal() {
             </div>
           )}
 
-          <p className="muted" style={{ textAlign: 'center', fontSize: 11, marginTop: 16, marginBottom: 0 }}>
+          <p className="muted" style={{ textAlign: 'center', fontSize: 'var(--fs-2xs)', marginTop: 16, marginBottom: 0 }}>
             {t.billing.usdNote}
           </p>
         </div>

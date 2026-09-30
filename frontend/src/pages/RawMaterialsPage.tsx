@@ -309,11 +309,11 @@ export default function RawMaterialsPage() {
             </div>
 
             <div className="unit-cost-box">
-              <div className="muted" style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.rawMaterials.unitCostTitle}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, marginBottom: 6 }}>{t.rawMaterials.unitCostTitle}</div>
               <div className="unit-cost-value">{unitCost.value}</div>
               <div className="unit-cost-caption">{unitCost.caption}</div>
             </div>
-            <div className="muted" style={{ gridColumn: '1 / -1', fontSize: 11, marginTop: -6 }}>{t.rawMaterials.costExample}</div>
+            <div className="muted" style={{ gridColumn: '1 / -1', fontSize: 'var(--fs-2xs)', marginTop: -6 }}>{t.rawMaterials.costExample}</div>
 
             <div className="field">
               <label>{t.suppliers.title}</label>
@@ -343,7 +343,7 @@ export default function RawMaterialsPage() {
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label>{t.rawMaterials.minStockQty}</label>
               <input type="number" step="0.001" min={0} value={minStockQty} onChange={(e) => setMinStockQty(e.target.value)} />
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.rawMaterials.minStockQtyHint}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.rawMaterials.minStockQtyHint}</div>
             </div>
           </form>
         </Modal>

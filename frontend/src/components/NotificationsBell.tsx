@@ -144,7 +144,7 @@ export default function NotificationsBell() {
               borderRadius: 999,
               background: '#dc2626',
               color: '#fff',
-              fontSize: 9,
+              fontSize: 'var(--fs-micro)',
               fontWeight: 800,
               display: 'flex',
               alignItems: 'center',
@@ -222,7 +222,7 @@ export default function NotificationsBell() {
                       <div
                         style={{
                           fontWeight: unread ? 800 : 700,
-                          fontSize: 13.5,
+                          fontSize: 'var(--fs-sm)',
                           color: 'var(--text)',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
@@ -233,14 +233,14 @@ export default function NotificationsBell() {
                       >
                         {localize(n.title, lang)}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', flex: '0 0 auto', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--muted)', flex: '0 0 auto', whiteSpace: 'nowrap' }}>
                         {timeAgo(n.created_at, lang, t)}
                       </div>
                     </div>
                     {n.body && (
                       <div
                         style={{
-                          fontSize: 12.5,
+                          fontSize: 'var(--fs-sm)',
                           color: 'var(--muted)',
                           marginTop: 3,
                           lineHeight: 1.4,
@@ -306,7 +306,7 @@ export default function NotificationsBell() {
                   <IconBell size={20} />
                 </div>
                 <div>{t.notifications.empty}</div>
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.notifications.emptyHint}</div>
+                <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>{t.notifications.emptyHint}</div>
               </div>
             )}
           </div>

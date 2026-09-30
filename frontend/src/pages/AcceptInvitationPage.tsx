@@ -118,7 +118,7 @@ export default function AcceptInvitationPage() {
           >
             <IconBuilding size={26} />
           </div>
-          {state === 'ready' && companyName && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.acceptInvitation.invitedTo(companyName)}</div>}
+          {state === 'ready' && companyName && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>{t.acceptInvitation.invitedTo(companyName)}</div>}
         </div>
 
         {state === 'loading' && <div className="muted" style={{ textAlign: 'center' }}>{t.acceptInvitation.checking}</div>}

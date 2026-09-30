@@ -25,7 +25,7 @@ export default function Pagination({
       <button className="btn btn-secondary btn-sm" disabled={page <= 1} onClick={() => onChange(page - 1)}>
         {t.common.previous}
       </button>
-      <span className="muted" style={{ fontSize: 13 }}>
+      <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
         {t.common.pageOf(page, totalPages)}
       </span>
       <button className="btn btn-secondary btn-sm" disabled={page >= totalPages} onClick={() => onChange(page + 1)}>

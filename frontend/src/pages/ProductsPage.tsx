@@ -438,7 +438,7 @@ export default function ProductsPage() {
     return (
       <>
         {rows.length > 0 && (
-          <div className="form-row" style={{ marginBottom: 4, fontSize: 11, fontWeight: 700, color: 'var(--stone-500)' }}>
+          <div className="form-row" style={{ marginBottom: 4, fontSize: 'var(--fs-2xs)', fontWeight: 700, color: 'var(--stone-500)' }}>
             <div style={{ flex: 2 }}>{t.products.colMaterial}</div>
             <div style={{ flex: 1 }}>{t.products.colQty}</div>
             {showUnit && <div style={{ flex: 1 }}>{t.products.colUnit}</div>}
@@ -473,7 +473,7 @@ export default function ProductsPage() {
               </div>
             )}
             <div className="field" style={{ justifyContent: 'center' }}>
-              <span className="muted" style={{ fontSize: 12, fontWeight: 700 }}>
+              <span className="muted" style={{ fontSize: 'var(--fs-xs)', fontWeight: 700 }}>
                 {costs[i] != null ? `${costs[i]!.toFixed(3)} KD` : '—'}
               </span>
             </div>
@@ -483,7 +483,7 @@ export default function ProductsPage() {
           </div>
         ))}
         {rows.length === 0 && materials.length === 0 && (
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
             {emptyHint}
           </p>
         )}
@@ -620,7 +620,7 @@ export default function ProductsPage() {
               <div>
                 {cost.sizes!.map((s) => (
                   <div key={s.id} style={{ marginBottom: 14 }}>
-                    <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 6 }}>{s.name}</div>
+                    <div style={{ fontWeight: 800, fontSize: 'var(--fs-sm)', marginBottom: 6 }}>{s.name}</div>
                     <div className="stat-grid">
                       <div className="stat-card">
                         <div className="stat-label">{t.products.rawCost}</div>
@@ -644,7 +644,7 @@ export default function ProductsPage() {
             )}
 
             {cost && (
-              <p className="muted" style={{ marginTop: 12, marginBottom: 0, fontSize: 11 }}>
+              <p className="muted" style={{ marginTop: 12, marginBottom: 0, fontSize: 'var(--fs-2xs)' }}>
                 {t.products.overheadNote(cost.total_fixed_monthly.toFixed(3), cost.estimated_orders)}
               </p>
             )}
@@ -707,7 +707,7 @@ export default function ProductsPage() {
               )}
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 13 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 'var(--fs-sm)' }}>
               <input type="checkbox" checked={hasSizes} onChange={(e) => setHasSizes(e.target.checked)} style={{ width: 'auto' }} />
               {t.products.hasSizes}
             </label>
@@ -717,7 +717,7 @@ export default function ProductsPage() {
             {!hasSizes && (
               <>
                 <div className="section-title-row">
-                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.ingredientsOnly}</span>
+                  <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.ingredientsOnly}</span>
                 </div>
                 {renderIngredientEditor(
                   ingredientRows,
@@ -731,7 +731,7 @@ export default function ProductsPage() {
                 )}
 
                 <div className="section-title-row" style={{ marginTop: 16 }}>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.packagingTitle}</span>
+                  <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.packagingTitle}</span>
                 </div>
                 {renderIngredientEditor(
                   packagingRows,
@@ -751,7 +751,7 @@ export default function ProductsPage() {
             {hasSizes && (
               <>
                 <div className="section-title-row">
-                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.sizesTitle}</span>
+                  <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.products.sizesTitle}</span>
                   <button className="btn btn-secondary btn-sm" type="button" onClick={addSizeRow}>
                     <IconPlus /> {t.products.addSize}
                   </button>
@@ -781,7 +781,7 @@ export default function ProductsPage() {
                           <IconTrash />
                         </button>
                       </div>
-                      <div className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 6 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 8, marginBottom: 6 }}>
                         {t.products.sizeIngredients}
                       </div>
                       {renderIngredientEditor(
@@ -795,7 +795,7 @@ export default function ProductsPage() {
                         t.products.noIngredientMaterials
                       )}
 
-                      <div className="muted" style={{ fontSize: 12, marginTop: 12, marginBottom: 6 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 12, marginBottom: 6 }}>
                         {t.products.packagingTitle}
                       </div>
                       {renderIngredientEditor(
@@ -814,7 +814,7 @@ export default function ProductsPage() {
                   </div>
                 ))}
                 {sizeRows.length === 0 && (
-                  <p className="muted" style={{ fontSize: 12 }}>
+                  <p className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                     {t.products.addSize}
                   </p>
                 )}

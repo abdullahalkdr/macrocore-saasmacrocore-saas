@@ -56,7 +56,7 @@ export default function ResetPasswordPage() {
             <IconBuilding size={26} />
           </div>
           <h1 style={{ marginBottom: 2 }}>{t.auth.resetPasswordTitle}</h1>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.auth.resetPasswordSubtitle}</div>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted)' }}>{t.auth.resetPasswordSubtitle}</div>
         </div>
 
         {!token ? (

@@ -91,7 +91,7 @@ export default function PermissionGrantAcknowledgeModal({ grant, onClose }: Perm
       }
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
-        <div className="muted" style={{ fontSize: 12 }}>{t.account.policyGrants.modalIntro}</div>
+        <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{t.account.policyGrants.modalIntro}</div>
         {/* Only shown when this policy actually has an English version — static
             "AR"/"EN" labels on purpose, same as AcknowledgmentModal/PolicyDetailsModal:
             these name a language, not interface chrome, so they don't run through t(). */}
@@ -123,7 +123,7 @@ export default function PermissionGrantAcknowledgeModal({ grant, onClose }: Perm
       >
         {displayContent}
       </div>
-      {!hasReadToEnd && <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>{t.policies.scrollToContinue}</div>}
+      {!hasReadToEnd && <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 8 }}>{t.policies.scrollToContinue}</div>}
       {error && <div className="error-banner" style={{ marginTop: 10 }}>{error}</div>}
     </Modal>
   );

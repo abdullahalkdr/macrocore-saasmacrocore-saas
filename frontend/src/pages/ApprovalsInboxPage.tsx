@@ -184,7 +184,7 @@ export default function ApprovalsInboxPage() {
             <tbody>
               {requests.map((r) => (
                 <tr key={r.id}>
-                  <td className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{r.request_number || '—'}</td>
+                  <td className="muted" style={{ fontSize: 'var(--fs-xs)', whiteSpace: 'nowrap' }}>{r.request_number || '—'}</td>
                   <td style={{ fontWeight: 700 }}>
                     <button
                       type="button"
@@ -196,7 +196,7 @@ export default function ApprovalsInboxPage() {
                       {moduleLabel(r.module_type)}
                     </button>
                     {r.current_step_label && (
-                      <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)', fontWeight: 400 }}>
                         {lang === 'ar' ? r.current_step_label : r.current_step_label_en || r.current_step_label}
                       </div>
                     )}
@@ -204,7 +204,7 @@ export default function ApprovalsInboxPage() {
                   <td>
                     {r.requester_name || '—'}
                     {r.requester_job_role && (
-                      <div className="muted" style={{ fontSize: 12 }}>
+                      <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
                         {r.requester_job_role}
                       </div>
                     )}

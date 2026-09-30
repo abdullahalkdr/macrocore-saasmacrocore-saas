@@ -490,7 +490,7 @@ export default function Layout() {
     const badge = locked ? (
       <span
         style={{
-          fontSize: 9,
+          fontSize: 'var(--fs-micro)',
           fontWeight: 800,
           padding: '2px 6px',
           borderRadius: 999,
@@ -542,7 +542,7 @@ export default function Layout() {
               borderRadius: 999,
               background: '#dc2626',
               color: '#fff',
-              fontSize: 11,
+              fontSize: 'var(--fs-2xs)',
               fontWeight: 800,
               display: 'flex',
               alignItems: 'center',
@@ -562,7 +562,7 @@ export default function Layout() {
               borderRadius: 999,
               background: '#dc2626',
               color: '#fff',
-              fontSize: 11,
+              fontSize: 'var(--fs-2xs)',
               fontWeight: 800,
               display: 'flex',
               alignItems: 'center',
@@ -604,7 +604,7 @@ export default function Layout() {
           return (
             <div key={group.key ?? group.label ?? gi} style={{ padding: '10px 10px 4px' }}>
               {!group.accordion && group.label && (
-                <div style={{ fontSize: 10, color: 'var(--stone-400)', fontWeight: 700, padding: '8px 8px 4px' }}>
+                <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--stone-400)', fontWeight: 700, padding: '8px 8px 4px' }}>
                   {group.label}
                 </div>
               )}
@@ -668,10 +668,10 @@ export default function Layout() {
           >
             <Avatar name={user?.email || '?'} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {user?.email}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--stone-400)' }}>{user?.role}</div>
+              <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--stone-400)' }}>{user?.role}</div>
             </div>
           </div>
           <button className="icon-btn" onClick={handleLogout} title={t.common.logout} style={{ color: 'var(--stone-400)' }}>

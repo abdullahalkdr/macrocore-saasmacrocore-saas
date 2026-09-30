@@ -558,7 +558,7 @@ export default function ServiceCatalogSettingsPage() {
                     checked={newRequestType.is_hr_sensitive}
                     onChange={(e) => setNewRequestType((d) => ({ ...d, is_hr_sensitive: e.target.checked }))}
                   />
-                  <span style={{ fontSize: 13 }}>{t.serviceCatalog.hrSensitive}</span>
+                  <span style={{ fontSize: 'var(--fs-sm)' }}>{t.serviceCatalog.hrSensitive}</span>
                 </label>
               </div>
               <div className="field" style={{ justifyContent: 'flex-end' }}>
@@ -682,7 +682,7 @@ export default function ServiceCatalogSettingsPage() {
                   <div className="field">
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                       <input type="checkbox" style={{ width: 'auto' }} checked={newField.is_required} onChange={(e) => setNewField((d) => ({ ...d, is_required: e.target.checked }))} />
-                      <span style={{ fontSize: 13 }}>{t.serviceCatalog.isRequiredLabel}</span>
+                      <span style={{ fontSize: 'var(--fs-sm)' }}>{t.serviceCatalog.isRequiredLabel}</span>
                     </label>
                   </div>
                   <div className="field" style={{ justifyContent: 'flex-end' }}>
@@ -870,9 +870,9 @@ function ApprovalWorkflowModal({
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 14 }}>
         <input type="checkbox" style={{ width: 'auto' }} checked={requiresApproval} onChange={(e) => handleToggle(e.target.checked)} />
-        <span style={{ fontSize: 13, fontWeight: 700 }}>{t.serviceCatalog.requiresApprovalLabel}</span>
+        <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 700 }}>{t.serviceCatalog.requiresApprovalLabel}</span>
       </label>
-      <div style={{ fontSize: 12, color: 'var(--muted, #888)', marginBottom: requiresApproval ? 14 : 0 }}>
+      <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--muted, #888)', marginBottom: requiresApproval ? 14 : 0 }}>
         {t.serviceCatalog.requiresApprovalHint}
       </div>
 
@@ -882,7 +882,7 @@ function ApprovalWorkflowModal({
           {steps.map((s, i) => (
             <div key={i} style={{ border: '1px solid var(--border, #e5e5e5)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 800 }}>{t.serviceCatalog.stepNumberLabel(i + 1)}</span>
+                <span style={{ fontSize: 'var(--fs-xs)', fontWeight: 800 }}>{t.serviceCatalog.stepNumberLabel(i + 1)}</span>
                 <button type="button" className="icon-btn" onClick={() => removeStep(i)} title={t.serviceCatalog.removeStep}>
                   <IconTrash />
                 </button>

@@ -357,7 +357,7 @@ export default function UsersPage() {
                       {inv.status === 'revoked' && t.users.statusRevoked}
                     </span>
                   </td>
-                  <td className="muted" style={{ fontSize: 12 }}>{inv.invited_by_name ? t.users.invitedBy(inv.invited_by_name) : ''}</td>
+                  <td className="muted" style={{ fontSize: 'var(--fs-xs)' }}>{inv.invited_by_name ? t.users.invitedBy(inv.invited_by_name) : ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {inv.status !== 'accepted' && (
                       <button className="btn btn-secondary btn-sm" onClick={() => resendInvitation(inv.id)}>
@@ -459,7 +459,7 @@ export default function UsersPage() {
                   </option>
                 ))}
               </select>
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.users.linkedEmployeeHint}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.users.linkedEmployeeHint}</div>
             </div>
           </form>
         </Modal>
@@ -496,7 +496,7 @@ export default function UsersPage() {
                   {t.users.generate}
                 </button>
               </div>
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{t.users.minLengthHint}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 4 }}>{t.users.minLengthHint}</div>
             </div>
           </form>
         </Modal>

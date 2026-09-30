@@ -90,7 +90,7 @@ export default function ClosePeriodModal({ onClose, onSaved }: ClosePeriodModalP
         </div>
       )}
 
-      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>{t.periodClosing.closeWarning}</p>
+      <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>{t.periodClosing.closeWarning}</p>
 
       <form id="close-period-form" onSubmit={handleSubmit} className="field-grid">
         <div className="field">

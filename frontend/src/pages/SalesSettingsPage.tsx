@@ -48,7 +48,7 @@ export default function SalesSettingsPage() {
             <h2>{t.salesSettings.defaultNotesTitle}</h2>
           </div>
           <div className="card-body">
-            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            <p className="muted" style={{ marginTop: 0, fontSize: 'var(--fs-sm)' }}>
               {t.salesSettings.defaultNotesHint}
             </p>
             <div className="field">

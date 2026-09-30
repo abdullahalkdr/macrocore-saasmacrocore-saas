@@ -520,7 +520,7 @@ export default function PayrollPage() {
                   {expandedId === p.id && (
                     <tr>
                       <td colSpan={8} style={{ backgroundColor: '#fafaf9', padding: '12px 16px' }}>
-                        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 13 }}>
+                        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 'var(--fs-sm)' }}>
                           <div>{t.payroll.baseDetail}: <strong>{Number(p.base_salary).toFixed(3)} KD</strong></div>
                           <div>{t.payroll.attendanceBonusDetail}: <strong>{Number(p.attendance_bonus || 0).toFixed(3)} KD</strong></div>
                           <div>{t.payroll.otherDeductionsDetail}: <strong>{Number(p.other_deductions || 0).toFixed(3)} KD</strong></div>
@@ -567,7 +567,7 @@ export default function PayrollPage() {
             </>
           )}
         >
-          {editingRecordPending && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{t.payroll.submittedForApproval}</p>}
+          {editingRecordPending && <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 8 }}>{t.payroll.submittedForApproval}</p>}
           <form id="payroll-form" onSubmit={handleSubmit} className="field-grid">
             <div className="field">
               <label>{t.payroll.month}</label>
@@ -598,7 +598,7 @@ export default function PayrollPage() {
               <input type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} disabled={!!editingId && editStatus !== 'paid'} />
             </div>
           </form>
-          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 4 }}>
             {editingId ? t.payroll.editLockedNote : t.payroll.paidDateHint}
           </p>
 
@@ -608,24 +608,24 @@ export default function PayrollPage() {
                 <StatCard label={t.payroll.perMinuteWage} value={`${(perMinuteWage ?? 0).toFixed(3)} KD`} />
                 <StatCard label={t.payroll.perHourWage} value={`${(hourlyWage ?? 0).toFixed(3)} KD`} />
               </div>
-              <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+              <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 0 }}>
                 {t.payroll.wageBasisNote}
               </p>
             </>
           )}
 
           {selectedEmployee?.wage_type === 'hourly' && (
-            <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 4 }}>
               {t.payroll.hourlyAutoNote}
             </p>
           )}
-          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 4 }}>
             {t.payroll.autoDeductionNote}
           </p>
 
           <div className="hr" />
           <div className="section-title-row">
-            <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--stone-500)' }}>{t.payroll.extraItemsTitle}</span>
+            <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 800, color: 'var(--stone-500)' }}>{t.payroll.extraItemsTitle}</span>
             <button className="btn btn-secondary btn-sm" type="button" onClick={addAdjustment}>
               <IconPlus /> {t.payroll.addItem}
             </button>
@@ -677,7 +677,7 @@ export default function PayrollPage() {
             </div>
           ))}
           {adjustments.some((a) => a.locked) && (
-            <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 8 }}>
+            <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: -4, marginBottom: 8 }}>
               {t.payroll.systemGeneratedNote}
             </p>
           )}
@@ -693,7 +693,7 @@ export default function PayrollPage() {
               onChange={(e) => setFinalAmount(e.target.value)}
             />
           </div>
-          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 4 }}>
             {t.payroll.finalAmountNote}
           </p>
         </Modal>
