@@ -211,7 +211,7 @@ textarea:focus {
 
 .error-banner {
   background: var(--red-50);
-  color: var(--red-600);
+  color: #b91c1c; /* red-700: 5.9:1 on red-50 (red-600 was 4.4:1, just under AA) */
   border: 1px solid var(--red-100);
   padding: 10px 14px;
   border-radius: 10px;
