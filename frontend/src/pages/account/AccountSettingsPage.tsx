@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { useHasPermission } from '../../store/usePermissionsStore';
@@ -12,6 +12,7 @@ import SetupSection from './SetupSection';
 import CustomizationsSection from './CustomizationsSection';
 import DeveloperSection from './DeveloperSection';
 import EmailDeliverySection from './EmailDeliverySection';
+import { IconEmployee, IconBuilding, IconCard, IconUsers, IconStore, IconFile, IconKey, IconMail } from '../../components/Icon';
 import { resolveAccountDeepLinkSection, type AccountSectionId } from '../../utils/accountDeepLink';
 
 type SectionId = AccountSectionId;
@@ -20,7 +21,7 @@ interface SectionLink {
   id: SectionId;
   title: string;
   desc: string;
-  icon: string;
+  icon: ReactNode;
 }
 
 export default function AccountSettingsPage() {
@@ -93,27 +94,27 @@ export default function AccountSettingsPage() {
   }
 
   const profileGroup: SectionLink[] = [
-    { id: 'profile', title: t.account.sections.profileTitle, desc: t.account.sections.profileDesc, icon: '👤' },
+    { id: 'profile', title: t.account.sections.profileTitle, desc: t.account.sections.profileDesc, icon: <IconEmployee size={22} /> },
   ];
 
   const companyGroup: SectionLink[] = isAdmin
     ? [
-        { id: 'company', title: t.account.sections.companyTitle, desc: t.account.sections.companyDesc, icon: '🏢' },
-        { id: 'billing', title: t.account.sections.billingTitle, desc: t.account.sections.billingDesc, icon: '💳' },
-        { id: 'users', title: t.account.sections.usersTitle, desc: t.account.sections.usersDesc, icon: '👥' },
+        { id: 'company', title: t.account.sections.companyTitle, desc: t.account.sections.companyDesc, icon: <IconBuilding size={22} /> },
+        { id: 'billing', title: t.account.sections.billingTitle, desc: t.account.sections.billingDesc, icon: <IconCard size={22} /> },
+        { id: 'users', title: t.account.sections.usersTitle, desc: t.account.sections.usersDesc, icon: <IconUsers size={22} /> },
       ]
     : [];
 
-  const setupGroup: SectionLink[] = isAdmin ? [{ id: 'setup', title: t.account.sections.branchesTitle, desc: t.account.sections.branchesDesc, icon: '🏬' }] : [];
+  const setupGroup: SectionLink[] = isAdmin ? [{ id: 'setup', title: t.account.sections.branchesTitle, desc: t.account.sections.branchesDesc, icon: <IconStore size={22} /> }] : [];
 
   const customizationsGroup: SectionLink[] = canManageSystemSettings
-    ? [{ id: 'customizations', title: t.account.sections.templatesTitle, desc: t.account.sections.templatesDesc, icon: '📄' }]
+    ? [{ id: 'customizations', title: t.account.sections.templatesTitle, desc: t.account.sections.templatesDesc, icon: <IconFile size={22} /> }]
     : [];
 
   const developerGroup: SectionLink[] = isAdmin
     ? [
-        { id: 'developer', title: t.account.sections.apiKeysTitle, desc: t.account.sections.apiKeysDesc, icon: '🔑' },
-        { id: 'emailDelivery', title: t.account.sections.emailDeliveryTitle, desc: t.account.sections.emailDeliveryDesc, icon: '📧' },
+        { id: 'developer', title: t.account.sections.apiKeysTitle, desc: t.account.sections.apiKeysDesc, icon: <IconKey size={22} /> },
+        { id: 'emailDelivery', title: t.account.sections.emailDeliveryTitle, desc: t.account.sections.emailDeliveryDesc, icon: <IconMail size={22} /> },
       ]
     : [];
 
@@ -131,7 +132,7 @@ export default function AccountSettingsPage() {
               onClick={() => setActive(l.id)}
             >
               <div className="card-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 22 }}>{l.icon}</span>
+                <span className="section-card-icon">{l.icon}</span>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--stone-900)' }}>{l.title}</div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{l.desc}</div>
