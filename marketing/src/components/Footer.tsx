@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { content } from '../content';
 import { useLang } from '../LangContext';
+import LogoMark from './LogoMark';
 
 export default function Footer() {
   const { lang, path } = useLang();
@@ -35,7 +36,8 @@ export default function Footer() {
     <footer className="mk-footer">
       <div className="mk-container mk-footer-inner">
         <div>
-          <Link to={path()} className="mk-logo mk-logo-footer mk-logo-link">
+          <Link to={path()} className="mk-logo mk-logo-footer mk-logo-link" aria-label="macrocore">
+            <LogoMark />
             macrocore
           </Link>
           <p>{t.footer.tagline}</p>

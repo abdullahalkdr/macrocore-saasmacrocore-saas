@@ -3,10 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f59e0b" />
+    <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141210" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="macrocore — نظام تشغيل متكامل للكشكات والمطاعم والمحلات: نقطة بيع، مخزون، رواتب، تقارير، كله بمكان واحد."
+      content="macrocore: نظام تشغيل متكامل للكشكات والمطاعم والمحلات: نقطة بيع، مخزون، رواتب، تقارير، كله بمكان واحد."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -14,7 +16,14 @@
       href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <title>macrocore — نظام تشغيل متكامل لعملك</title>
+    <title>macrocore | نظام تشغيل متكامل لعملك</title>
+    <script>
+      // Apply a pinned theme choice before first paint (see src/ThemeContext.tsx).
+      try {
+        var t = localStorage.getItem('mk-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
