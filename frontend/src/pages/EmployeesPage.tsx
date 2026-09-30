@@ -364,7 +364,7 @@ export default function EmployeesPage() {
       {error && <div className="error-banner">{error}</div>}
 
       {employees.filter(hasExpiryWarning).length > 0 && (
-        <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
+        <div className="error-banner" role="status">
           <strong>{t.employees.expiryAlert(employees.filter(hasExpiryWarning).length)}</strong>
         </div>
       )}

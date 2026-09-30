@@ -237,9 +237,9 @@ textarea:focus {
   justify-content: center;
   background: var(--stone-900);
 }
-.auth-box { background: #fff; border-radius: 16px; padding: 32px; width: 360px; }
+.auth-box { background: var(--surface); color: var(--text); border-radius: 16px; padding: 32px; width: 360px; }
 .auth-box-wide { width: 460px; }
-.auth-step-label { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .03em; margin-bottom: 6px; }
+.auth-step-label { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
 .auth-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0; color: var(--muted); font-size: 12px; }
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .btn-google { width: 100%; justify-content: center; gap: 8px; background: #fff; border: 1px solid var(--border); color: var(--stone-900); }
@@ -248,7 +248,7 @@ textarea:focus {
 .invite-row button { margin-inline-start: auto; }
 .temp-cred-row { display: flex; justify-content: space-between; align-items: center; background: var(--stone-50); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
 .temp-cred-row code { font-weight: 700; background: var(--stone-100); padding: 2px 8px; border-radius: 6px; }
-.auth-box h1 { margin-top: 0; font-size: 20px; color: var(--stone-900); }
+.auth-box h1 { margin-top: 0; font-size: 20px; color: var(--text); }
 .auth-box .switch { margin-top: 14px; font-size: 13px; text-align: center; color: var(--muted); }
 .auth-box .switch a { color: var(--amber-600); cursor: pointer; font-weight: 700; }
 
@@ -848,3 +848,9 @@ tr:hover .print-btn { opacity: 1; }
     100% { opacity: 1; }
   }
 }
+
+/* Design polish batch 2 (2026-09-30) -- banners readable in dark mode.
+   Expiry / low-stock alerts on CompanyFiles, Employees, InventoryOverview and
+   RawMaterialBatches now use .error-banner instead of inline #ffe6e6 boxes. */
+[data-theme='dark'] .error-banner { background: rgba(220, 38, 38, 0.14); color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
+[data-theme='dark'] .success-banner { background: rgba(4, 120, 87, 0.18); color: #6ee7b7; border-color: rgba(52, 211, 153, 0.35); }

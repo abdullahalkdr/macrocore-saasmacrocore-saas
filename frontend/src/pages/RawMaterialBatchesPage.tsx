@@ -188,7 +188,7 @@ export default function RawMaterialBatchesPage() {
       {error && <div className="error-banner">{error}</div>}
 
       {expiringBatches.length > 0 && (
-        <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
+        <div className="error-banner" role="status">
           <strong>{t.rawMaterialBatches.expiryAlert(expiringBatches.length)}</strong>
         </div>
       )}

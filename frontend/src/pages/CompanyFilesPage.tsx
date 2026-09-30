@@ -166,7 +166,7 @@ export default function CompanyFilesPage() {
       {error && <div className="error-banner">{error}</div>}
 
       {expiringFiles.length > 0 && (
-        <div style={{ padding: '12px', backgroundColor: '#ffe6e6', borderLeft: '4px solid #e74c3c', marginBottom: '16px', borderRadius: '4px' }}>
+        <div className="error-banner" role="status">
           <strong>{t.companyFiles.expiryAlert(expiringFiles.length)}</strong>
         </div>
       )}
